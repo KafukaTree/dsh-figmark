@@ -17,9 +17,10 @@ node -e "console.log(Math.floor(Date.now()/1000))"
 # 2) 先干跑一次，确认包内容
 npm pack --dry-run
 
-# 3) 发布到 npm
+# 3) 发布到 npm（两个坑见文末）
 npm login               # 只需一次
-npm publish --access public
+env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
+  NO_PROXY='*' no_proxy='*' npm publish --access public
 
 #    npm 还没发布时：索引里 versions[0].source 用 git 类型（见下），
 #    钉到当前 commit 即可让别人装上源码版本。npm 发布之后把 source 换回
@@ -77,3 +78,17 @@ const {parseMarketIndex}=require('/Applications/DeepSeek Harness.app/Contents/Re
 1. **侧栏 → 插件 → 实验性插件 → 更多 → 自定义插件市场**（启用）
 2. 发现页 → 添加索引 → 粘贴 raw 地址
 3. 搜 `figmark` → 安装 → **Cmd+Q 完全退出重开**
+
+## 两个真实的坑
+
+**代理会吞掉 tarball 上传。** 本机 `http_proxy` 指向本地代理时，`npm publish` 会连续报
+`PUT ... failed with 503` 并静默重试，看起来像 npm 挂了，其实是几 MB 的包体没传上去。
+发布这一步必须 `env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY`
+清掉代理变量，`~/.npmrc` 里的 `noproxy=` 对 npm 自己的 dispatcher 不生效。
+
+**Granular Token 默认不让发布。** 账号开了 2FA 时，未勾选 "Bypass 2FA" 的 Granular Token
+会得到 `403 Two-factor authentication or granular access token with bypass 2fa enabled is required`。
+两个选择：在 token 页勾上 Bypass 2FA，或生成 Classic Token 时选 **Automation** 类型（自带绕过）。
+
+**发布中途失败会留下 `0.0.0-stage` 占位版本。** 直接重跑 `npm publish` 即可，占位会被替换；
+不用手动清。
