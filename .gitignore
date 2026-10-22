@@ -1,8 +1,8 @@
 # 依赖
 node_modules/
 
-# 构建产物（lib/index.js、lib/client.js 由 pnpm run build 生成）
-lib/
+# 构建产物 lib/ 与 tsdown cache 之外的临时件
+.cache/
 
 # 测试覆盖率
 coverage/
@@ -10,3 +10,4 @@ coverage/
 # 系统与编辑器噪声
 .DS_Store
 *.log
+*.tgz

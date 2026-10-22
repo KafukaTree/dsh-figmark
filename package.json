@@ -79,7 +79,6 @@
   },
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "prepare": "pnpm run build",
     "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc --noEmit -p tsconfig.json && tsdown",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "oxlint . --type-aware --deny-warnings --ignore-pattern 'tests/gates/fixtures/**'",
