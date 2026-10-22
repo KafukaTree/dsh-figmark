@@ -94,11 +94,10 @@
       "versions": [
         {
           "version": "1.0.0",
-          "publishTimestamp": 1792627200,
+          "publishTimestamp": 1792640009,
           "source": {
-            "type": "git",
-            "url": "https://github.com/KafukaTree/dsh-figmark",
-            "commit": "75b0d80331e1bcd12cf431644dd50c3d8fa1083f"
+            "type": "npm",
+            "registry": "https://registry.npmjs.org"
           },
           "engines": {
             "dsh": ">=0.2.1-rc.2"
