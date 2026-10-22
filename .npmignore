@@ -1,0 +1,15 @@
+# 只有 files 里列的会进包，这份文件是给不读 files 的人看的第二道保险。
+src/
+tests/
+docs/
+coverage/
+node_modules/
+*.log
+.npmignore
+lefthook.yml
+tsconfig.json
+tsdown.config.ts
+vitest.config.ts
+.oxlintrc.json
+pnpm-lock.yaml
+pnpm-workspace.yaml

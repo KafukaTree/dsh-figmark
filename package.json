@@ -1,0 +1,95 @@
+{
+  "name": "dsh-figmark",
+  "version": "1.0.0",
+  "private": false,
+  "description": "DSH 插件：在右侧栏预览里对科研配图、SVG、PDF、HTML 直接圈画批注，标注写进侧车文件并可一键交给智能体改图源",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "annotation",
+    "figure",
+    "matplotlib",
+    "svg",
+    "pdf",
+    "research"
+  ],
+  "homepage": "https://github.com/KafukaTree/dsh-figmark#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KafukaTree/dsh-figmark.git"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.svg",
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "market",
+    "PUBLISHING.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.13.3",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "jsdom": "^26.0.0",
+    "lefthook": "^2.1.14",
+    "oxlint": "^1.85.0",
+    "oxlint-tsgolint": "^7.0.2003",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "6.3.289",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "0.22.2",
+    "typescript": "~5.7.2",
+    "vitest": "^3.2.7"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "prepare": "lefthook install",
+    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc --noEmit -p tsconfig.json && tsdown",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "oxlint . --type-aware --deny-warnings --ignore-pattern 'tests/gates/fixtures/**'",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test:coverage",
+    "prepack": "pnpm run build"
+  },
+  "author": {
+    "name": "KafukaTree",
+    "url": "https://github.com/KafukaTree"
+  }
+}
