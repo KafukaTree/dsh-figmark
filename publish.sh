@@ -36,8 +36,6 @@ npm publish --access public
 say "把市场索引切到 npm 源"
 node - <<'JS'
 const fs = require('node:fs')
-const commit = require('node:child_process')
-  .execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim()
 const path = 'market/index.json'
 const index = JSON.parse(fs.readFileSync(path, 'utf8'))
 const version = index.plugins[0].versions[0]
