@@ -10,4 +10,3 @@ coverage/
 # 系统与编辑器噪声
 .DS_Store
 *.log
-*.tgz
