@@ -30,7 +30,10 @@ say "打包预演"
 npm pack --dry-run
 
 say "发布到 npm"
-npm publish --access public
+# 本机 http_proxy 会吞掉几 MB 的 tarball 上传，表现为一串莫名的 503；
+# 发布这一步必须绕开它。
+env -u http_proxy -u https_proxy -u all_proxy -u NODE_USE_ENV_PROXY \
+  NO_PROXY='*' no_proxy='*' npm publish --access public
 
 # ---------- 5. 索引切到 npm 源 ----------
 say "把市场索引切到 npm 源"
