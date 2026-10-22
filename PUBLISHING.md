@@ -21,6 +21,10 @@ npm pack --dry-run
 npm login               # 只需一次
 npm publish --access public
 
+#    npm 还没发布时：索引里 versions[0].source 用 git 类型（见下），
+#    钉到当前 commit 即可让别人装上源码版本。npm 发布之后把 source 换回
+#    {"type":"npm","registry":"https://registry.npmjs.org"}，并重跑上面的校验。
+
 # 4) 提交并推 tag
 git add -A && git commit -m "release: dsh-figmark@1.0.0"
 git tag v1.0.0 && git push origin main --tags
@@ -28,6 +32,16 @@ git tag v1.0.0 && git push origin main --tags
 
 推完之后，索引地址 `https://raw.githubusercontent.com/KafukaTree/dsh-figmark/main/market/index.json`
 会立刻反映新版本；DSH 的发现页缓存 `cacheTtlMs` 默认 10 分钟，写 `refresh` 可绕过。
+
+## git 源 vs npm 源
+
+| source | 用户装到的东西 | 代价 |
+|---|---|---|
+| `npm` | 构建好的 `lib/`（3.3 MB，含 7.9 MB 未压缩 PDF 分块） | 要先把包发布到 npm |
+| `git` | **源码**，pnpm 跑 `prepare` 现场构建 | pnpm 11 会拦下构建脚本，用户要在插件页点**允许这些脚本并重试**；而且要能连 GitHub |
+
+git 源切换只需改 `market/index.json` 里那一个 `source` 对象并推送——`commit` 必须是**小写 40 位**
+且是真实存在的提交（校验器就是这么检查的）。
 
 ## 每次发布前确认
 
