@@ -9,7 +9,7 @@
 
 import type { AnnotationMark } from '../shared/annotation'
 import {
-  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, STROKE_WIDTH,
+  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
   markPathData, pinNumberCentre, pinPathData,
 } from './render'
 
@@ -50,9 +50,9 @@ function markSvg(mark: AnnotationMark, number: number | undefined): string {
   const parts: string[] = []
   if (path !== undefined) {
     parts.push(
-      `<path d="${path}" fill="none" stroke="#ffffff" stroke-width="${STROKE_WIDTH + 2.5}"`
+      `<path d="${path}" fill="none" stroke="#ffffff" stroke-width="${strokeWidthOf(mark) + 2.5}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
-      `<path d="${path}" fill="none" stroke="${mark.color}" stroke-width="${STROKE_WIDTH}"`
+      `<path d="${path}" fill="none" stroke="${mark.color}" stroke-width="${strokeWidthOf(mark)}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
     )
   }

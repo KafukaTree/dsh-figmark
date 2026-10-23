@@ -19,7 +19,9 @@ import {
 import { resolveTranslate, type AnnotatorBodyProps } from './annotator-contract'
 import { parseFileAddress } from '../shared/address'
 import type { AnnotationDocument, AnnotationMark, FigurePoint, MarkAnchor } from '../shared/annotation'
-import { ANNOTATION_VERSION, needsReviewImage } from '../shared/annotation'
+import {
+  ANNOTATION_VERSION, WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, clampWeight, needsReviewImage,
+} from '../shared/annotation'
 import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
 import { deliverToComposer } from './composer'
@@ -137,21 +139,6 @@ function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
             fill="currentColor" stroke="none" />
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">{shape}</svg>
-  )
-}
-
-/**
- * The small pictures the panel's furniture wears.
- *
- * Each is a 14px line drawing on the same 16-unit grid as the tool icons, so the
- * chrome reads as one set rather than as a crate of borrowed glyphs.
- */
-function NoteIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
-      <path d="M 5.5 6 h 5 M 5.5 9 h 3.5" />
-    </svg>
   )
 }
 
@@ -361,6 +348,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const remembered = useMemo(() => readPreferences(), [])
   const [color, setColor] = useState<string>(remembered.color ?? COLORS[0])
+  const [weight, setWeight] = useState<number>(remembered.weight ?? WEIGHT_DEFAULT)
   const [marks, setMarks] = useState<AnnotationMark[]>(() => [...(props.draft?.marks ?? [])])
   const [past, setPast] = useState<AnnotationMark[][]>([])
   const [future, setFuture] = useState<AnnotationMark[][]>([])
@@ -439,7 +427,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [fitWidth, setFitWidth] = useState(0)
   const [busy, setBusy] = useState<'sending' | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null)
-
 
   /** The panel's own box, for placing the cards that float over it. */
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -520,9 +507,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [followPointer])
 
   useEffect(() => {
-    rememberPreferences({ color, ...(palette === undefined ? {} : { palette }), ...(barSpot === undefined ? {} : { bar: barSpot }) })
-  }, [barSpot, color, palette])
-
+    rememberPreferences({ color, weight, ...(palette === undefined ? {} : { palette }), ...(barSpot === undefined ? {} : { bar: barSpot }) })
+  }, [barSpot, color, palette, weight])
 
   /**
    * The bar's box, when the reader has moved it off the bottom edge.
@@ -779,17 +765,25 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * exchanged; so is everything inside a record, which is where the writing happens.
    */
   useEffect(() => {
-    if (openPanel === null) return
     const onDown = (event: Event): void => {
       const target = event.target
       // A press this handler cannot place — on the document itself, say — is still a
       // press somewhere other than the popover, so it folds like any other.
       const inside = target instanceof Element
-        && (target.closest('.da-float') !== null
-          || target.closest('.da-style-row') !== null
-          || barRef.current?.contains(target) === true)
-      if (inside) return
-      setOpenPanel(null)
+      // The controls that steer the selected mark are not "somewhere else": pressing
+      // the weight rail or a swatch while a mark is selected is still about that mark.
+      if (inside && (target.closest('.da-float') !== null
+        || target.closest('.da-style-row') !== null
+        || target.closest('.da-palette') !== null
+        || target.closest('.da-weight') !== null
+        || barRef.current?.contains(target) === true)) return
+      if (openPanel !== null) setOpenPanel(null)
+      // Pressing outside the figure puts the comment pill away with the mark it was
+      // written for. A press *on* the figure is left to the surface itself, which
+      // already knows how to tell a click on blank paper from the start of a drag —
+      // a pan must not clear the selection it is carrying.
+      if (stageRef.current?.contains(target as Node) === true) return
+      setSelectedId(null)
     }
     document.addEventListener('pointerdown', onDown, true)
     return () => { document.removeEventListener('pointerdown', onDown, true) }
@@ -830,7 +824,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // so an unconditional set here re-renders, re-runs, and spins.
     setDetailAt(previous => previous !== null && previous.left === at.left && previous.top === at.top ? previous : at)
   }, [marks, selectedId, scale, size, htmlHeight])
-
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -1042,22 +1035,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * so a recolour can be taken back like any other edit.
    * @param value - the CSS hex string of the chosen swatch.
    */
-  const chooseColor = useCallback((value: string): void => {
-    if (selectedId === null) {
-      setColor(value)
-      return
-    }
-    // Repainting is the same array with one mark's colour changed, so a swatch that
-    // is already the mark's colour leaves the list identical — and a colour that
-    // changes nothing records no undo step, whether the mark is still there or was
-    // removed while it was selected.
-    const repainted = marks.map(mark => (
-      mark.id === selectedId && mark.color !== value ? { ...mark, color: value } : mark
-    ))
-    if (!repainted.some((mark, index) => mark !== marks[index])) return
-    commit(repainted)
-  }, [commit, marks, selectedId])
-
+  /**
+   * Change one attribute of the selected mark, or of the next stroke when nothing
+   * is selected.
+   *
+   * A control that is already at the mark's value leaves the list identical, so a
+   * press that changes nothing records no undo step — whether the mark is still
+   * there or was removed while it was selected.
+   * @param patch - the attribute to change.
+   */
   const undo = useCallback((): void => {
     setPast(history => {
       const previous = history[history.length - 1]
@@ -1176,7 +1162,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     return await rasterizePng(svg, target.width, target.height, exportScale)
   }, [marks])
 
-  const buildDocument = useCallback((target: { readonly width: number; readonly height: number }): AnnotationDocument | null => {
+  const buildDocument = useCallback((target: { readonly width: number; readonly height: number }, scope = marks): AnnotationDocument | null => {
     if (loaded === null) return null
     const now = new Date().toISOString()
     return {
@@ -1191,7 +1177,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       },
       createdAt: createdAt ?? now,
       updatedAt: now,
-      marks,
+      marks: scope,
       ...(summary.trim() === '' ? {} : { summary: summary.trim() }),
     }
   }, [address, createdAt, loaded, marks, summary])
@@ -1289,16 +1275,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * would make the reader clear it twice.
    * @param target - who receives the annotation.
    */
-  const run = useCallback(async (target: 'agent' | 'composer'): Promise<void> => {
+  const run = useCallback(async (target: 'agent' | 'composer', only?: AnnotationMark): Promise<void> => {
     // The only enforcement point: the toolbar buttons stay clickable so this
     // guard is what decides, not a disabled attribute that hides the reason.
     // A surface with no height is one nothing could have been drawn on, and it is
     // not a surface a marks file may describe.
-    if (marks.length === 0 || size === null || size.height <= 0) return
+    const scope = only === undefined ? marks : [only]
+    if (scope.length === 0 || size === null || size.height <= 0) return
     setBusy('sending')
     setStatus({ tone: 'info', text: t(target === 'agent' ? 'sending' : 'composing') })
     try {
-      const document_ = buildDocument(size)
+      const document_ = buildDocument(size, scope)
       if (document_ === null) throw new Error(t('loadFailed'))
       // A picture is only needed when the marks claim an extent. A figure whose
       // marks are all points carries its whole meaning in the numbered list, and a
@@ -1348,7 +1335,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     } finally {
       setBusy(null)
     }
-  }, [address, buildDocument, discard, exportPng, layer, marks.length, props.conversation, props.localeId, props.sessions, sessionId, size, t])
+  }, [address, buildDocument, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, size, t])
 
   // --- render ---------------------------------------------------------------
 
@@ -1373,6 +1360,39 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * the next stroke, which is where the remembered preference comes in.
    */
   const shownColor = selected === null ? color : selected.color
+  const shownWeight = selected === null ? weight : (selected.weight ?? WEIGHT_DEFAULT)
+  /**
+   * Change one attribute of the selected mark, or of the next stroke when nothing
+   * is selected.
+   *
+   * A control already at the mark's value leaves the list untouched, so a press
+   * that changes nothing records no undo step.
+   * @param patch - the attribute to change.
+   */
+  const repaintSelected = (mark: AnnotationMark, patch: MarkPatch): void => {
+    // Compared key by key rather than object by object: spreading always makes a
+    // new object, so a reference compare would report every press as a change and
+    // record an undo step that undoes nothing.
+    const unchanged = (Object.keys(patch) as (keyof MarkPatch)[])
+      .every(key => mark[key] === patch[key])
+    if (unchanged) return
+    commit(marks.map(entry => (entry.id === mark.id ? { ...entry, ...patch } : entry)))
+  }
+  const chooseColor = (value: string): void => {
+    if (selected === null) {
+      setColor(value)
+      return
+    }
+    repaintSelected(selected, { color: value })
+  }
+  const chooseWeight = (value: number): void => {
+    const held = clampWeight(value)
+    if (selected === null) {
+      setWeight(held)
+      return
+    }
+    repaintSelected(selected, { weight: held })
+  }
   const surfaceStyle: CSSProperties = size === null
     ? {}
     : { width: size.width * scale, height: size.height * scale }
@@ -1428,6 +1448,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 marks={marks}
                 tool={tool}
                 color={color}
+                weight={weight}
                 containerRef={figureHostRef}
                 anchoring={isVector}
                 anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
@@ -1527,28 +1548,59 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
               button of its own; a reader who has picked something out means to say
               what is wrong with it. */}
           {selected === null || detailAt === null ? null : (
+            /* One pill, not a card: a single rounded field that opens on the spot
+               the reader just marked. It has no title, no badge and no close button —
+               the sentence itself says which mark it belongs to, because it appeared
+               next to it, and clicking anywhere else puts it away. The hand-off
+               buttons only exist once there is something to hand off. */
             <div className="da-float da-float-detail" role="group" aria-label={t('detail')}
               style={{ left: detailAt.left, top: detailAt.top }}>
-              <div className="da-float-head">
-                <span className="da-card-title">
-                  <NoteIcon />{t('detail')}
-                  <span className="da-chip">{t(TOOL_COPY[selected.kind])}</span>
-                </span>
-                <button type="button" className="da-btn da-btn-quiet"
-                  aria-label={t('close')} title={t('close')}
-                  onClick={() => { setSelectedId(null) }}>✕</button>
-              </div>
-              <label className="da-field">
-                <textarea
-                  ref={detailRef}
-                  value={selected.detail ?? ''}
-                  placeholder={t('detailPlaceholder')}
-                  onChange={(event) => { setMarkDetail(selected.id, event.target.value) }}
-                />
-                <span className="da-count">{(selected.detail ?? '').length}/500</span>
-              </label>
+              <textarea
+                ref={detailRef}
+                className="da-comment"
+                value={selected.detail ?? ''}
+                placeholder={selected.detail === undefined || selected.detail.trim() === '' ? t('addComment') : t('detailPlaceholder')}
+                rows={1}
+                onChange={(event) => { setMarkDetail(selected.id, event.target.value) }}
+              />
+              {selected.detail === undefined || selected.detail.trim() === '' ? null : (
+                <div className="da-comment-send">
+                  <button type="button" className="da-comment-send-btn da-comment-send-primary"
+                    disabled={busy !== null}
+                    aria-label={t('sendToAgent')} title={t('sendToAgent')}
+                    onClick={() => { void run('agent', selected) }}>
+                    <SendIcon />
+                  </button>
+                  <button type="button" className="da-comment-send-btn"
+                    disabled={busy !== null}
+                    aria-label={t('sendToComposer')} title={t('sendToComposer')}
+                    onClick={() => { void run('composer', selected) }}>
+                    <ChatIcon />
+                  </button>
+                </div>
+              )}
             </div>
           )}
+
+      {/* How heavy the pen is, on a rail of its own down the left edge — the place a
+          drawing tool puts its weight, and the place the reader's eye already looks
+          for one. Idle it is a hairline, so it costs the figure nothing; crossing it
+          opens it out to a track with a knob. A point mark has no stroke to weigh,
+          so the rail stands down rather than offering a control that would do
+          nothing. */}
+      {tool === 'point' || selected?.kind === 'point' ? null : (
+        <label className="da-weight" title={t('weight')}>
+          <input type="range" className="da-weight-input"
+            aria-label={t('weight')}
+            min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
+            value={shownWeight}
+            onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
+          <span className="da-weight-fill" aria-hidden
+            style={{ height: `${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}%` }} />
+          <span className="da-weight-knob" aria-hidden
+            style={{ bottom: `calc(${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}% - 5px)` }} />
+        </label>
+      )}
 
       {/* The tools float, so they can be parked off whichever corner of the figure
           the reader is working on. The handle above the tiles is what drags it; the

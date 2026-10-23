@@ -99,8 +99,47 @@ export interface AnnotationMark {
    * never carries one.
    */
   readonly rotation?: number
+  /**
+   * Stroke width of the mark, as a multiple of the default width.
+   *
+   * Absent means the default, which is what every mark drawn before line weight
+   * existed is. It scales the stroke and the arrow's barbs together, so a heavy
+   * arrow is a heavier version of the same arrow rather than a longer one. A
+   * `point` mark has no stroke to weigh: its head is sized by the number inside
+   * it, so it never carries one.
+   */
+  readonly weight?: number
   /** Element the mark points at, when the figure exposes one. */
   readonly anchor?: MarkAnchor
+}
+
+/** Thinnest stroke a mark can be drawn at, as a multiple of the default width. */
+export const WEIGHT_MIN = 0.5
+
+/** Heaviest stroke a mark can be drawn at, as a multiple of the default width. */
+export const WEIGHT_MAX = 4
+
+/** Multiple of the default width a mark is drawn at until the reader says otherwise. */
+export const WEIGHT_DEFAULT = 1
+
+/**
+ * Hold a stroke weight inside the range the painter can draw.
+ *
+ * @param value - the weight to hold.
+ * @returns the value, pulled to the nearest end of the range.
+ */
+export function clampWeight(value: number): number {
+  return Math.min(WEIGHT_MAX, Math.max(WEIGHT_MIN, value))
+}
+
+/**
+ * Whether a value is a stroke weight this plugin would write.
+ *
+ * @param value - the value to test.
+ * @returns true when it is one.
+ */
+export function isWeight(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= WEIGHT_MIN && value <= WEIGHT_MAX
 }
 
 /**

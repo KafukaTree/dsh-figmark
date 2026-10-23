@@ -7,10 +7,15 @@ import type { AnnotationDocument, AnnotationMark, MarkKind } from '../src/shared
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
+  WEIGHT_DEFAULT,
+  WEIGHT_MAX,
+  WEIGHT_MIN,
   annotatedPages,
+  clampWeight,
   describeFigureScope,
   describeMark,
   describeMarks,
+  isWeight,
   pageFileSuffix,
 } from '../src/shared/annotation'
 import { readAnnotation, readAnnotationDocument, removeAnnotation, writeAnnotation } from '../src/host/store'
@@ -158,6 +163,26 @@ describe('document validation', () => {
       .not.toThrow()
   })
 
+  it('holds a stroke weight inside the range the painter can draw', () => {
+    const withWeight = (weight: unknown): unknown => ({
+      ...document_,
+      marks: [{ id: 'x', kind: 'pen', color: '#000', points: [[0, 0]], weight }],
+    })
+    // A weight the reader set is pulled to the nearest drawable value rather than
+    // dropped: a preference that vanishes is worse than one held at its end stop.
+    expect(defined(readAnnotationDocument(withWeight(9)).marks[0]).weight).toBe(4)
+    expect(defined(readAnnotationDocument(withWeight(0.1)).marks[0]).weight).toBe(0.5)
+    expect(defined(readAnnotationDocument(withWeight(2.5)).marks[0]).weight).toBe(2.5)
+    // Anything that is not a number is a document this plugin did not write.
+    expect(() => readAnnotationDocument(withWeight('thick'))).toThrow(/weight/)
+    expect(() => readAnnotationDocument(withWeight(Number.POSITIVE_INFINITY))).toThrow(/weight/)
+    // Absent is the default pen, which is not written down at all.
+    expect(defined(readAnnotationDocument({
+      ...document_,
+      marks: [{ id: 'x', kind: 'pen', color: '#000', points: [[0, 0]] }],
+    }).marks[0]).weight).toBeUndefined()
+  })
+
   it('rejects a malformed anchor field by field', () => {
     const withAnchor = (anchor: unknown): unknown => ({
       ...document_,
@@ -205,6 +230,23 @@ describe('document validation', () => {
     const parsed = readAnnotationDocument({ ...document_, updatedAt: undefined })
     expect(parsed.createdAt).toBe('2026-01-01T00:00:00.000Z')
     expect(Number.isNaN(Date.parse(parsed.updatedAt))).toBe(false)
+  })
+})
+
+describe('the weight a stroke can be drawn at', () => {
+  it('holds a weight to the ends of the range, and only calls a weight one inside it', () => {
+    expect(clampWeight(0.1)).toBe(WEIGHT_MIN)
+    expect(clampWeight(9)).toBe(WEIGHT_MAX)
+    expect(clampWeight(2)).toBe(2)
+    expect(isWeight(WEIGHT_MIN)).toBe(true)
+    expect(isWeight(WEIGHT_MAX)).toBe(true)
+    expect(isWeight(WEIGHT_DEFAULT)).toBe(true)
+    // Anything outside, or not a number at all, is not a weight this plugin writes.
+    expect(isWeight(WEIGHT_MIN - 0.1)).toBe(false)
+    expect(isWeight(WEIGHT_MAX + 0.1)).toBe(false)
+    expect(isWeight(Number.NaN)).toBe(false)
+    expect(isWeight('2')).toBe(false)
+    expect(isWeight(undefined)).toBe(false)
   })
 })
 

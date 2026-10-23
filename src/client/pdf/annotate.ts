@@ -277,10 +277,13 @@ function place(mark: AnnotationMark, transform: readonly number[]): PlacedMark {
   } else if (spins) {
     points = mark.points.map(point => turnAround(point, centre, radians))
   }
+  // The weight is a multiple of the same base width the overlay uses, so a mark
+  // exported to PDF keeps the pen the reader drew it with.
+  const weight = mark.weight ?? 1
   return {
     points: points.map(point => toUserSpace(transform, point)),
-    width: STROKE_WIDTH / scale,
-    head: ARROW_HEAD / scale,
+    width: (STROKE_WIDTH * weight) / scale,
+    head: (ARROW_HEAD * weight) / scale,
     turned,
   }
 }

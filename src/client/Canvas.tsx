@@ -22,7 +22,7 @@ import {
 } from './handles'
 import { boxCentre, markBounds, shiftPoints, uprightBounds, type MarkBox } from './mark-geometry'
 import {
-  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, STROKE_WIDTH,
+  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
   markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from './render'
 
@@ -40,6 +40,8 @@ export interface MarkPatch {
    * of about the next stroke.
    */
   readonly color?: string
+  /** A new stroke weight, as a multiple of the default width. */
+  readonly weight?: number
 }
 
 /** Tools the toolbar can activate. */
@@ -66,6 +68,8 @@ export interface CanvasProps {
   readonly tool: Tool
   /** Stroke color for new marks. */
   readonly color: string
+  /** Stroke weight for new marks, as a multiple of the default width. */
+  readonly weight?: number
   /** Container that holds the figure, used as the anchor hit-test origin. */
   readonly containerRef: RefObject<HTMLElement | null>
   /** Whether the figure is inlined SVG (only then can marks anchor to elements). */
@@ -205,6 +209,7 @@ interface PressEdit {
  */
 export function Canvas(props: CanvasProps): ReactNode {
   const { width, height, marks, tool, color, containerRef, anchoring } = props
+  const weight = props.weight ?? 1
   /**
    * Each mark's number, by id.
    *
@@ -477,7 +482,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     // A drag-shaped mark needs its two corners from the start; a freehand stroke
     // starts as the single sample it is, so no duplicate point enters the path.
     const seed: FigurePoint[] = tool === 'pen' ? [point] : [point, point]
-    setDraft({ id: nextMarkId(), kind: tool, color, points: seed })
+    setDraft({ id: nextMarkId(), kind: tool, color, points: seed, weight })
   }
 
   const move = (event: ReactPointerEvent<SVGSVGElement>): void => {
@@ -692,9 +697,9 @@ export function Canvas(props: CanvasProps): ReactNode {
         {isPoint ? renderPoint(shown) : null}
         {path === undefined ? null : (
           <g transform={transform}>
-            <path d={path} fill="none" stroke="#ffffff" strokeWidth={STROKE_WIDTH + 2.5}
+            <path d={path} fill="none" stroke="#ffffff" strokeWidth={strokeWidthOf(shown) + 2.5}
               strokeLinecap="round" strokeLinejoin="round" />
-            <path d={path} fill="none" stroke={shown.color} strokeWidth={STROKE_WIDTH}
+            <path d={path} fill="none" stroke={shown.color} strokeWidth={strokeWidthOf(shown)}
               strokeLinecap="round" strokeLinejoin="round" />
             {isDraft ? null : (
               <path d={path} fill="none" stroke="transparent" strokeWidth={HIT_WIDTH}

@@ -52,6 +52,41 @@ export const STYLES = `
 .da-palette .da-tool .da-tool-icon{height:auto}
 .da-palette .da-tool .da-tool-icon svg{width:16px;height:16px;stroke-width:1.9}
 
+/* --- the weight rail ----------------------------------------------------- */
+/* A vertical rail along the left edge of the figure. Idle it is a hairline: the
+   whole control is 6px wide, so it reads as a rule at the edge of the drawing
+   rather than as a panel competing with it. Crossing it opens it out to a track
+   with a knob, which is where the width can be read and dragged. A horizontal
+   range input is rotated upright inside the pill, because a range is the one
+   control the browser already knows how to drag with every pointer. */
+.da-weight{position:absolute;z-index:7;left:6px;top:50%;transform:translateY(-50%);
+  display:flex;align-items:center;justify-content:center;width:6px;height:132px;
+  border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.22));
+  cursor:ns-resize;transition:width .16s ease,background .16s ease,box-shadow .16s ease}
+.da-weight:hover,.da-weight:focus-within{width:26px;background:var(--dsw-alias-bg-layer-2,#fff);
+  box-shadow:0 5px 18px rgba(20,40,80,.16),0 0 0 0.5px var(--dsw-alias-border-l2,currentColor)}
+/* The track: a hairline down the middle of the pill, only wide enough to see. */
+.da-weight::before{content:"";position:absolute;left:50%;top:11px;bottom:11px;width:2px;
+  transform:translateX(-50%);border-radius:1px;background:var(--dsw-alias-border-l3,rgba(127,127,127,.34))}
+/* The filled part of the track, drawn from the bottom up. */
+.da-weight-fill{position:absolute;left:50%;bottom:11px;width:2px;transform:translateX(-50%);
+  border-radius:1px;background:var(--dsw-alias-brand-primary,#176df2);opacity:0;transition:opacity .16s ease}
+.da-weight:hover .da-weight-fill,.da-weight:focus-within .da-weight-fill{opacity:1}
+/* The knob sits on the value. It is the only part that shows at rest, so the rail
+   reads as a slider waiting to be touched rather than a bare rule. */
+.da-weight-knob{position:absolute;left:50%;width:9px;height:9px;border-radius:50%;
+  transform:translateX(-50%);background:var(--dsw-alias-bg-layer-2,#fff);
+  box-shadow:0 1px 4px rgba(20,40,80,.32),0 0 0 1px var(--dsw-alias-border-l3,currentColor);
+  transition:width .16s ease,height .16s ease,background .16s ease}
+.da-weight:hover .da-weight-knob,.da-weight:focus-within .da-weight-knob{
+  width:13px;height:13px;background:var(--dsw-alias-brand-primary,#176df2);
+  box-shadow:0 2px 7px rgba(20,40,80,.34)}
+/* The browser's own range, rotated upright and made transparent: it keeps the
+   dragging, the arrow keys, the step and the accessible name, while the rail above
+   does the drawing. */
+.da-weight-input{position:absolute;left:50%;top:50%;width:112px;height:26px;margin:0;opacity:0;
+  transform:translate(-50%,-50%) rotate(-90deg);cursor:ns-resize;appearance:none;background:transparent}
+
 /* --- the floating bar ---------------------------------------------------- */
 /* The same object as the tool palette: a dark rounded strip over the figure, which
    the reader can drag clear of whatever they are looking at. It carries the records
@@ -210,9 +245,31 @@ export const STYLES = `
 .da-float-record{width:min(330px,calc(100% - 22px))}
 .da-float-list{max-height:min(58%,400px)}
 .da-float-list .da-marks{overflow:auto;min-height:0}
-/* The detail card is placed by arithmetic, not by the stylesheet: its left and top
-   come from the mark it belongs to. */
-.da-float-detail{width:252px}
+/* The detail field is placed by arithmetic, not by the stylesheet: its left and top
+   come from the mark it belongs to. It is a pill rather than a card — no head, no
+   border between the field and the panel — so writing about a mark costs one line
+   over the figure instead of a box that covers it. */
+.da-float-detail{width:300px;gap:0;padding:4px;border-radius:22px;
+  flex-direction:row;align-items:flex-end;
+  box-shadow:0 8px 26px rgba(20,40,80,.2),0 0 0 1px rgba(20,40,80,.04)}
+.da-float .da-comment{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;background:transparent;
+  color:inherit;font:inherit;font-size:13px;line-height:1.55;padding:7px 10px;resize:none;
+  /* One line until the sentence needs more: the pill is a place to type, not a
+     panel, and the rule for the record cards' textareas sets a 74px floor. */
+  min-height:0;height:33px;max-height:120px;overflow-y:auto;outline:none;field-sizing:content}
+.da-float .da-comment::placeholder{color:var(--dsw-alias-label-tertiary,currentColor);opacity:.85}
+/* The hand-off appears only once the field says something: an empty pill is a
+   place to type, not a decision to make. */
+.da-comment-send{display:flex;align-items:center;gap:4px;flex:0 0 auto;padding-bottom:3px;padding-right:3px}
+.da-comment-send-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border:0;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));
+  color:var(--dsw-alias-label-secondary,currentColor);cursor:pointer;padding:0}
+.da-comment-send-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.2));
+  color:var(--dsw-alias-label-primary,currentColor)}
+.da-comment-send-btn:disabled{opacity:.45;cursor:default}
+.da-comment-send-btn svg{width:15px;height:15px}
+.da-comment-send-primary{background:var(--dsw-alias-brand-primary,#176df2);color:#fff}
+.da-comment-send-primary:hover{background:var(--dsw-alias-brand-primary,#176df2);color:#fff;filter:brightness(1.08)}
 .da-float textarea{width:100%;box-sizing:border-box;min-height:74px;max-height:200px;resize:vertical;border:0.5px solid var(--dsw-alias-border-l3,currentColor);border-radius:9px;background:var(--dsw-alias-bg-layer-2,transparent);color:inherit;font:inherit;font-size:12px;padding:8px 10px;line-height:1.65}
 .da-float textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#176df2)}
 .da-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;

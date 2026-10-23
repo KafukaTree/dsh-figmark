@@ -20,6 +20,7 @@ import {
   type FigurePoint,
   type MarkAnchor,
   type MarkKind,
+  clampWeight,
 } from '../shared/annotation'
 import {
   annotationCandidates,
@@ -102,6 +103,17 @@ function readAnchor(value: unknown): MarkAnchor | undefined {
  * @returns the angle in degrees, or undefined when absent.
  * @throws {Error} when the field is present but is not a usable angle.
  */
+function readWeight(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error('annotation mark weight must be a finite multiple of the default width')
+  }
+  // Out-of-range weights are pulled back rather than dropped: the field is a
+  // preference the reader set, and a preference that vanishes silently is worse
+  // than one held at its nearest allowed value.
+  return clampWeight(value)
+}
+
 function readRotation(value: unknown): number | undefined {
   if (value === undefined) return undefined
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -161,6 +173,7 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
   }
   const anchor = readAnchor(raw['anchor'])
   const rotation = readRotation(raw['rotation'])
+  const weight = readWeight(raw['weight'])
   return {
     id: raw['id'],
     kind: kind as MarkKind,
@@ -169,6 +182,7 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
     ...(typeof raw['detail'] === 'string' ? { detail: raw['detail'] } : {}),
     ...(page === undefined ? {} : { page }),
     ...(rotation === undefined ? {} : { rotation }),
+    ...(weight === undefined ? {} : { weight }),
     ...(anchor === undefined ? {} : { anchor }),
   }
 }

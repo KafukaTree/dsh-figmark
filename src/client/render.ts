@@ -24,6 +24,21 @@ import { markBounds, markRadians } from './mark-geometry'
 /** Stroke width of every mark, in figure pixels. */
 export const STROKE_WIDTH = 2.5
 
+/**
+ * The stroke width one mark is drawn at.
+ *
+ * A mark's weight is a multiple of {@link STROKE_WIDTH}, so the default is the
+ * width marks have always had and a heavier mark is the same drawing with a
+ * thicker pen. The arrow's barbs are weighed by the same multiple, because an
+ * arrow drawn with a thick pen has a thick head.
+ *
+ * @param mark - the mark to weigh.
+ * @returns its stroke width in figure pixels.
+ */
+export function strokeWidthOf(mark: AnnotationMark): number {
+  return STROKE_WIDTH * (mark.weight ?? 1)
+}
+
 /** Arrow head length, in figure pixels. */
 const ARROW_HEAD = 14
 
@@ -129,17 +144,20 @@ function pointsBox(points: readonly FigurePoint[]): MarkBox | undefined {
  * @param points - the arrow's tail and tip.
  * @returns tail, tip and both barbs; the stored points alone when it is half drawn.
  */
-export function arrowBarbs(points: readonly FigurePoint[]): readonly FigurePoint[] {
+export function arrowBarbs(points: readonly FigurePoint[], weight = 1): readonly FigurePoint[] {
   const [first, second] = points
   if (first === undefined || second === undefined) return points
   const angle = Math.atan2(second[1] - first[1], second[0] - first[0])
+  // A thick pen draws a thick head: the barbs grow with the weight, so an arrow
+  // stays one drawing rather than a fat shaft with a hairline tip.
+  const head = ARROW_HEAD * weight
   const left: FigurePoint = [
-    second[0] - ARROW_HEAD * Math.cos(angle - ARROW_SPREAD),
-    second[1] - ARROW_HEAD * Math.sin(angle - ARROW_SPREAD),
+    second[0] - head * Math.cos(angle - ARROW_SPREAD),
+    second[1] - head * Math.sin(angle - ARROW_SPREAD),
   ]
   const right: FigurePoint = [
-    second[0] - ARROW_HEAD * Math.cos(angle + ARROW_SPREAD),
-    second[1] - ARROW_HEAD * Math.sin(angle + ARROW_SPREAD),
+    second[0] - head * Math.cos(angle + ARROW_SPREAD),
+    second[1] - head * Math.sin(angle + ARROW_SPREAD),
   ]
   return [...points, left, right]
 }
@@ -157,7 +175,7 @@ export function markPathData(mark: AnnotationMark): string | undefined {
       if (second === undefined) return undefined
       // The barbs are drawn from the same function that measures them, so the
       // picture and the outline of the arrow cannot disagree about how far it reaches.
-      const [left, right] = arrowBarbs(mark.points).slice(2) as [FigurePoint, FigurePoint]
+      const [left, right] = arrowBarbs(mark.points, mark.weight ?? 1).slice(2) as [FigurePoint, FigurePoint]
       return `M ${n(first[0])} ${n(first[1])} L ${n(second[0])} ${n(second[1])}`
         + ` M ${n(left[0])} ${n(left[1])} L ${n(second[0])} ${n(second[1])}`
         + ` L ${n(right[0])} ${n(right[1])}`
@@ -303,14 +321,14 @@ export function isStrokeKind(kind: MarkKind): boolean {
  */
 export function markOutline(mark: AnnotationMark): MarkBox | undefined {
   if (mark.kind === 'point') return pointMarkBox(mark)
-  const geometry = mark.kind === 'arrow' ? arrowBarbs(mark.points) : mark.points
+  const geometry = mark.kind === 'arrow' ? arrowBarbs(mark.points, mark.weight ?? 1) : mark.points
   const straight = pointsBox(geometry)
   if (straight === undefined) return undefined
   // A turned mark covers the box its corners sweep, which is not the box the points
   // came in with; only the drawn extent says where the mark really reaches.
   const radians = markRadians(mark)
   const box = radians === 0 ? straight : turnedBox(geometry, straight, radians)
-  const grow = STROKE_WIDTH / 2
+  const grow = strokeWidthOf(mark) / 2
   return { x: box.x - grow, y: box.y - grow, width: box.width + grow * 2, height: box.height + grow * 2 }
 }
 

@@ -15,6 +15,8 @@
  * @module dsh-figmark/client/preferences
  */
 
+import { clampWeight, isWeight } from '../shared/annotation'
+
 /** Where the preferences are kept. Mirrors the part of `Storage` this needs. */
 export interface PreferenceStore {
   getItem(key: string): string | null
@@ -36,6 +38,8 @@ export interface PaletteSpot {
 export interface DrawingPreferences {
   /** The colour the next mark is drawn in, when the reader ever chose one. */
   readonly color?: string
+  /** The stroke weight the next mark is drawn at, when the reader ever chose one. */
+  readonly weight?: number
   /** Where the reader last parked the palette, when they moved it. */
   readonly palette?: PaletteSpot
   /** Where the reader last parked the records bar, when they moved it. */
@@ -95,6 +99,7 @@ function readRecord(raw: unknown): DrawingPreferences {
   const bar = spotOf(record['bar'])
   return {
     ...(typeof color === 'string' && HEX_COLOR.test(color) ? { color } : {}),
+    ...(isWeight(record['weight']) ? { weight: record['weight'] } : {}),
     ...(palette === undefined ? {} : { palette }),
     ...(bar === undefined ? {} : { bar }),
   }
@@ -129,10 +134,11 @@ export function rememberPreferences(
   store: PreferenceStore | undefined = browserStore(),
 ): void {
   if (store === undefined) return
-  const { color, palette, bar } = preferences
+  const { color, weight, palette, bar } = preferences
   try {
     store.setItem(PREFERENCES_KEY, JSON.stringify({
       ...(color === undefined ? {} : { color }),
+      ...(weight === undefined ? {} : { weight: clampWeight(weight) }),
       ...(palette === undefined ? {} : { palette: { x: palette.x, y: palette.y } }),
       ...(bar === undefined ? {} : { bar: { x: bar.x, y: bar.y } }),
     }))

@@ -48,6 +48,12 @@ const saved: AnnotationDocument = {
   summary: '改标号',
 }
 
+/** A document whose only mark is a point, which has no stroke to weigh. */
+const pointOnly: AnnotationDocument = {
+  ...saved,
+  marks: [{ id: 'p1', kind: 'point', color: '#e03131', points: [[100, 50]], detail: '图号在这里' }],
+}
+
 /** One call the body made through fetch. */
 interface Call {
   readonly url: string
@@ -545,7 +551,7 @@ describe('editing marks', () => {
     await drawArrow(document.body)
     await openList(document.body)
     expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
-    expect(detailCard().textContent).toContain(zh.toolArrow)
+    expect(detailCard().querySelector(".da-comment")).not.toBeNull()
   })
 
   it('opens the detail of a mark the moment it is drawn, with the caret in it', async () => {
@@ -739,7 +745,7 @@ describe('editing marks', () => {
   it('selects a mark from the list and from the surface', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    expect(detailCard().textContent).toContain(zh.toolArrow)
+    expect(detailCard().querySelector(".da-comment")).not.toBeNull()
   })
 
   it('labels a mark that has no note yet, and shows where it anchored', async () => {
@@ -793,7 +799,7 @@ describe('editing marks', () => {
   it('drops the detail card when the selected mark is deleted', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    expect(detailCard().textContent).toContain(zh.toolArrow)
+    expect(detailCard().querySelector(".da-comment")).not.toBeNull()
     await click(defined(document.querySelector('.da-mark-del')))
     // The mark is gone, so there is nothing left for a card to be about.
     expect(document.querySelector('.da-float-detail')).toBeNull()
@@ -843,7 +849,7 @@ describe('the keyboard while annotating', () => {
     await act(async () => {
       note.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
-    expect(detailCard().textContent).toContain(zh.toolArrow)
+    expect(detailCard().querySelector(".da-comment")).not.toBeNull()
   })
 
   it('deletes the picked-out mark with Delete and with Backspace', async () => {
@@ -1421,6 +1427,27 @@ describe('repainting a mark that is already there', () => {
     expect(painted()).toBe('#e03131')
   })
 
+  it('leaves the other marks on the figure alone when one is repainted', async () => {
+    // Two marks, so the repaint walks a list where one entry is not the mark being
+    // changed: the other one has to come through the map untouched.
+    const twoMarks: AnnotationDocument = {
+      ...saved,
+      marks: [
+        { id: 'm1', kind: 'arrow', color: '#e03131', points: [[10, 10], [40, 30]], detail: '第一条' },
+        { id: 'm2', kind: 'rect', color: '#1971c2', points: [[60, 40], [90, 70]], detail: '第二条' },
+      ],
+    }
+    mounted = await svgBody({ annotation: twoMarks })
+    const painted = (): string[] => [...document.querySelectorAll(
+      '[data-da-mark] path[stroke]:not([stroke="#ffffff"]):not([stroke="transparent"])',
+    )].map(path => defined(path.getAttribute('stroke')))
+    await openList(document.body)
+    await click(defined(document.querySelectorAll('.da-mark-text')[0]) as HTMLElement)
+    await openStyle(document.body)
+    await click(defined(document.querySelector('.da-swatch[aria-label="#2f9e44"]')))
+    expect(painted()).toEqual(['#2f9e44', '#1971c2'])
+  })
+
   it('records no undo step for the colour a mark already wears', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
@@ -1428,6 +1455,112 @@ describe('repainting a mark that is already there', () => {
     await click(defined(document.querySelector('.da-swatch[aria-label="#e03131"]')))
     // The mark was already that colour, so there is still only the load to walk back.
     expect(button(document.body, zh.undo).disabled).toBe(true)
+  })
+})
+
+describe('the hand-off inside the comment', () => {
+  it('offers the two ways out once the comment says something, and neither before', async () => {
+    mounted = await svgBody()
+    await drawArrow(document.body)
+    // A freshly drawn mark has no sentence, so the pill is only a place to type.
+    expect(document.querySelector('.da-comment-send')).toBeNull()
+    await type(detailBox(), '这条曲线缺图例')
+    expect(document.querySelectorAll('.da-comment-send-btn')).toHaveLength(2)
+  })
+
+  it('hands the comment to the composer from the pill as well', async () => {
+    const written: string[] = []
+    const conversation: ComposerLike = {
+      input: {
+        shell: () => ({
+          snapshot: { draft: '' },
+          setDraft: (text: string) => { written.push(text) },
+          addAttachments: () => true,
+        }),
+      },
+      createDrafts: () => [],
+      releaseDraftAttachments: () => {},
+    }
+    const result = await svgBody({}, { conversation })
+    mounted = result
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '送进对话框')
+    await click(defined(result.host.querySelectorAll('.da-comment-send-btn')[1]))
+    expect(defined(written[0])).toContain('送进对话框')
+  })
+
+  it('sends only what the pill is about, not every mark on the figure', async () => {
+    // A second mark on the same figure, whose sentence must not travel with a
+    // hand-off started from the first one's comment.
+    const result = await svgBody()
+    mounted = result
+    await drawArrow(document.body)
+    await type(detailBox(result.host), '第一条')
+    await drawArrow(document.body)
+    await type(detailBox(result.host), '第二条')
+    // The pill belongs to the second mark, so its hand-off carries that one sentence
+    // — not the figure's other comments, which are not what the reader pointed at.
+    await click(defined(result.host.querySelector('.da-comment-send-primary')))
+    // Autosave posts the whole draft as it grows, so the hand-off is the last write,
+    // not the first one.
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const sent = defined(writes[writes.length - 1])
+    const body = JSON.stringify(postBody(sent))
+    expect(body).toContain('第二条')
+    expect(body).not.toContain('第一条')
+  })
+})
+
+describe('the weight of the pen', () => {
+  /** The stroke width one drawn mark carries on the surface. */
+  const paintedWidth = (): string | null => defined(
+    document.querySelector('[data-da-mark] path[stroke]:not([stroke="#ffffff"]):not([stroke="transparent"])'),
+  ).getAttribute('stroke-width')
+
+  it('draws a new mark at the weight the rail is set to', async () => {
+    mounted = await svgBody()
+    // Nothing is selected on a fresh surface, so the rail is arming the next stroke.
+    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
+    await type(rail, '3')
+    await drawArrow(document.body)
+    expect(paintedWidth()).toBe('7.5')
+  })
+
+  it('repaints the selected mark instead of the next one, and takes the heavier pen back with undo', async () => {
+    mounted = await svgBody({ annotation: saved })
+    await selectFirstMark(document.body)
+    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
+    await type(rail, '2')
+    expect(paintedWidth()).toBe('5')
+    await click(button(document.body, zh.undo))
+    expect(paintedWidth()).toBe('2.5')
+  })
+
+  it('records no undo step for the weight a mark already wears', async () => {
+    mounted = await svgBody({ annotation: saved })
+    await selectFirstMark(document.body)
+    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
+    // The fixture's mark carries no weight, which is the default pen.
+    await type(rail, '1')
+    expect(button(document.body, zh.undo).disabled).toBe(true)
+  })
+
+  it('stands the rail down for a point, which has no stroke to weigh', async () => {
+    mounted = await svgBody({ annotation: pointOnly })
+    await selectFirstMark(document.body)
+    expect(document.querySelector('.da-weight')).toBeNull()
+  })
+
+  it('remembers the weight across a reload', async () => {
+    const first = await svgBody()
+    mounted = first
+    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
+    await type(rail, '2.5')
+    // A fresh mount is a fresh reader: nothing is selected in it, so the rail arms
+    // the next stroke rather than repainting a mark.
+    mounted?.root.unmount()
+    mounted = await svgBody()
+    expect((defined(document.querySelector('.da-weight-input')) as HTMLInputElement).value).toBe('2.5')
   })
 })
 
@@ -1502,16 +1635,17 @@ describe('putting a floating card away', () => {
     expect(document.querySelector('.da-float-list')).toBeNull()
   })
 
-  it('closes the detail card from its own button, letting go of the mark', async () => {
+  it('puts the detail pill away when the reader clicks anywhere else', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    const card = defined(document.querySelector('.da-float-detail'))
-    // The list card is open behind it and carries the same label, so the button is
-    // looked up inside the card it belongs to rather than across the whole panel.
-    await click(defined(card.querySelector('button[aria-label]')))
+    expect(document.querySelector('.da-float-detail')).not.toBeNull()
+    // The pill carries no close button: a comment box that appears beside the mark
+    // is dismissed by moving on, the way every other popover is.
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
     expect(document.querySelector('.da-float-detail')).toBeNull()
-    // Letting go of the card lets go of what it described, so the surface is back
-    // to its resting state rather than holding a selection with no card.
     expect(defined(document.querySelector('[data-da-mark]')).getAttribute('data-da-mark')).toBe('m1')
   })
 })
@@ -2062,7 +2196,7 @@ describe('autosave', () => {
     expect(defined(result.host.querySelector('.da-mark')).getAttribute('data-selected')).toBe('false')
     await click(defined(result.host.querySelector('.da-mark-index')))
     expect(defined(result.host.querySelector('.da-mark')).getAttribute('data-selected')).toBe('true')
-    expect(detailCard(result.host).textContent).toContain(zh.toolArrow)
+    expect(defined(result.host.querySelector('.da-comment'))).not.toBeNull()
   })
 
   it('folds the style row away again when the reader presses its button twice', async () => {
