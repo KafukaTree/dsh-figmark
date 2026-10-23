@@ -11,3 +11,6 @@ coverage/
 .DS_Store
 *.log
 *.tgz
+
+# 覆盖率报告目录（v8 与 json 两种）
+coverage-json/
