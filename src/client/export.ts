@@ -129,13 +129,44 @@ export function composeReviewSvg(
   // the paper's own origin, which is why the whole content is shifted by one offset.
   const paper = plotBounds(layer.width, layer.height, marks, unit)
   const shift = `translate(${-paper.x} ${-paper.y})`
+  // A mark that left the figure grew the paper, and the reader of this picture has no
+  // panel behind it to tell them where the figure stopped: to them the margin is just
+  // more white. So when the paper did grow, the figure's own edge is drawn as a dashed
+  // rule — the one thing on the picture that is not the reader's own drawing, which is
+  // exactly why it has to be dashed and grey rather than solid and black.
+  const grown = paper.x !== 0 || paper.y !== 0
+    || paper.width !== layer.width || paper.height !== layer.height
+  const edge = grown ? figureEdge(layer.width, layer.height, unit) : ''
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
     + ` width="${paper.width}" height="${paper.height}" viewBox="0 0 ${paper.width} ${paper.height}">`
     + `<rect x="0" y="0" width="${paper.width}" height="${paper.height}" fill="#ffffff"/>`
     + `<g transform="${shift}">`
     + figureSvg(layer)
+    + edge
     + marks.map(mark => markSvg(mark, numbers.get(mark.id), unit)).join('')
     + '</g></svg>'
+}
+
+/** Round a stroke measurement to a tenth, as the path data does. */
+function hair9(value: number): string {
+  return (Math.round(value * 10) / 10).toString()
+}
+
+/**
+ * The rule that marks where the figure ends and the grown paper begins.
+ *
+ * Drawn only when the paper grew, and drawn grey and dashed: it is a note about the
+ * picture, not part of it, so it must not read as a mark the reader made.
+ * @param width - the figure's width, in figure pixels.
+ * @param height - the figure's height, in figure pixels.
+ * @param unit - the figure's size multiple, so the rule is sized like the marks.
+ * @returns an SVG rect, or an empty string when there is nothing to outline.
+ */
+function figureEdge(width: number, height: number, unit: number): string {
+  const hair = Math.max(1, 1.5 * unit)
+  return `<rect x="0" y="0" width="${width}" height="${height}" fill="none"`
+    + ` stroke="#9aa3b2" stroke-width="${hair9(hair)}"`
+    + ` stroke-dasharray="${hair9(6 * unit)} ${hair9(4 * unit)}"/>`
 }
 
 /**

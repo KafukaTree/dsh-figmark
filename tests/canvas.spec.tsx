@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../src/shared/annotation'
+import { HANDLE_SIZE } from '../src/client/handles'
 import { Canvas, nextMarkId, type MarkPatch, type Tool } from '../src/client/Canvas'
 import { defined, stubRect } from './dom'
 
@@ -26,6 +27,10 @@ interface MountOptions {
   readonly onPan?: (dx: number, dy: number) => void
   readonly onPanStart?: () => void
   readonly onPanEnd?: () => void
+  readonly scale?: number
+  readonly origin?: FigurePoint
+  readonly width?: number
+  readonly height?: number
 }
 
 /** Render the surface over a stubbed viewport. */
@@ -46,8 +51,9 @@ function mount(options: MountOptions): {
     root.render(
       <Canvas
         {...(options.numbering === undefined ? {} : { numbering: options.numbering })}
-        width={400}
-        height={300}
+        {...(options.origin === undefined ? {} : { origin: options.origin })}
+        width={options.width ?? 400}
+        height={options.height ?? 300}
         marks={options.marks ?? []}
         tool={options.tool}
         color="#e03131"
@@ -64,6 +70,7 @@ function mount(options: MountOptions): {
         {...(options.onPan === undefined ? {} : { onPan: options.onPan })}
         {...(options.onPanStart === undefined ? {} : { onPanStart: options.onPanStart })}
         {...(options.onPanEnd === undefined ? {} : { onPanEnd: options.onPanEnd })}
+        {...(options.scale === undefined ? {} : { scale: options.scale })}
       />,
     )
   })
@@ -650,6 +657,30 @@ describe('the control frame around a selected mark', () => {
     expect(handle('rotate')).toBeDefined()
   })
 
+  it('draws the same-size handle whatever the paper is scaled to', () => {
+    // A handle is a target for a pointer, not part of the drawing: on a figure shown at
+    // a quarter size, a frame drawn in figure pixels would come out under two screen
+    // pixels and could not be grabbed. The svg is in figure pixels and the paper is
+    // scaled by CSS, so the drawn size is divided by that scale to stay constant.
+    mounted = mount({ tool: 'select', marks: [box], selectedId: 'm1', scale: 0.25 })
+    const drawn = Number(handle('nw').getAttribute('width'))
+    expect(drawn).toBeCloseTo(HANDLE_SIZE / 0.25, 6)
+  })
+
+  it('draws a handle at its own size when the paper is not scaled', () => {
+    mounted = mount({ tool: 'select', marks: [box], selectedId: 'm1' })
+    expect(Number(handle('nw').getAttribute('width'))).toBeCloseTo(HANDLE_SIZE, 6)
+  })
+
+  it('grabs a handle where it looks, not where it would be on an unscaled paper', () => {
+    // The reach travelled with the drawn size: a press on the frame as it appears has
+    // to land on the handle, so the hit radius is scaled by the same factor.
+    const onUpdate = vi.fn()
+    mounted = mount({ tool: 'select', marks: [box], selectedId: 'm1', onUpdate, scale: 0.25 })
+    dragHandle('e', 60, 0)
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+  })
+
   it('draws no frame around a mark that is not selected', () => {
     mounted = mount({ tool: 'select', marks: [box], selectedId: null })
     expect(mounted.svg.querySelectorAll('rect[data-da-handle]')).toHaveLength(0)
@@ -840,5 +871,43 @@ describe('the control frame around a selected mark', () => {
     expect(mounted.svg.querySelectorAll('tspan')).toHaveLength(0)
     expect(mounted.svg.textContent).not.toContain('缺图形')
     expect(mounted.svg.textContent).not.toContain('刻度标错')
+  })
+})
+
+describe('a mark drawn past the edge of the figure', () => {
+  let mounted: ReturnType<typeof mount> | undefined
+  afterEach(() => {
+    mounted?.root.unmount()
+    mounted = undefined
+    document.body.innerHTML = ''
+  })
+
+  it('sits where the figure coordinate says, not twice as far', () => {
+    // The paper grew 20px to the left and 30px above, so the marks' own origin moved
+    // into it by that much. The overlay is the paper, so it must not repeat the move:
+    // doing so put a mark drawn in the left margin out in the right one.
+    mounted = mount({ tool: 'select', origin: [20, 30], width: 440, height: 330 })
+    const group = defined(mounted.svg.querySelector('g[transform]'))
+    expect(group.getAttribute('transform')).toBe('translate(20 30)')
+    expect(defined(mounted.svg).getAttribute('style')).toBeNull()
+  })
+
+  it('reads a press in figure coordinates even with the paper grown', () => {
+    // A collection rather than a `let`: TypeScript narrows a variable that is only
+    // assigned inside a callback to its initial value, and then the mark reads as null.
+    const added: AnnotationMark[] = []
+    mounted = mount({
+      tool: 'rect',
+      origin: [20, 30],
+      width: 440,
+      height: 330,
+      svgSize: { width: 440, height: 330 },
+      onAdd: (mark) => { added.push(mark) },
+    })
+    // 40px into the overlay is 20px past the paper's left edge, which is figure 0.
+    pointer(mounted.svg, 'pointerdown', 40, 50)
+    pointer(mounted.svg, 'pointermove', 140, 150)
+    pointer(mounted.svg, 'pointerup', 140, 150)
+    expect(defined(added[0]).points).toEqual([[20, 20], [120, 120]])
   })
 })

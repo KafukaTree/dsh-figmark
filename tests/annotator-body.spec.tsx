@@ -13,6 +13,8 @@ import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
 import { PINCH_SETTLE_DELAY_MS } from '../src/client/zoom'
 import { readPreferences } from '../src/client/preferences'
 import { STROKE_WIDTH } from '../src/client/render'
+import { figureUnit } from '../src/client/scale'
+import { STYLES } from '../src/client/styles'
 import { defined, stubRasterizer, stubRect } from './dom'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="10" y="20">102</text></svg>'
@@ -1135,6 +1137,29 @@ describe('zoom', () => {
     expect((defined(document.querySelector('.da-surface')) as HTMLElement).style.width).toBe('300px')
   })
 
+  it('scales the paper once, rather than the figure inside it as well', async () => {
+    // The live factor used to be written onto the figure host while the paper already
+    // carried the same factor, so a pinch out left the figure at the factor squared
+    // inside a sheet at the factor — white paper showing all round it, worse the
+    // further out the reader pinched. The paper is the one thing that scales.
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    const sheet = defined(document.querySelector('.da-paper')) as HTMLElement
+    const host = defined(sheet.firstElementChild) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    // The figure opens fitted at the 1.5 ceiling; a pinch out of that is the gesture
+    // that used to leave a band of white paper round a shrunken figure.
+    const started = Number.parseFloat(surface.style.width) / 200
+    await pinch(stage, { deltaY: 40, clientX: 100, clientY: 100 })
+    const reached = Number.parseFloat(sheet.style.transform.replace(/[^0-9.]/gu, ''))
+    expect(reached).toBeLessThan(started)
+    // The sheet carries the factor, the surface its scaled size, and nothing inside.
+    expect(sheet.style.transform).toBe(`scale(${reached})`)
+    expect(Number.parseFloat(surface.style.width)).toBeCloseTo(200 * reached, 0)
+    expect(host.style.transform).toBe('')
+  })
+
   it('settles a pinch into the panel state once the fingers stop', async () => {
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
@@ -1227,6 +1252,25 @@ describe('the floating strips', () => {
     })
     return strip
   }
+
+  it('turns each grip to match the pair the reader asked for', async () => {
+    // Six dots in three columns by two rows on the upright palette, two by three on
+    // the bar. That is the opposite of what each strip's own proportions suggest, and
+    // it was got backwards once already — pinned so it is not "corrected" again.
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const shape = (selector: string): string => {
+      const dots = defined(document.querySelector(`${selector} .da-grip-dots`)) as SVGElement
+      const xs = new Set<string>()
+      const ys = new Set<string>()
+      for (const dot of [...dots.querySelectorAll('circle')]) {
+        xs.add(dot.getAttribute('cx') ?? '')
+        ys.add(dot.getAttribute('cy') ?? '')
+      }
+      return `${xs.size}x${ys.size}`
+    }
+    expect(shape('.da-palette')).toBe('3x2')
+    expect(shape('.da-bar')).toBe('2x3')
+  })
 
   it('parks the tools where they are dragged, and leaves them there next time', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
@@ -1521,11 +1565,11 @@ describe('the weight of the pen', () => {
   /**
    * The size multiple the fixture's figure is drawn at.
    *
-   * A 400px figure is below the reference edge, so every stroke is held at the
-   * smallest multiple rather than shrinking to a hairline. The numbers in these
-   * tests are the drawn width, so they carry the multiple.
+   * The fixture is a 200px figure — well below the reference edge — so every stroke is
+   * scaled down with it. The numbers in these tests are the drawn width, so they carry
+   * the multiple.
    */
-  const UNIT = 0.75
+  const UNIT = figureUnit(200, 100)
 
   /** The rail, which only exists once there is something for it to size. */
   const rail = (): HTMLInputElement => defined(
@@ -2129,8 +2173,11 @@ describe('a rendered document', () => {
     expect(parts[0]?.type).toBe('text')
     expect(parts[0]?.text).toContain('【HTML 标注】')
     expect(parts[0]?.text).toContain('渲染面 1024×1843')
-    expect(parts[0]?.text).toContain(`文件 sha256:${'b'.repeat(12)}`)
-    expect(parts[0]?.text).toContain('anchor.selector')
+    // The hash named a file state no reader of the message can act on; it was in
+    // every header and is gone.
+    expect(parts[0]?.text).not.toContain('sha256')
+    expect(parts[0]?.text).not.toContain('sha256')
+    expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
   })
 
   it('refuses to save a surface the frame never gave a height to', async () => {
@@ -2397,5 +2444,39 @@ describe('the drawing choices that outlive the figure', () => {
     mounted = second
     expect((await swatch(second.host, '#f08c00')).getAttribute('aria-pressed')).toBe('true')
     expect((await swatch(second.host, '#e03131')).getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+describe('the style fold against the top of the panel', () => {
+  it('opens up from a bar at the bottom', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    stubRect(bar, { left: 100, top: 560, width: 200, height: 28 })
+    // The placement is measured when the bar moves or a record opens, so nudge a
+    // record twice to run the measurement against the boxes set above.
+    await click(button(document.body, zh.summary))
+    await click(button(document.body, zh.summary))
+    await openStyle(document.body)
+    const fold = defined(document.querySelector('.da-style-row')) as HTMLElement
+    // Climbing is right here: the bar is at the bottom, so above it is the figure.
+    expect(fold.getAttribute('data-side')).toBe('above')
+  })
+
+  it('turns over and hangs below a bar parked along the top', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    // Parked at the top: there is nothing above the bar to open into, so a fold that
+    // climbs would be laid out above the panel, out of sight.
+    stubRect(bar, { left: 100, top: 6, width: 200, height: 28 })
+    await click(button(document.body, zh.summary))
+    await click(button(document.body, zh.summary))
+    await openStyle(document.body)
+    const fold = defined(document.querySelector('.da-style-row')) as HTMLElement
+    expect(fold.getAttribute('data-side')).toBe('below')
+    expect(STYLES).toContain('.da-style-row[data-side="below"]{bottom:auto;top:calc(100% + 6px)')
   })
 })

@@ -12,6 +12,7 @@ import {
   handlesFor,
   resizeBy,
   rotationTo,
+  tetherFor,
   type HandleId,
 } from '../src/client/handles'
 import { boxCentre, markBounds, type MarkBox } from '../src/client/mark-geometry'
@@ -29,6 +30,39 @@ function at(markBox: MarkBox, rotation: number, id: HandleId): readonly [number,
   expect(found).toBeDefined()
   return found?.point ?? [0, 0]
 }
+
+describe('the size a control frame is drawn at', () => {
+  const square = box(10, 20, 100, 40)
+
+  it('keeps the corners and edges on the box whatever the handle is drawn at', () => {
+    // Size only ever moves the turn handle: the eight on the box are the box's own
+    // corners and edge centres, and a bigger square around them is still centred there.
+    const big = handlesFor(square, 0, 21)
+    for (const id of HANDLE_IDS) {
+      expect(big.find(handle => handle.id === id)?.point)
+        .toEqual(handlesFor(square, 0).find(handle => handle.id === id)?.point)
+    }
+  })
+
+  it('carries the turn handle out with the handle size, keeping its proportions', () => {
+    // Three times the grip on the same arm would have the circle sitting on the corners.
+    const turned = handlesFor(square, 0, HANDLE_SIZE * 3).find(handle => handle.id === 'rotate')?.point
+    expect(turned).toEqual([60, 20 - ROTATE_ARM * 3])
+  })
+
+  it('ties the turn handle back to the top edge at the same arm', () => {
+    const tether = tetherFor(square, 0, HANDLE_SIZE * 2)
+    expect(tether.from).toEqual([60, 20 - ROTATE_ARM * 2])
+    expect(tether.to).toEqual([60, 20])
+  })
+
+  it('finds a handle at the reach it is given, for the size it is drawn at', () => {
+    // A grip drawn three times as large is three times as far off the box, so a press
+    // on the old position must miss it — the reach and the size have to agree.
+    expect(handleAt(square, 0, [60, 20 - ROTATE_ARM * 3], 6, HANDLE_SIZE * 3)).toBe('rotate')
+    expect(handleAt(square, 0, [60, 20 - ROTATE_ARM], 6, HANDLE_SIZE * 3)).toBeUndefined()
+  })
+})
 
 describe('handlesFor', () => {
   const square = box(10, 20, 100, 40)
@@ -235,6 +269,10 @@ describe('cursorFor', () => {
     expect(cursorFor('s')).toBe('ns-resize')
     expect(cursorFor('e')).toBe('ew-resize')
     expect(cursorFor('w')).toBe('ew-resize')
-    expect(cursorFor('rotate')).toBe('grab')
+    // The turn handle says "rotate", not "drag": an arrow in a circle, white with a
+    // dark rim, with the hotspot at its centre.
+    expect(cursorFor('rotate')).toContain('data:image/svg+xml')
+    expect(decodeURIComponent(cursorFor('rotate'))).toContain('A7 7 0 1 1 8.6 6.1')
+    expect(cursorFor('rotate')).toContain('12 12, crosshair')
   })
 })

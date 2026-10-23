@@ -271,7 +271,7 @@ describe('delivering the document', () => {
     expect(parts[2]?.name).toBe('report.pdf.p3.annotated.png')
     // The message names every page of every mark, and says the copy travels with it.
     expect(parts[3]?.text).toContain('① 第 1 页 框选 (10,20)-(60,90)')
-    expect(parts[3]?.text).toContain('② 第 3 页 箭头 (1,2) → (3,4)，要改：第三页')
+    expect(parts[3]?.text).toContain('② 第 3 页 箭头 (1,2) → (3,4)，批注：第三页')
     expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
     expect(parts[3]?.text).not.toContain('.annotated.pdf')
   })

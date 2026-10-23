@@ -15,10 +15,27 @@ const STYLE_MARKER = 'data-dsh-figmark'
 
 /** The stylesheet text. */
 export const STYLES = `
+/* An accent of the plugin's own.
+   The shell's --dsw-alias-brand-primary is not a brand colour in this theme — it
+   resolves to the *ink* (near-black on light, near-white on dark), because the shell
+   uses it for filled buttons in monochrome. Reading it as "the blue" turned this
+   panel's sliders, filled buttons and selection rings into ink: a black knob on a
+   white rail, and a wedge that goes solid black at the heaviest setting. The alias
+   stays as the fallback so a shell that really does define a brand colour still wins,
+   but the accent is named here so every rule reads one variable instead of quietly
+   inheriting whatever "primary" means that week.
+   The dark block re-states it, because a blue tuned for white paper is too dark on a
+   near-black panel. */
 /* The panel follows the shell's palette rather than carrying one of its own: every
    colour below is an alias the theme owner resolves, with the inherited value as the
    fallback so a shell that defines nothing still renders something legible. */
-.da-root{position:relative;display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary,inherit);background:var(--dsw-alias-bg-document-preview,transparent)}
+.da-root{--da-accent:#176df2;--da-accent-soft:rgba(23,109,242,.14);
+  position:relative;display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden;color:var(--dsw-alias-label-primary,inherit);background:var(--dsw-alias-bg-document-preview,transparent)}
+/* The shell marks its dark palette on <body> rather than through prefers-color-scheme:
+   a reader can pick either palette whatever the OS is set to, so following the shell's
+   own switch is what keeps the accent readable in both. A blue tuned for white paper
+   is too dark on a near-black panel. */
+body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,141,255,.22)}
 
 /* Every small picture in the panel is one stroke set, declared once: without this
    an svg with no fill of its own falls back to a solid black shape, which is what
@@ -36,12 +53,20 @@ export const STYLES = `
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08)}
 /* While it is being dragged the pointer is the grip, whatever it passes over. */
 .da-palette[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
-.da-palette[data-dragging="true"] *{cursor:grabbing !important}
-/* The handle: a short row of dots over the tiles, the one part that only drags. */
-.da-palette-grip{display:flex;align-items:center;justify-content:center;width:32px;height:14px;
-  border-radius:7px;cursor:grab;color:rgba(255,255,255,.55);touch-action:none;flex:0 0 auto}
-.da-palette-grip:hover{color:rgba(255,255,255,.9);background:rgba(255,255,255,.1)}
-.da-palette-grip-dots{font-size:9px;line-height:1;letter-spacing:1px}
+.da-palette[data-dragging="true"] *{cursor:move !important}
+/* The handle: a block of six dots, the one part of a strip that only drags. The block
+   is turned to suit the strip — wider than tall on the bar, taller than wide on the
+   palette — because a grip whose proportions fight its strip looks borrowed from the
+   other one. */
+.da-palette-grip{display:flex;align-items:center;justify-content:center;width:26px;height:17px;
+  border-radius:5px;cursor:move;color:rgba(255,255,255,.55);touch-action:none;flex:0 0 auto}
+.da-palette-grip:hover{color:rgba(255,255,255,.92);background:rgba(255,255,255,.1)}
+/* The dots' box follows the block: three across by two down needs width, two across
+   by three down needs height. Sized per block rather than once, so the svg is not
+   letterboxed inside its own handle. */
+.da-grip-dots{width:12px;height:8px;fill:currentColor;display:block}
+.da-bar .da-palette-grip{width:16px;height:18px}
+.da-bar .da-grip-dots{width:8px;height:12px}
 /* A tile is a round button holding one white glyph. No word under it: six glyphs in
    a column are read at a glance, and the word is still there as the tooltip and as
    the accessible name. */
@@ -63,6 +88,7 @@ export const STYLES = `
    drawing. The drawn parts never take the pointer, or grabbing the knob would grab
    the knob instead of the slider. */
 .da-weight{position:absolute;z-index:7;left:6px;top:50%;transform:translateY(-50%);
+  --da-track-inset:10px;--da-knob-size:11px;
   display:flex;align-items:center;justify-content:center;width:7px;height:200px;
   border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.22));
   cursor:ns-resize;transition:width .16s ease,background .16s ease,box-shadow .16s ease}
@@ -71,13 +97,24 @@ export const STYLES = `
 /* The track is an svg in the body: a hairline at the bottom that opens into a rounded
    shoulder at the top. It is not a clip-path polygon because a polygon has no rounded
    ends — the corners were what made the wedge read as a cut-out blade rather than a
-   part of the panel. preserveAspectRatio="none" stretches one 12x100 shape over the
-   rail's height, so the shoulders stay smooth at any length. */
-.da-weight-svg{position:absolute;left:50%;top:12px;bottom:12px;width:18px;
-  transform:translateX(-50%);opacity:0;pointer-events:none;transition:opacity .16s ease}
+   part of the panel. preserveAspectRatio="none" stretches one 18x100 shape over the
+   rail's height, so the shoulders stay smooth at any length.
+   The height is written out rather than expressed as top+bottom: an svg is a replaced
+   element: with a viewBox it takes its intrinsic height for its width and ignores the
+   bottom offset entirely. The track was therefore a fixed 100px tall while the knob
+   travelled the whole 200px rail, which is why the two could never line up. */
+.da-weight-svg{position:absolute;left:50%;top:var(--da-track-inset);height:calc(100% - 2 * var(--da-track-inset));
+  width:18px;transform:translateX(-50%);opacity:0;pointer-events:none;
+  transition:opacity .16s ease}
 .da-weight:hover .da-weight-svg,.da-weight:focus-within .da-weight-svg{opacity:1}
 /* The knob sits on the value: the only part that shows at rest, so the rail reads as
    a slider waiting to be touched rather than a bare rule. */
+/* The blue: a bar of the same width as the groove, its height the one number the
+   knob also uses, so its top edge is the knob's centre at every weight. */
+.da-weight-fill{position:absolute;left:50%;bottom:var(--da-track-inset);width:5px;
+  transform:translateX(-50%);border-radius:999px;background:var(--da-accent,#176df2);
+  opacity:0;pointer-events:none;transition:opacity .16s ease}
+.da-weight:hover .da-weight-fill,.da-weight:focus-within .da-weight-fill{opacity:1}
 .da-weight-knob{position:absolute;left:50%;width:var(--da-knob-size,11px);height:var(--da-knob-size,11px);
   border-radius:50%;transform:translateX(-50%);pointer-events:none;
   background:var(--dsw-alias-bg-layer-2,#fff);
@@ -85,7 +122,7 @@ export const STYLES = `
   transition:width .16s ease,height .16s ease,background .16s ease}
 .da-weight:hover,.da-weight:focus-within{--da-knob-size:15px}
 .da-weight:hover .da-weight-knob,.da-weight:focus-within .da-weight-knob{
-  background:var(--dsw-alias-brand-primary,#176df2);
+  background:var(--da-accent,#176df2);
   box-shadow:0 2px 7px rgba(20,40,80,.3)}
 /* The browser's own range, rotated upright and made transparent. It spans the whole
    rail so a press anywhere on it lands on the slider — including on the knob, which
@@ -107,7 +144,7 @@ export const STYLES = `
    it centred while untouched must not also apply — with both set it stretches. */
 .da-bar[data-parked="true"]{bottom:auto}
 .da-bar[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
-.da-bar[data-dragging="true"] *{cursor:grabbing !important}
+.da-bar[data-dragging="true"] *{cursor:move !important}
 /* The bar's buttons are white glyphs on the dark strip. The one filled control is
    still the way out. */
 .da-bar .da-dock-btn{color:#fff}
@@ -148,8 +185,8 @@ export const STYLES = `
 .da-tool .da-tool-label{font-size:10px;line-height:1;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit)}
 /* The armed tool is the one state in this row the reader must never hunt for: it is
    the only tile with a fill, and the only label in the brand colour. */
-.da-tool[aria-pressed="true"]{border-color:transparent;background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.1));color:var(--dsw-alias-brand-primary,currentColor)}
-.da-tool[aria-pressed="true"] .da-tool-label{color:var(--dsw-alias-brand-primary,currentColor);font-weight:600}
+.da-tool[aria-pressed="true"]{border-color:transparent;background:var(--da-accent-soft,rgba(23,109,242,.1));color:var(--da-accent,currentColor)}
+.da-tool[aria-pressed="true"] .da-tool-label{color:var(--da-accent,currentColor);font-weight:600}
 .da-tool[aria-pressed="true"] svg{stroke-width:2.1}
 .da-tool:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .da-btn-icon{width:30px;padding:0}
@@ -160,6 +197,10 @@ export const STYLES = `
 .da-stylewrap{position:relative;flex:0 0 auto}
 /* The style fold floats above the bar rather than taking a row of it: opened over
    the figure, it costs the picture nothing and lands where the eye already is. */
+/* Opens upwards by default, because the bar lives at the bottom. Parked at the top
+   there is nothing above it to open into, so the fold turns over and hangs below its
+   own button instead — decided by the same measurement the records use. */
+.da-style-row[data-side="below"]{bottom:auto;top:calc(100% + 6px);box-shadow:0 -6px 22px rgba(20,40,80,.12),0 6px 22px rgba(20,40,80,.16)}
 .da-style-row{position:absolute;left:8px;bottom:calc(100% + 6px);z-index:9;
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:calc(100% - 16px);
   padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l2,currentColor);border-radius:11px;
@@ -174,17 +215,24 @@ export const STYLES = `
 /* Anywhere else is "done here": the panel closes on the click that lands outside it
    rather than trapping the reader in a popup with one way out. */
 .da-swatch{width:20px;height:20px;border-radius:50%;corner-shape:round;border:2px solid var(--dsw-alias-bg-base,transparent);box-shadow:0 0 0 1px var(--dsw-alias-border-l4,rgba(127,127,127,.5));cursor:pointer;padding:0}
-.da-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--dsw-alias-brand-primary,currentColor)}
+.da-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--da-accent,currentColor)}
 /* --- the figure on its table -------------------------------------------- */
 /* A figure is a sheet on a table, not a picture floating in a void: the white paper
    is what gives the panel a middle, and the gap around it is the margin the eye
    needs to see where the drawing stops. */
 .da-stage{position:relative;display:flex;align-items:safe center;justify-content:safe center;flex:1 1 auto;overflow:auto;min-height:0;padding:14px;background:var(--dsw-alias-bg-document-preview,transparent)}
-.da-surface{position:relative;flex:0 0 auto;margin:0;transform-origin:top left;background:#fff;border-radius:4px;box-shadow:var(--dsw-elevation-prominent,0 1px 3px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.08))}
-/* The paper: the figure plus the margin a mark may have needed. It is the white sheet
-   the drawing sits on, so a mark that reaches past the figure lands on paper rather
-   than on the panel behind it. */
-.da-paper{background:#fff}
+.da-surface{position:relative;flex:0 0 auto;margin:0;transform-origin:top left}
+/* The paper: the figure plus the margin a mark may have needed. It is deliberately
+   left transparent — the white sheet belongs to the figure, so a margin that only
+   exists because a mark reached past the edge reads as board round a card rather than
+   as more of the figure. The exported picture still gets its white fill: that one is
+   looked at by someone who has no board behind it. */
+.da-paper{background:transparent}
+/* The figure is the sheet: white, rounded, lifted off the panel. This is the element
+   that carries the paper look, which is why the margin can be see-through without the
+   drawing losing its edge. */
+.da-figure-frame{background:var(--dsw-alias-bg-base,#fff);border-radius:4px;overflow:hidden;
+  box-shadow:var(--dsw-elevation-prominent,0 1px 3px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.08))}
 .da-figure{display:block;user-select:none;-webkit-user-drag:none}
 /* The table is a thing you can push. The hand only shows under the tools that
    leave a drag free to move the view: under a drawing tool the same drag draws. */
@@ -217,22 +265,22 @@ export const STYLES = `
   width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;
   color:inherit;cursor:pointer;flex:0 0 auto}
 .da-dock-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
-.da-dock-btn[aria-pressed="true"]{background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.12));color:var(--dsw-alias-brand-primary,#176df2)}
+.da-dock-btn[aria-pressed="true"]{background:var(--da-accent-soft,rgba(23,109,242,.12));color:var(--da-accent,#176df2)}
 .da-dock-btn svg{width:15px;height:15px}
 .da-dock-btn:disabled{opacity:.4;cursor:default}
 .da-dock-btn:disabled:hover{background:transparent}
 /* The one filled control in the panel is the way out of it. */
-.da-dock-btn-primary{border-color:var(--dsw-alias-brand-primary,#176df2);background:var(--dsw-alias-brand-primary,#176df2);color:#fff;box-shadow:0 2px 8px rgba(23,109,242,.32)}
-.da-dock-btn-primary:hover{opacity:.92;background:var(--dsw-alias-brand-primary,#176df2)}
+.da-dock-btn-primary{border-color:var(--da-accent,#176df2);background:var(--da-accent,#176df2);color:#fff;box-shadow:0 2px 8px rgba(23,109,242,.32)}
+.da-dock-btn-primary:hover{opacity:.92;background:var(--da-accent,#176df2)}
 /* A dot, not a count: "there is a goal written" is all the bar needs to say about
    a field it is not a list of. */
 .da-dock-dot{position:absolute;top:3px;right:4px;width:5px;height:5px;border-radius:50%;
-  background:var(--dsw-alias-brand-primary,#176df2)}
+  background:var(--da-accent,#176df2)}
 .da-dock-sep{width:1px;height:16px;margin:0 3px;background:var(--dsw-alias-border-l3,currentColor);opacity:.6;flex:0 0 auto}
 /* The count rides on the list's own button: it is the one thing about the list a
    reader wants without opening it. */
 .da-dock-count{position:absolute;top:-1px;right:-2px;min-width:14px;height:14px;padding:0 3px;
-  border-radius:7px;background:var(--dsw-alias-brand-primary,#176df2);color:#fff;
+  border-radius:7px;background:var(--da-accent,#176df2);color:#fff;
   font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 
 /* --- the floating records ------------------------------------------------ */
@@ -244,7 +292,7 @@ export const STYLES = `
   background:var(--dsw-alias-bg-layer-2,#fff);box-shadow:0 6px 22px rgba(20,40,80,.14),0 0 0 1px rgba(20,40,80,.03)}
 .da-card-title{display:flex;align-items:center;gap:5px;min-width:0;font-size:12px;font-weight:650;
   color:var(--dsw-alias-label-primary,inherit)}
-.da-card-title svg{width:14px;height:14px;flex:0 0 auto;color:var(--dsw-alias-brand-primary,#176df2)}
+.da-card-title svg{width:14px;height:14px;flex:0 0 auto;color:var(--da-accent,#176df2)}
 
 .da-float-head{display:flex;align-items:center;gap:7px}
 .da-float-head .da-card-title{flex:1 1 auto;min-width:0}
@@ -283,10 +331,10 @@ export const STYLES = `
   color:var(--dsw-alias-label-primary,currentColor)}
 .da-comment-send-btn:disabled{opacity:.45;cursor:default}
 .da-comment-send-btn svg{width:15px;height:15px}
-.da-comment-send-primary{background:var(--dsw-alias-brand-primary,#176df2);color:#fff}
-.da-comment-send-primary:hover{background:var(--dsw-alias-brand-primary,#176df2);color:#fff;filter:brightness(1.08)}
+.da-comment-send-primary{background:var(--da-accent,#176df2);color:#fff}
+.da-comment-send-primary:hover{background:var(--da-accent,#176df2);color:#fff;filter:brightness(1.08)}
 .da-float textarea{width:100%;box-sizing:border-box;min-height:74px;max-height:200px;resize:vertical;border:0.5px solid var(--dsw-alias-border-l3,currentColor);border-radius:9px;background:var(--dsw-alias-bg-layer-2,transparent);color:inherit;font:inherit;font-size:12px;padding:8px 10px;line-height:1.65}
-.da-float textarea:focus{outline:none;border-color:var(--dsw-alias-brand-primary,#176df2)}
+.da-float textarea:focus{outline:none;border-color:var(--da-accent,#176df2)}
 .da-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;
   padding:0 4px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14));
   font-size:10px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -299,8 +347,8 @@ export const STYLES = `
 /* What the selected mark is, in one word: the detail field is disabled until there
    is something to describe, and this says what it would describe. */
 .da-chip{display:inline-flex;align-items:center;height:16px;padding:0 6px;border-radius:5px;
-  background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.12));
-  color:var(--dsw-alias-brand-primary,#176df2);font-size:10px;font-weight:600}
+  background:var(--da-accent-soft,rgba(23,109,242,.12));
+  color:var(--da-accent,#176df2);font-size:10px;font-weight:600}
 /* The "?" beside a card's name: the long form of what that field is for. */
 .da-hintdot{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;
   border-radius:50%;border:0.5px solid var(--dsw-alias-border-l3,currentColor);
@@ -313,7 +361,7 @@ export const STYLES = `
 .da-mark{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:8px;
   border:0.5px solid transparent;min-width:0}
 .da-mark:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
-.da-mark[data-selected="true"]{border-color:var(--dsw-alias-brand-primary,#176df2);
+.da-mark[data-selected="true"]{border-color:var(--da-accent,#176df2);
   background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.08))}
 .da-mark-index{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:20px;height:20px;border-radius:6px;color:#fff;font-size:11px;font-weight:700;

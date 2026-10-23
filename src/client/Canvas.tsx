@@ -70,7 +70,8 @@ const HIT_WIDTH = 14
 const PEN_SAMPLE_STEP = 3
 
 /** Reach of a handle's hit area, in figure pixels: generous enough to grab. */
-const HANDLE_REACH = HANDLE_SIZE * 2.2
+/** How far from a handle's centre a press still counts, as a multiple of its side. */
+const HANDLE_REACH = 2.2
 
 /** Props of the drawing surface. */
 export interface CanvasProps {
@@ -94,6 +95,17 @@ export interface CanvasProps {
   readonly color: string
   /** Stroke weight for new marks, as a multiple of the default width. */
   readonly weight?: number
+  /**
+   * How much the paper is scaled on screen, as a CSS factor.
+   *
+   * The controls this surface draws — the resize and turn handles, above all — are
+   * targets for a pointer, so they have to be a fixed number of *screen* pixels. The
+   * svg they live in is in figure pixels and the whole paper is scaled by CSS, so a
+   * control drawn at a fixed figure size shrinks with the zoom and becomes impossible
+   * to grab exactly when the figure is large. Dividing by this factor keeps it the
+   * same size on screen. Absent means the paper is not scaled.
+   */
+  readonly scale?: number
   /** Container that holds the figure, used as the anchor hit-test origin. */
   readonly containerRef: RefObject<HTMLElement | null>
   /** Whether the figure is inlined SVG (only then can marks anchor to elements). */
@@ -403,6 +415,17 @@ export function Canvas(props: CanvasProps): ReactNode {
    * @param event - the pointer event.
    * @returns true when a handle took the press.
    */
+  /**
+   * The control frame's handle size in figure pixels.
+   *
+   * The frame is drawn in the same svg as the marks, which is in figure pixels, and
+   * the whole paper is then scaled by CSS. A handle has to be a fixed number of screen
+   * pixels to be hittable, so its figure size is that target divided by the scale.
+   */
+  const grip = HANDLE_SIZE / Math.max(0.05, props.scale ?? 1)
+  /** A hairline that stays a hairline on screen, whatever the paper is scaled to. */
+  const hairline = 1 / Math.max(0.05, props.scale ?? 1)
+
   const beginHandle = (mark: AnnotationMark, event: ReactPointerEvent<SVGElement>): boolean => {
     // Handles are only drawn around the selected mark, so a press on any other
     // mark must fall through to moving it — otherwise a click near a corner of
@@ -411,7 +434,9 @@ export function Canvas(props: CanvasProps): ReactNode {
     // A point mark is framed by a highlight ring instead of handles, because it
     // has no extent to resize and a rotation would mean nothing.
     if (mark.kind === 'point') return false
-    const grabbed = handleAt(controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH)
+    const grabbed = handleAt(
+      controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * grip, grip,
+    )
     if (grabbed === undefined) return false
     beginGesture(mark, event, grabbed)
     return true
@@ -647,26 +672,26 @@ export function Canvas(props: CanvasProps): ReactNode {
   /** The resize and rotation handles of the selected mark. */
   const renderHandles = (mark: AnnotationMark): ReactNode => {
     const frame = controlBox(mark)
-    const half = HANDLE_SIZE / 2
-    const handles = handlesFor(frame, mark.rotation ?? 0)
+    const half = grip / 2
+    const handles = handlesFor(frame, mark.rotation ?? 0, grip)
     // The turn handle sits off the box, so a tether is what makes it read as
     // attached to this mark rather than floating near it.
-    const tether = tetherFor(frame, mark.rotation ?? 0)
+    const tether = tetherFor(frame, mark.rotation ?? 0, grip)
     return (
       <>
         <line
           x1={tether.from[0]} y1={tether.from[1]}
           x2={tether.to[0]} y2={tether.to[1]}
-          stroke="#4c8dff" strokeWidth={1}
+          stroke="#4c8dff" strokeWidth={hairline}
         />
         {handles.map(handle => (
           <g key={handle.id}>
             <rect
               data-da-handle={handle.id}
               x={handle.point[0] - half} y={handle.point[1] - half}
-              width={HANDLE_SIZE} height={HANDLE_SIZE}
-              rx={handle.id === 'rotate' ? HANDLE_SIZE / 2 : 1}
-              fill="#ffffff" stroke="#4c8dff" strokeWidth={1.5}
+              width={grip} height={grip}
+              rx={handle.id === 'rotate' ? grip / 2 : grip / 7}
+              fill="#ffffff" stroke="#4c8dff" strokeWidth={1.5 * hairline}
               style={{ pointerEvents: 'all', cursor: cursorFor(handle.id) }}
               onPointerDown={(event) => { beginGesture(mark, event, handle.id) }}
             />
@@ -719,11 +744,14 @@ export function Canvas(props: CanvasProps): ReactNode {
     const box = pointMarkBox(shown, unit)
     /* v8 ignore next -- a point mark carries exactly the one coordinate it was placed at. */
     if (box === undefined) return null
+    // A control, like the frame around a stroke mark: sized on screen, not on the figure.
+    const inset = 3 * hairline
     return (
       <rect
-        x={box.x - 3 * unit} y={box.y - 3 * unit} width={box.width + 6 * unit}
-        height={box.height + 6 * unit} rx={3 * unit}
-        fill="none" stroke="#4c8dff" strokeWidth={unit} strokeDasharray={`${3 * unit} ${2 * unit}`}
+        x={box.x - inset} y={box.y - inset} width={box.width + 2 * inset}
+        height={box.height + 2 * inset} rx={inset}
+        fill="none" stroke="#4c8dff" strokeWidth={hairline}
+        strokeDasharray={`${3 * hairline} ${2 * hairline}`}
         style={{ pointerEvents: 'none' }}
       />
     )
@@ -779,7 +807,10 @@ export function Canvas(props: CanvasProps): ReactNode {
     <svg
       className="da-overlay"
       data-da-overlay=""
-      style={{ left: originX, top: originY }}
+      // The overlay is the paper, from its own corner: the offset into the paper
+      // belongs to the marks inside it (`origin`), and putting it on this box as
+      // well moved every mark twice as far as it should have gone. A mark dragged
+      // past the left edge therefore appeared past the right one.
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}

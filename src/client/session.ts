@@ -140,12 +140,9 @@ export function buildAnnotationMessage(
   const kind = rendered
     ? (zh ? '【HTML 标注】' : '[HTML annotations]')
     : (zh ? '【附图标注】' : '[figure annotations]')
-  const hash = zh
-    ? `${rendered ? '文件' : '图'} sha256:${figure.sha256.slice(0, 12)}`
-    : `sha256:${figure.sha256.slice(0, 12)}`
   const header = zh
-    ? `${kind}${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处，${hash}）`
-    : `${kind} ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks, ${hash})`
+    ? `${kind}${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处）`
+    : `${kind} ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks)`
   const paged = figure.pageCount !== undefined
   // A written review artifact is the evidence that a picture travels with this
   // message: the save names it, so a message that claims an attachment cannot be
@@ -166,18 +163,16 @@ export function buildAnnotationMessage(
   const summary = document.summary !== undefined && document.summary.trim() !== ''
     ? [zh ? `这张图是：${document.summary.trim()}` : `the figure shows: ${document.summary.trim()}`, '']
     : []
-  const closing = rendered
-    ? (zh
-      ? '请按上述标注逐条修改这份 HTML 的生成源（不要改动渲染结果本身）。定位元素以 `anchor.selector` 为准，`points` 只是辅助：渲染宽度变化会让坐标漂移。未标注的部分保持不动，改完后逐条回应。'
-      : 'Address each mark above in the HTML source that generates this document (not in the rendered result). Locate elements by `anchor.selector`; `points` only assists, because coordinates drift when the render width changes. Leave unmarked parts untouched and answer mark by mark.')
+  // The closing line is one sentence, not a paragraph. The standing rules — read every
+  // mark, answer mark by mark, edit the source rather than the bitmap — are already in
+  // the prompt section that every one of these messages arrives under, and repeating
+  // them per message only made the part the agent has to act on harder to find.
+  const closer = rendered
+    ? (zh ? '逐条改 HTML 生成源。' : 'Edit the HTML source, mark by mark.')
     : paged
-      ? (zh
-        ? '请按上述标注逐条处理该 PDF（带批注 PDF 的每一页已带原生批注对象，可直接在阅读器里核对）；未标注的部分保持不动，改完后逐条回应。'
-        : 'Address each mark above in the PDF (every page of the annotated PDF carries native annotation objects you can check in a reader); leave unmarked parts untouched and answer mark by mark.')
-      : (zh
-        ? '请按上述标注逐条修复该附图（改生成源，不要涂改导出的位图）；未标注的部分保持不动，改完后逐条回应。'
-        : 'Fix the figure for each mark above (change the generating source, not the exported bitmap); leave unmarked parts untouched and answer mark by mark.')
-  return [header, ...attachment, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closing].join('\n')
+      ? (zh ? '逐条处理该 PDF。' : 'Work through the PDF, mark by mark.')
+      : (zh ? '逐条改生成源。' : 'Edit the generating source, mark by mark.')
+  return [header, ...attachment, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closer].join('\n')
 }
 
 /**

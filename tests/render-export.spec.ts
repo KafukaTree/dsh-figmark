@@ -14,7 +14,7 @@ import {
   pinNumberCentre,
   pointMarkBox,
 } from '../src/client/render'
-import { MIN_UNIT } from '../src/client/scale'
+import { figureUnit } from '../src/client/scale'
 import { bytesToDataUrl, composeReviewSvg, reviewSize, rasterizePng } from '../src/client/export'
 import { anchorAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '../src/client/figure-dom'
 import { defined, installDom, stubRasterizer, stubRect } from './dom'
@@ -179,9 +179,9 @@ describe('review image', () => {
     expect(svg).toContain('fill="#e03131"')
     // The number is white, because that is what reads on every colour in the palette.
     expect(svg).toContain('fill="#ffffff"')
-    // A 400px-wide figure is below the reference size, so every drawn size — font
-    // included — is held at the smallest multiple rather than shrunk to nothing.
-    expect(svg).toContain(`font-size="${PIN_FONT_SIZE * MIN_UNIT}"`)
+    // The figure's own unit, not a fixed size: a 400px figure is half the reference
+    // edge, so every drawn size — font included — comes out at half.
+    expect(svg).toContain(`font-size="${PIN_FONT_SIZE * figureUnit(400, 300)}"`)
     expect(svg).toContain('>1</text>')
   })
 
@@ -195,8 +195,9 @@ describe('review image', () => {
     ])
     const small = pin(1)
     const large = pin(3)
-    expect(small).toContain(`font-size="${PIN_FONT_SIZE * MIN_UNIT}"`)
-    expect(large).toContain(`font-size="${PIN_FONT_SIZE * 3 * MIN_UNIT}"`)
+    const unit = figureUnit(400, 300)
+    expect(small).toContain(`font-size="${PIN_FONT_SIZE * unit}"`)
+    expect(large).toContain(`font-size="${PIN_FONT_SIZE * 3 * unit}"`)
   })
 
   it('sizes the reviewed picture to the paper the marks need', () => {
@@ -211,6 +212,21 @@ describe('review image', () => {
     // And the SVG it describes agrees with it, which is what makes the pair usable.
     const svg = composeReviewSvg(layer, [{ id: 'b', kind: 'rect', color: '#e03131', points: [[-60, 10], [100, 80]] }])
     expect(svg).toContain(`width="${outside.width}" height="${outside.height}"`)
+  })
+
+  it('outlines the figure, and only when a mark left it', () => {
+    // The reader of this picture has no panel behind it, so a grown margin looks like
+    // more of the figure. A dashed rule on the figure's own edge is the one thing that
+    // says where the drawing stopped — and it is drawn only when something needed the
+    // extra paper, because a clean figure is already exactly its own size.
+    const layer = { kind: 'raster' as const, dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 }
+    const inside = composeReviewSvg(layer, [{ id: 'a', kind: 'rect', color: '#e03131', points: [[10, 10], [100, 80]] }])
+    expect(inside).not.toContain('stroke-dasharray')
+    const outside = composeReviewSvg(layer, [{ id: 'b', kind: 'rect', color: '#e03131', points: [[-60, 10], [100, 80]] }])
+    expect(outside).toContain('<rect x="0" y="0" width="400" height="300" fill="none"')
+    expect(outside).toContain('stroke-dasharray=')
+    // Grey, because it is a note about the picture rather than a mark the reader made.
+    expect(outside).toContain('stroke="#9aa3b2"')
   })
 
   it('numbers a pin on the delivered picture, and leaves stroke marks unnumbered', () => {

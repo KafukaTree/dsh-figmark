@@ -24,11 +24,17 @@ describe('the annotator stylesheet', () => {
     for (const token of [
       'label-primary', 'label-secondary', 'label-tertiary',
       'bg-layer-2', 'bg-base', 'bg-document-preview', 'interactive-bg-hover',
-      'border-l2', 'border-l3', 'border-l4', 'brand-primary',
+      'border-l2', 'border-l3', 'border-l4',
       'state-error-primary', 'state-success-primary', 'label-error',
     ]) {
       expect(STYLES).toContain(`var(--dsw-alias-${token},`)
     }
+    // The accent is the plugin's own variable rather than the shell's brand alias,
+    // because in this shell that alias is the ink colour: reading it as "the blue"
+    // turned the sliders and filled buttons black. Asserted here so nobody quietly
+    // swaps it back for the alias that looks like the right one.
+    expect(STYLES).toContain('--da-accent:#176df2')
+    expect(STYLES).not.toContain('var(--dsw-alias-brand-primary,')
     // Every token this sheet reads carries a fallback.
     const tokens = [...STYLES.matchAll(/var\(--dsw-[a-z0-9-]+([^)]*)\)/gu)]
     expect(tokens.length).toBeGreaterThan(10)
@@ -42,6 +48,35 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).not.toMatch(/var\(--dsw-alias-text-l/u)
     expect(STYLES).not.toMatch(/var\(--dsw-alias-bg-l[0-9]/u)
     expect(STYLES).not.toMatch(/#e6e6e6|#c8c8c8/iu)
+  })
+
+  it('stretches the weight track by an explicit height, not by two offsets', () => {
+    // An svg is a replaced element: with a viewBox it takes its intrinsic height for
+    // its width and ignores `bottom`, so `top`+`bottom` left the track 100px tall in a
+    // 200px rail while the knob travelled the whole rail. The two never lined up, which
+    // was the reported symptom. Pinned here because no layout engine in jsdom would
+    // catch it — the rule is the fix.
+    const rule = /\.da-weight-svg\{[^}]*\}/u.exec(STYLES)?.[0] ?? ''
+    expect(rule).toContain('height:calc(100% - 2 * var(--da-track-inset))')
+    expect(rule).not.toContain('bottom:')
+  })
+
+  it('keeps the knob’s whole circle inside the ends of the bar', () => {
+    // Centred on the end, half the knob hung past the top of the track at full weight,
+    // which read as the slider overshooting the line. The travel is inset by a radius
+    // at each end instead, and the blue ends where the knob's centre is, so the two are
+    // written from one expression rather than two that would drift apart.
+    expect(STYLES).toContain('.da-weight-fill{position:absolute;left:50%;bottom:var(--da-track-inset)')
+  })
+
+  it('leaves the margin transparent and puts the white on the figure itself', () => {
+    // The paper grows when a mark reaches past the figure. Filling that grown margin
+    // white made the margin look like more of the figure — the reader asked for the
+    // board to show through instead, with the white sheet still around the drawing.
+    // The exported picture keeps its white fill for a different reader: it is viewed
+    // with no board behind it.
+    expect(STYLES).toContain('.da-paper{background:transparent}')
+    expect(STYLES).toContain('.da-figure-frame{background:var(--dsw-alias-bg-base,#fff)')
   })
 
   it('gives the wait for the first page a box that holds the pane’s frame', () => {

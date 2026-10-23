@@ -26,7 +26,15 @@ export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rota
 /** Every handle, in the order a renderer walks them. */
 export const HANDLE_IDS: readonly HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
-/** Side length of one handle's square, in figure pixels. */
+/**
+ * Side length of one handle's square, in *screen* pixels.
+ *
+ * Not figure pixels: a handle is a control, and a control is a target for a finger.
+ * Seven figure pixels on a 2400px figure displayed at a quarter size is under two
+ * screen pixels — impossible to hit. The surface converts this to figure pixels by
+ * dividing by how much the paper is scaled, so the target stays the same size on
+ * screen whatever the figure's own dimensions or the current zoom.
+ */
 export const HANDLE_SIZE = 7
 
 /**
@@ -76,7 +84,7 @@ function edgesOf(id: Exclude<HandleId, 'rotate'>): { readonly x: -1 | 0 | 1; rea
  * @param rotation - the mark's rotation in degrees.
  * @returns the handles.
  */
-export function handlesFor(box: MarkBox, rotation: number): Handle[] {
+export function handlesFor(box: MarkBox, rotation: number, size = HANDLE_SIZE): Handle[] {
   const centre = boxCentre(box)
   const radians = (rotation * Math.PI) / 180
   const at = (x: number, y: number): FigurePoint => rotateAround([x, y], centre, radians)
@@ -88,8 +96,21 @@ export function handlesFor(box: MarkBox, rotation: number): Handle[] {
     const y = edges.y === -1 ? box.y : edges.y === 1 ? bottom : centre[1]
     return { id, point: at(x, y) }
   })
-  placed.push({ id: 'rotate', point: at(centre[0], box.y - ROTATE_ARM) })
+  placed.push({ id: 'rotate', point: at(centre[0], box.y - armFor(size)) })
   return placed
+}
+
+/**
+ * How far the turn handle stands off the top edge, for a handle of a given size.
+ *
+ * Proportional to the handle: a bigger grip on a short arm would have the circle
+ * overlapping the corner squares, and a smaller one on a long arm would look
+ * detached from the frame it turns.
+ * @param size - the handle's side, in figure pixels.
+ * @returns the distance from the top edge, in figure pixels.
+ */
+function armFor(size: number): number {
+  return size * (ROTATE_ARM / HANDLE_SIZE)
 }
 
 /**
@@ -101,11 +122,15 @@ export function handlesFor(box: MarkBox, rotation: number): Handle[] {
  * @param rotation - the mark's rotation in degrees.
  * @returns the two ends of the tether, from the turn handle to the top edge.
  */
-export function tetherFor(box: MarkBox, rotation: number): { readonly from: FigurePoint; readonly to: FigurePoint } {
+export function tetherFor(
+  box: MarkBox,
+  rotation: number,
+  size = HANDLE_SIZE,
+): { readonly from: FigurePoint; readonly to: FigurePoint } {
   const centre = boxCentre(box)
   const radians = (rotation * Math.PI) / 180
   return {
-    from: rotateAround([centre[0], box.y - ROTATE_ARM], centre, radians),
+    from: rotateAround([centre[0], box.y - armFor(size)], centre, radians),
     to: rotateAround([centre[0], box.y], centre, radians),
   }
 }
@@ -123,10 +148,11 @@ export function handleAt(
   rotation: number,
   at: FigurePoint,
   reach = HANDLE_SIZE,
+  size = HANDLE_SIZE,
 ): HandleId | undefined {
   let best: HandleId | undefined
   let bestDistance = reach
-  for (const handle of handlesFor(box, rotation)) {
+  for (const handle of handlesFor(box, rotation, size)) {
     const distance = Math.hypot(handle.point[0] - at[0], handle.point[1] - at[1])
     // A corner beats the edge handle it shares a position with, because the
     // corners are pushed out first and a tie would otherwise depend on order.
@@ -232,6 +258,26 @@ export function rotationTo(centre: FigurePoint, at: FigurePoint, snap: boolean):
 }
 
 /** The cursor for one handle: what dragging it will do. */
+/**
+ * The turn cursor, as an inline svg.
+ *
+ * A `grab` hand says "this thing can be dragged", which is what the eight resize
+ * handles already say in their own way — the reader read the turn handle as one more
+ * grab point rather than as the one control that rotates. So the turn handle gets the
+ * arrow-in-a-circle everyone else uses for "rotate this": drawn white with a dark rim
+ * so it reads on the light paper and on the dark panels alike. `24 24` is the CSS
+ * keyword's own convention for a centre hotspot.
+ */
+const TURN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
+  + '<g fill="none" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M17.5 7.5A7 7 0 1 1 8.6 6.1" stroke="#ffffff" stroke-width="4.4"/>'
+  + '<path d="M17.5 7.5A7 7 0 1 1 8.6 6.1" stroke="#2d2d2d" stroke-width="2"/>'
+  + '<path d="M15.2 3.1L18.6 8.2L12.9 8.9" stroke="#ffffff" stroke-width="4.4"/>'
+  + '<path d="M15.2 3.1L18.6 8.2L12.9 8.9" stroke="#2d2d2d" stroke-width="2"/>'
+  + '</g></svg>',
+)}") 12 12, crosshair`
+
 const CURSORS: Readonly<Record<HandleId, string>> = {
   nw: 'nwse-resize',
   n: 'ns-resize',
@@ -241,7 +287,7 @@ const CURSORS: Readonly<Record<HandleId, string>> = {
   s: 'ns-resize',
   sw: 'nesw-resize',
   w: 'ew-resize',
-  rotate: 'grab',
+  rotate: TURN_CURSOR,
 }
 
 /**

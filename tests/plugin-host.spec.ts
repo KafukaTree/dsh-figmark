@@ -83,6 +83,16 @@ describe('host entry', () => {
     ])
   })
 
+  it('promises only what a message actually writes', () => {
+    // The section told the agent to look for a `锚定:` suffix that no message has ever
+    // carried — the anchor travels in the parentheses right after the shape. An agent
+    // following the old text looked for a marker that was not there and had to guess.
+    expect(GUIDANCE).not.toContain('锚定:')
+    expect(GUIDANCE).toContain('左上角-右下角')
+    // And it has to say so for the exported copy too, which now rules off the figure.
+    expect(GUIDANCE).toContain('手绘线')
+  })
+
   it('registers both contributions through ctx.effect, so they can be taken back', () => {
     const stub = stubContext()
     apply(stub.ctx)

@@ -14,14 +14,30 @@
  * @module dsh-figmark/client/scale
  */
 
-/** The figure edge, in pixels, that gets the unit it always had. */
-export const REFERENCE_EDGE = 1200
+/**
+ * The figure edge a stroke is measured against, in pixels.
+ *
+ * A stroke wants to be a constant *share* of the figure, not a constant number of
+ * its pixels: the same matplotlib figure measured in points (237 wide) and exported
+ * as a PNG (1179 wide) is the same picture, and a stroke that is bold in one and a
+ * hairline in the other is the wrong answer. The reference is the edge at which the
+ * base width is the width a reader already found comfortable; every other figure is
+ * scaled to keep that share.
+ */
+export const REFERENCE_EDGE = 800
 
-/** Smallest multiple of the base sizes, for figures far below the reference. */
-export const MIN_UNIT = 0.75
+/**
+ * Smallest multiple of the base sizes, for figures far below the reference.
+ *
+ * Low enough that a matplotlib SVG — which measures itself in points, ~283 wide for
+ * the same figure a PNG exports at 1179px — is still scaled down rather than propped
+ * up to the old floor. The floor is a guard against division, not a design choice:
+ * a figure below ~240px is one nothing sensible is drawn on.
+ */
+export const MIN_UNIT = 0.2
 
 /** Largest multiple of the base sizes, for figures far above the reference. */
-export const MAX_UNIT = 3
+export const MAX_UNIT = 10
 
 /**
  * The size everything drawn on a figure is multiplied by.

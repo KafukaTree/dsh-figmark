@@ -87,24 +87,39 @@ type LoadedFigure =
 /**
  * The rail's track, drawn on an 18x100 grid and stretched to whatever height it gets.
  *
- * A hairline at the bottom opening into a round shoulder at the top: the control's
- * subject is thickness, so the track itself says which way is heavier. Every edge is
- * curved — straight flanks make a paper dart, and a square cap makes a cut-off blade —
- * so the profile is eased and the top is closed with an arc a little wider than the
- * shoulders. Stretching it vertically (preserveAspectRatio="none") costs nothing
- * visually: the only vertical features are straight lines, and the horizontal ones are
- * what the gradient is for.
+ * The control's subject is thickness, so the track says which way is heavier: a little
+ * narrower at the bottom, about one part in six. "A little" is the whole note — a
+ * water-drop taper reads as decoration rather than as a gauge, and the reader said so
+ * twice. One cubic per side and no shoulders, so each flank is a single continuous
+ * curve from end to end with nothing for the eye to catch on; the two ends close with
+ * faint arcs so the track looks drawn rather than cut off.
+ *
+ * Stretching it vertically (preserveAspectRatio="none") is what makes the caps need
+ * care: the svg is 18x100 over a box about 180 tall, so one y unit is 1.8 of an x unit.
+ * An `r` that reads as a circle in the viewBox would be a tall ellipse on screen — the
+ * cap's `ry` is therefore set to `rx / 1.8`, which is what puts a round end on it.
  */
 const WEIGHT_TRACK = [
-  'M 8.2 100',
-  'C 8.2 78 7.9 58 6.4 38',
-  'C 5.4 25 3.2 16 1.9 11',
-  'A 7.1 7.1 0 0 1 16.1 11',
-  'C 14.8 16 12.6 25 11.6 38',
-  'C 10.1 58 9.8 78 9.8 100',
-  'A 0.8 0.8 0 0 1 8.2 100',
+  'M 6.9 98.9',
+  'A 2.1 1.15 0 0 0 11.1 98.9',
+  'C 11.4 66 11.9 33 12.2 1.1',
+  'A 3.2 1.15 0 0 0 5.8 1.1',
+  'C 6.1 33 6.6 66 6.9 98.9',
   'Z',
 ].join(' ')
+/**
+ * How far the blue reaches, as a `height` in the rail.
+ *
+ * The same expression as the knob's `bottom`, because the blue has to end exactly where
+ * the knob's centre is: written once as a function so a change to the travel cannot
+ * leave the fill behind. `inset` keeps both clear of the rail's rounded caps; the extra
+ * half knob at each end keeps the knob's whole circle between the two ends of the bar
+ * rather than hanging half of itself past the top when the pen is at its heaviest.
+ */
+const travelHeight = (fraction: number): string =>
+  `calc(var(--da-track-inset) + var(--da-knob-size) / 2`
+  + ` + (100% - 2 * var(--da-track-inset) - var(--da-knob-size)) * ${fraction})`
+
 const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: 'select', label: 'toolSelect' },
   { tool: 'arrow', label: 'toolArrow' },
@@ -140,13 +155,49 @@ const TOOL_COPY: Record<AnnotationMark['kind'], string> = {
  * with the mouse rather than a mark you leave behind. Drawn rather than written so
  * the toolbar stays one row of controls at any locale or font size.
  */
+/**
+ * The handle's dots: six of them, three by two, turned as the reader asked.
+ *
+ * The palette stands up and takes a grip three columns wide by two rows tall; the bar
+ * lies down and takes one two columns wide by three rows tall. That is the pair the
+ * reader called for, and it is the opposite of what the strips' own proportions would
+ * suggest — noted here so it is not "corrected" back by the next pair of eyes.
+ *
+ * Drawn instead of typed — the braille character this replaces was one glyph at one
+ * size, so the dots could not be sized or spaced, and at 9px they came out a smudge.
+ */
+function GripDots({ wide }: { readonly wide: boolean }): ReactNode {
+  // The grid is the size the dots are drawn at, one svg unit to one pixel: the marks
+  // stay small and sharp rather than being scaled down out of a larger frame.
+  const xs = wide ? [2, 6, 10] : [2, 6]
+  const ys = wide ? [2, 6] : [2, 6, 10]
+  return (
+    <svg className="da-grip-dots" viewBox={wide ? '0 0 12 8' : '0 0 8 12'}
+      aria-hidden="true" focusable="false">
+      {ys.map(y => xs.map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.4} />))}
+    </svg>
+  )
+}
+
+/**
+ * The select tool: a cursor, outlined rather than filled.
+ *
+ * Filled, it read as a black blob against the dark chip — the silhouette was there but
+ * the direction it points was not, which is the only thing a cursor has to say. As an
+ * outline it belongs to the same stroke set as the other five glyphs.
+ *
+ * The shape is Tabler's `cursor-text`-sibling `pointer` glyph, taken whole at its own
+ * 24 grid: its body is one closed curve with round joins rather than the seven hard
+ * corners a hand-traced outline has, and at 16px that softness is the whole difference
+ * between a cursor and a shard. Scaled by hand it lost exactly that.
+ */
 function PointerIcon(): ReactNode {
   return (
-    <svg width="13" height="15" viewBox="0 0 13 15" aria-hidden="true" focusable="false"
-      style={{ display: 'block' }}>
-      <path
-        d="M 1.5 1 L 1.5 12.2 L 4.1 9.9 L 5.9 13.6 L 8 12.6 L 6.2 9 L 9.7 8.7 Z"
-        fill="currentColor" stroke="currentColor" strokeWidth="0.9" strokeLinejoin="round" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d={'M14.185 13.14l5.644 -2.202c1.625 -.634 1.538 -2.962 -.13 -3.473'
+        + 'l-14.319 -4.382c-1.41 -.431 -2.73 .888 -2.298 2.298l4.382 14.318'
+        + 'c.51 1.668 2.84 1.755 3.473 .13l2.202 -5.644a1.84 1.84 0 0 1 1.045 -1.045'} />
     </svg>
   )
 }
@@ -316,6 +367,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const barRef = useRef<HTMLDivElement | null>(null)
   const figureHostRef = useRef<HTMLDivElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const paperRef = useRef<HTMLDivElement | null>(null)
   const figureRef = useRef<HTMLDivElement | null>(null)
 
   /**
@@ -834,6 +886,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [barSpot, goalOpen, listOpen, size, htmlHeight])
 
   /**
+   * Whether an upward fold would come out of the top of the panel.
+   *
+   * The style fold is anchored to its own button, so it climbs — which is right while
+   * the bar sits at the bottom and wrong the moment the reader parks the bar along the
+   * top, where climbing puts the swatches out of sight above the panel. The record
+   * placement already answers this question for the records; the fold reads the same
+   * answer rather than measuring a second time, so the two can never disagree about
+   * where there is room.
+   */
+  const foldOpensDown = floatsAt !== null && floatsAt.bottom === undefined
+
+  /**
    * Put a record away when the reader clicks anywhere else.
    *
    * A record is a fold, not a mode: it has done its job the moment the reader looks
@@ -941,9 +1005,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const zoomAt = useCallback((next: number, clientX: number, clientY: number): void => {
     const stage = stageRef.current
     const surface = surfaceRef.current
-    const figureHost = figureRef.current
+    const sheet = paperRef.current
     /* v8 ignore next -- a wheel event only reaches a handler on a mounted stage, and size is what allows one. */
-    if (stage === null || surface === null || figureHost === null || size === null) return
+    if (stage === null || surface === null || sheet === null || paper === null) return
     const before = liveScale.current
     const reached = clampZoom(next)
     // Nothing to hold still when the factor would not move.
@@ -960,20 +1024,32 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       { clientX, clientY },
       before,
       reached,
-      size,
+      // The paper, not the figure: that is what the surface is the size of, and the
+      // anchor arithmetic has to be done in the coordinates the offset is measured in.
+      paper,
     )
     liveScale.current = reached
-    surface.style.width = `${size.width * reached}px`
-    surface.style.height = `${size.height * reached}px`
-    figureHost.style.transform = `scale(${reached})`
+    // The paper is the one thing that scales. It used to be the figure host that took
+    // the live factor, on top of the paper's own — so a pinch out left the figure at
+    // the factor squared inside a sheet at the factor, with white paper showing all
+    // around it, and the settled render never cleared the host's inline transform
+    // because React had not written it.
+    surface.style.width = `${paper.width * reached}px`
+    surface.style.height = `${paper.height * reached}px`
+    sheet.style.transform = `scale(${reached})`
     stage.scrollLeft = target.scrollLeft
     stage.scrollTop = target.scrollTop
     clearTimeout(settleTimer.current)
     settleTimer.current = setTimeout(() => {
       settleTimer.current = undefined
+      // The settled render writes the same factor through `paperStyle`; clearing the
+      // inline one first is what keeps the two from compounding.
+      const settled = paperRef.current
+      /* v8 ignore next -- the sheet is the element the pinch was measured on. */
+      if (settled !== null) settled.style.transform = ''
       setZoom(reached)
     }, PINCH_SETTLE_DELAY_MS)
-  }, [size])
+  }, [paper])
 
   useEffect(() => () => { clearTimeout(settleTimer.current) }, [])
 
@@ -1531,8 +1607,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         data-hand={tool === 'select' ? 'true' : undefined}
         data-panning={panning ? 'true' : undefined}>
         <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
-          <div className="da-paper" style={paperStyle}>
-          <div ref={figureRef} style={figureStyle}>
+          <div className="da-paper" ref={paperRef} style={paperStyle}>
+          <div className="da-figure-frame" ref={figureRef} style={figureStyle}>
             {figure?.kind === 'svg' ? (
               <div ref={figureHostRef} dangerouslySetInnerHTML={{ __html: figure.markup }} />
             ) : figure?.kind === 'raster' ? (
@@ -1561,6 +1637,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 style={{ width: figure.width, height: htmlHeight }}
               />
             ) : null}
+          </div>
             {paper === null || size === null ? null : (
               <Canvas
                 // The paper, not the figure: a mark in the margin has to have
@@ -1572,6 +1649,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 tool={tool}
                 color={color}
                 weight={weight}
+                scale={scale}
                 containerRef={figureHostRef}
                 anchoring={isVector}
                 anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
@@ -1590,7 +1668,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 numbering={props.numbering}
               />
             )}
-          </div>
           </div>
         </div>
       </div>
@@ -1726,27 +1803,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
               the same outline clipped to the height already chosen, so the blue follows
               the wedge instead of sliding a bar next to it. An svg keeps the ends round,
               which a clip-path polygon cannot. */}
+          {/* The groove is drawn, not styled: one path, so its ends stay round at any
+              length, which a background on a plain div cannot promise. It carries the
+              shadow and nothing else — the blue is a separate element, because the blue
+              has to stop where the knob is and that is a length in the rail, not in the
+              track's own coordinates. */}
           <svg className="da-weight-svg" viewBox="0 0 18 100" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               {/* A shadow, not a fill: the track reads as a groove pressed into the panel
-                  rather than a black bar laid on top of it — heavier where it is wide,
-                  which is also where more weight is. */}
+                  rather than a black bar laid on top of it. */}
               <linearGradient id={`${trackId}-shade`} x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0" stopColor="rgba(20,40,80,.05)" />
-                <stop offset="1" stopColor="rgba(20,40,80,.2)" />
+                <stop offset="0" stopColor="rgba(20,40,80,.06)" />
+                <stop offset=".55" stopColor="rgba(20,40,80,.13)" />
+                <stop offset="1" stopColor="rgba(20,40,80,.24)" />
               </linearGradient>
-              <clipPath id={`${trackId}-cut`}>
-                <rect x="0" y={100 - weightFraction * 100} width="18" height={weightFraction * 100} />
-              </clipPath>
             </defs>
             <path d={WEIGHT_TRACK} fill={`url(#${trackId}-shade)`} />
-            <path d={WEIGHT_TRACK} fill="var(--dsw-alias-brand-primary,#176df2)" clipPath={`url(#${trackId}-cut)`} />
           </svg>
-          {/* The knob travels the inset of the track, never the rail: a percentage of
-              the rail carried its box past its own end, which is what made the knob
-              overshoot when the weight was dragged to the top. */}
+          <span className="da-weight-fill" aria-hidden
+            style={{ height: travelHeight(weightFraction) }} />
+          {/* The knob's *centre* is the fill's top edge, so both are computed from one
+              number and cannot drift apart. Two things follow, and both are wanted:
+              the knob's box straddles the track's ends rather than being clamped inside
+              it (a knob that stops short of the end it is at looks like the slider has
+              further to go), and the travel is measured on the track — inset 12px from
+              the rail — rather than on the rail, which is what carried the knob's box
+              past the rail's rounded cap at the heaviest weight. */}
           <span className="da-weight-knob" aria-hidden
-            style={{ bottom: `calc(12px + ${weightFraction} * (100% - 24px - var(--da-knob-size, 11px)))` }} />
+            style={{ bottom: `calc(${travelHeight(weightFraction)} - var(--da-knob-size) / 2)` }} />
         </label>
       )}
 
@@ -1779,7 +1863,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             setDragging(false)
           }}
           onPointerCancel={() => { dragFrom.current = null; setDragging(false) }}>
-          <span className="da-palette-grip-dots" aria-hidden>⠿</span>
+          <GripDots wide />
         </div>
         {TOOLS.map(entry => (
           <button key={entry.tool} type="button" className="da-btn da-tool"
@@ -1830,7 +1914,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             setBarDragging(false)
           }}
           onPointerCancel={() => { barFrom.current = null; setBarDragging(false) }}>
-          <span className="da-palette-grip-dots" aria-hidden>⠿</span>
+          <GripDots wide={false} />
         </div>
         {/* The fold that steers the next stroke: the colour it is drawn in. It opens
             upwards, clear of the bar itself. */}
@@ -1844,7 +1928,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         </div>
         {/* The fold that steers the next stroke, opened upwards clear of the bar. */}
         {styleOpen ? (
-          <div className="da-style-row" role="group" aria-label={t('style')}>
+          <div className="da-style-row" role="group" aria-label={t('style')}
+            data-side={foldOpensDown ? 'below' : 'above'}>
             <span className="da-style-label">{t('styleColor')}</span>
             <div className="da-style-colors">
               {COLORS.map(value => (

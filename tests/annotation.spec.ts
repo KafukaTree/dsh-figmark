@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { AnnotationDocument, AnnotationMark, MarkKind } from '../src/shared/annotation'
+import type { AnnotationDocument, AnnotationMark, FigurePoint, MarkKind } from '../src/shared/annotation'
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
@@ -170,7 +170,7 @@ describe('document validation', () => {
     })
     // A weight the reader set is pulled to the nearest drawable value rather than
     // dropped: a preference that vanishes is worse than one held at its end stop.
-    expect(defined(readAnnotationDocument(withWeight(9)).marks[0]).weight).toBe(4)
+    expect(defined(readAnnotationDocument(withWeight(9)).marks[0]).weight).toBe(WEIGHT_MAX)
     expect(defined(readAnnotationDocument(withWeight(0.1)).marks[0]).weight).toBe(0.5)
     expect(defined(readAnnotationDocument(withWeight(2.5)).marks[0]).weight).toBe(2.5)
     // Anything that is not a number is a document this plugin did not write.
@@ -564,17 +564,86 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
 describe('model-facing summary', () => {
   it('describes every mark kind with its geometry and note', () => {
     expect(describeMark(defined(document_.marks[0]), 0, 'zh'))
-      .toBe('① 箭头 (300,225) → (100,66)（元素标题「102」，id=node102，元素文字「导柱」），要改：这个标号应指向滑套 34')
-    expect(describeMark(defined(document_.marks[1]), 1, 'zh')).toBe('② 手绘线（3 点），（未写说明）')
-    expect(describeMark(defined(document_.marks[2]), 2, 'zh')).toBe('③ 圈选 (10,20)-(30,40)，要改：轮廓多余')
-    expect(describeMark(defined(document_.marks[4]), 4, 'zh')).toBe('⑤ 单点位于 (200,200)，要改：图号应在正下方')
+      .toBe('① 箭头 (300,225) → (100,66)（元素标题「102」，id=node102，元素文字「导柱」），批注：这个标号应指向滑套 34')
+    expect(describeMark(defined(document_.marks[1]), 1, 'zh')).toBe('② 手绘线 (1,2)-(5,6)，（未写说明）')
+    expect(describeMark(defined(document_.marks[2]), 2, 'zh')).toBe('③ 圈选 (10,20)-(30,40)，批注：轮廓多余')
+    expect(describeMark(defined(document_.marks[4]), 4, 'zh')).toBe('⑤ 单点位于 (200,200)，批注：图号应在正下方')
     expect(describeMarks(document_, 'en')[2]).toContain('ellipse (10,20)-(30,40)')
+  })
+
+  it('writes a box by its corners, whichever way it was dragged', () => {
+    // A box dragged up and to the left arrives as (bottom-right, top-left). Handing that
+    // pair to the agent makes it take a min and a max before it knows the area, and a
+    // mark it has to arithmetic on is a mark it can get wrong. Both directions read the
+    // same, so the same box always says the same thing.
+    const swept = (points: readonly FigurePoint[]): string => describeMark(
+      { id: 'b1', kind: 'rect', color: '#e03131', points, detail: '图例压到数据了' },
+      0,
+      'zh',
+    )
+    const corner = swept([[187, 138], [42, 88]])
+    expect(corner).toBe('① 框选 (42,88)-(187,138)，批注：图例压到数据了')
+    // Drawn the other way round, and both ways for an ellipse too.
+    expect(swept([[42, 88], [187, 138]])).toBe(corner)
+    expect(describeMark(
+      { id: 'e1', kind: 'ellipse', color: '#1971c2', points: [[30, 90], [10, 20]], detail: '' },
+      0,
+      'zh',
+    )).toBe('① 圈选 (10,20)-(30,90)，（未写说明）')
+  })
+
+  it('says where a freehand stroke was drawn, not how many points it has', () => {
+    // "37 points" locates nothing: a reader given only the count cannot find the line on
+    // the figure. The box it was drawn in is what says where to look.
+    const stroke: AnnotationMark = {
+      id: 'p1',
+      kind: 'pen',
+      color: '#2f9e44',
+      points: [[120, 40], [90, 12], [140, 70]],
+      detail: '这条曲线漏了一段',
+    }
+    expect(describeMark(stroke, 0, 'zh')).toBe('① 手绘线 (90,12)-(140,70)，批注：这条曲线漏了一段')
+    expect(describeMark(stroke, 0, 'en')).toContain('freehand stroke (90,12)-(140,70)')
+    // A stroke that was never given a point still has to render.
+    expect(describeMark({ ...stroke, points: [] }, 0, 'zh')).toBe('① 手绘线，批注：这条曲线漏了一段')
+  })
+
+  it('says how far a mark reaches past the figure, and stays quiet when it does not', () => {
+    // The reader marked up a 1179x878 figure and drew past the top. A negative
+    // coordinate is accurate but asks the agent to notice a sign and infer what it
+    // means; naming the overhang removes that step. A mark inside the figure gets no
+    // suffix at all, because a note about nothing is noise on every line that has none.
+    const figure = { address: 'a', path: '/w/f.png', mediaType: 'image/png', width: 1179, height: 878, sha256: 'x' }
+    const at = (points: readonly FigurePoint[], kind: MarkKind): string => describeMark(
+      { id: 'x', kind, color: '#e03131', points, detail: 'dd' },
+      0,
+      'zh',
+      figure,
+    )
+    expect(at([[191, -57], [400, 117]], 'ellipse')).toContain('（超出图面：上 57 像素）')
+    expect(at([[698, 24], [773, -314]], 'arrow')).toContain('（超出图面：上 314 像素）')
+    expect(at([[1100, 800], [1300, 950]], 'rect')).toContain('（超出图面：右 121、下 72 像素）')
+    // Two sides at once, in a fixed order, so the same box always reads the same way.
+    expect(at([[-30, -40], [200, 200]], 'rect')).toContain('（超出图面：左 30、上 40 像素）')
+    // Inside the figure: nothing added.
+    expect(at([[319, 220], [768, 658]], 'pen')).toBe('① 手绘线 (319,220)-(768,658)，批注：dd')
+    // Exactly on the edge is on the figure, not past it.
+    expect(at([[0, 0], [1179, 878]], 'rect')).not.toContain('超出')
+  })
+
+  it('says it in English, and says it to a reader with no figure size to check against', () => {
+    const figure = { address: 'a', path: '/w/f.png', mediaType: 'image/png', width: 100, height: 100, sha256: 'x' }
+    const mark: AnnotationMark = { id: 'x', kind: 'point', color: '#e03131', points: [[-5, 50]], detail: 'dd' }
+    expect(describeMark(mark, 0, 'en', figure)).toContain('(off the figure: left 5 px)')
+    // Without a size there is nothing to measure against, and a guess would be worse
+    // than silence: a document that never recorded its figure is rare but possible.
+    expect(describeMark(mark, 0, 'en')).toBe('① at (-5,50), note: dd')
   })
 
   it('names the page each mark of a document sits on', () => {
     const marks = describeMarks(paged(), 'zh')
     expect(marks[0]).toBe('① 第 1 页 框选 (10,20)-(60,90)，（未写说明）')
-    expect(marks[1]).toBe('② 第 3 页 箭头 (1,2) → (3,4)，要改：第三页')
+    expect(marks[1]).toBe('② 第 3 页 箭头 (1,2) → (3,4)，批注：第三页')
     expect(describeMarks(paged(), 'en')[1]).toContain('page 3 arrow')
   })
 
@@ -596,7 +665,8 @@ describe('model-facing summary', () => {
     // The selector is what a reader of the source resolves the mark by, so it
     // travels with every anchor that has one.
     expect(describeMark(mark, 0, 'zh'))
-      .toBe('① 框选 (10,20)-(60,90)（id=lead，元素文字「第一段」，选择器 #lead），要改：这段要改')
+      .toBe('① 框选 (10,20)-(60,90)（id=lead，元素文字「第一段」，选择器 #lead），批注：这段要改')
+    expect(describeMark(mark, 0, 'en')).toContain('(id=lead, element text')
     expect(describeMark(mark, 0, 'en')).toContain('selector #lead')
     // An anchor with nothing but a tag still names the element it points at.
     const bare: AnnotationMark = { ...mark, anchor: { tag: 'p', bbox: [0, 0, 1, 1] } }
