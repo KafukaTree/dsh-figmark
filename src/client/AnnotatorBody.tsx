@@ -9,6 +9,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -83,6 +84,27 @@ type LoadedFigure =
   }
 
 /** Tools in toolbar order. */
+/**
+ * The rail's track, drawn on an 18x100 grid and stretched to whatever height it gets.
+ *
+ * A hairline at the bottom opening into a round shoulder at the top: the control's
+ * subject is thickness, so the track itself says which way is heavier. Every edge is
+ * curved — straight flanks make a paper dart, and a square cap makes a cut-off blade —
+ * so the profile is eased and the top is closed with an arc a little wider than the
+ * shoulders. Stretching it vertically (preserveAspectRatio="none") costs nothing
+ * visually: the only vertical features are straight lines, and the horizontal ones are
+ * what the gradient is for.
+ */
+const WEIGHT_TRACK = [
+  'M 8.2 100',
+  'C 8.2 78 7.9 58 6.4 38',
+  'C 5.4 25 3.2 16 1.9 11',
+  'A 7.1 7.1 0 0 1 16.1 11',
+  'C 14.8 16 12.6 25 11.6 38',
+  'C 10.1 58 9.8 78 9.8 100',
+  'A 0.8 0.8 0 0 1 8.2 100',
+  'Z',
+].join(' ')
 const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: 'select', label: 'toolSelect' },
   { tool: 'arrow', label: 'toolArrow' },
@@ -270,9 +292,27 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   )
   const sessionId = props.sessionId ?? parsedAddress?.sessionId
 
+  /**
+   * A private prefix for the rail's gradient and clip ids.
+   *
+   * Two bodies can be mounted at once (a PDF lays out one per page), and an id is
+   * document-wide: sharing one would make every rail's fill follow the first rail's
+   * selection. Declared here, with the other hooks, because the ids are read far below
+   * the early returns for a figure that failed to load.
+   */
+  const trackId = `da-weight-${useId().replaceAll(':', '')}`
   const stageRef = useRef<HTMLDivElement | null>(null)
   /** The box a double clicked mark's detail is written in. */
   const detailRef = useRef<HTMLTextAreaElement | null>(null)
+  /**
+   * The comment pill around that box.
+   *
+   * Measured rather than the textarea inside it: the field gives up width to the two
+   * hand-off buttons as soon as there is something to send, so a placement computed
+   * from the field's box would put the buttons past the edge of the panel — which is
+   * exactly what a comment pill against the right edge used to do.
+   */
+  const pillRef = useRef<HTMLDivElement | null>(null)
   const barRef = useRef<HTMLDivElement | null>(null)
   const figureHostRef = useRef<HTMLDivElement | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
@@ -851,7 +891,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const measured = host.getBoundingClientRect()
     // The pill's own size, not a constant: it grows with the sentence, and a
     // placement that assumed one line would push a long comment off the bottom.
-    const pillSize = measuredSize(detailRef.current, { width: DETAIL_WIDTH, height: DETAIL_HEIGHT })
+    const pillSize = measuredSize(pillRef.current, { width: DETAIL_WIDTH, height: DETAIL_HEIGHT })
     const at = placeCard(
       scaledBox(
         box,
@@ -1421,6 +1461,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     ? (WEIGHT_TOOLS.has(tool) ? weight : null)
     : (selected.weight ?? WEIGHT_DEFAULT)
   /**
+   * How far up the rail that value sits, from 0 at the lightest to 1 at the heaviest.
+   *
+   * One number for the fill, the knob and the input: computed three times the three
+   * could round differently and the knob would sit a pixel off the fill it belongs to.
+   */
+  const weightFraction = shownWeight === null
+    ? 0
+    : (shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)
+  /**
    * Change one attribute of the selected mark, or of the next stroke when nothing
    * is selected.
    *
@@ -1630,6 +1679,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                next to it, and clicking anywhere else puts it away. The hand-off
                buttons only exist once there is something to hand off. */
             <div className="da-float da-float-detail" role="group" aria-label={t('detail')}
+              ref={pillRef}
               style={{ left: detailAt.left, top: detailAt.top }}>
               <textarea
                 ref={detailRef}
@@ -1672,10 +1722,31 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
             value={shownWeight}
             onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
-          <span className="da-weight-fill" aria-hidden
-            style={{ height: `${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}%` }} />
+          {/* The track is drawn, not styled: one path, filled twice. The second fill is
+              the same outline clipped to the height already chosen, so the blue follows
+              the wedge instead of sliding a bar next to it. An svg keeps the ends round,
+              which a clip-path polygon cannot. */}
+          <svg className="da-weight-svg" viewBox="0 0 18 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              {/* A shadow, not a fill: the track reads as a groove pressed into the panel
+                  rather than a black bar laid on top of it — heavier where it is wide,
+                  which is also where more weight is. */}
+              <linearGradient id={`${trackId}-shade`} x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0" stopColor="rgba(20,40,80,.05)" />
+                <stop offset="1" stopColor="rgba(20,40,80,.2)" />
+              </linearGradient>
+              <clipPath id={`${trackId}-cut`}>
+                <rect x="0" y={100 - weightFraction * 100} width="18" height={weightFraction * 100} />
+              </clipPath>
+            </defs>
+            <path d={WEIGHT_TRACK} fill={`url(#${trackId}-shade)`} />
+            <path d={WEIGHT_TRACK} fill="var(--dsw-alias-brand-primary,#176df2)" clipPath={`url(#${trackId}-cut)`} />
+          </svg>
+          {/* The knob travels the inset of the track, never the rail: a percentage of
+              the rail carried its box past its own end, which is what made the knob
+              overshoot when the weight was dragged to the top. */}
           <span className="da-weight-knob" aria-hidden
-            style={{ bottom: `calc(${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}% - 5.5px)` }} />
+            style={{ bottom: `calc(12px + ${weightFraction} * (100% - 24px - var(--da-knob-size, 11px)))` }} />
         </label>
       )}
 

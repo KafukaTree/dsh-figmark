@@ -68,33 +68,25 @@ export const STYLES = `
   cursor:ns-resize;transition:width .16s ease,background .16s ease,box-shadow .16s ease}
 .da-weight:hover,.da-weight:focus-within{width:30px;background:var(--dsw-alias-bg-layer-2,#fff);
   box-shadow:0 5px 18px rgba(20,40,80,.16),0 0 0 0.5px var(--dsw-alias-border-l2,currentColor)}
-/* The wedge: a hairline at the bottom, the heaviest width at the top. Drawn as a
-   clipped gradient box so it costs one element and no SVG. */
-.da-weight::before{content:"";position:absolute;left:50%;top:14px;bottom:14px;width:11px;
-  transform:translateX(-50%);opacity:0;
-  background:linear-gradient(to top,var(--dsw-alias-border-l3,rgba(127,127,127,.34)),
-    var(--dsw-alias-border-l4,rgba(127,127,127,.5)));
-  clip-path:polygon(calc(50% - 0.5px) 100%,calc(50% + 0.5px) 100%,
-    calc(50% + 5.5px) 0,calc(50% - 5.5px) 0);
-  transition:opacity .16s ease}
-.da-weight:hover::before,.da-weight:focus-within::before{opacity:1}
-/* The part already chosen, drawn from the bottom up in the brand colour. */
-.da-weight-fill{position:absolute;left:50%;bottom:14px;width:11px;transform:translateX(-50%);
-  opacity:0;pointer-events:none;transition:opacity .16s ease;
-  background:var(--dsw-alias-brand-primary,#176df2);
-  clip-path:polygon(calc(50% - 0.5px) 100%,calc(50% + 0.5px) 100%,
-    calc(50% + 5.5px) 0,calc(50% - 5.5px) 0)}
-.da-weight:hover .da-weight-fill,.da-weight:focus-within .da-weight-fill{opacity:1}
+/* The track is an svg in the body: a hairline at the bottom that opens into a rounded
+   shoulder at the top. It is not a clip-path polygon because a polygon has no rounded
+   ends — the corners were what made the wedge read as a cut-out blade rather than a
+   part of the panel. preserveAspectRatio="none" stretches one 12x100 shape over the
+   rail's height, so the shoulders stay smooth at any length. */
+.da-weight-svg{position:absolute;left:50%;top:12px;bottom:12px;width:18px;
+  transform:translateX(-50%);opacity:0;pointer-events:none;transition:opacity .16s ease}
+.da-weight:hover .da-weight-svg,.da-weight:focus-within .da-weight-svg{opacity:1}
 /* The knob sits on the value: the only part that shows at rest, so the rail reads as
    a slider waiting to be touched rather than a bare rule. */
-.da-weight-knob{position:absolute;left:50%;width:11px;height:11px;border-radius:50%;
-  transform:translateX(-50%);pointer-events:none;
+.da-weight-knob{position:absolute;left:50%;width:var(--da-knob-size,11px);height:var(--da-knob-size,11px);
+  border-radius:50%;transform:translateX(-50%);pointer-events:none;
   background:var(--dsw-alias-bg-layer-2,#fff);
-  box-shadow:0 1px 4px rgba(20,40,80,.32),0 0 0 1px var(--dsw-alias-border-l3,currentColor);
+  box-shadow:0 1px 4px rgba(20,40,80,.28),0 0 0 1px var(--dsw-alias-border-l3,currentColor);
   transition:width .16s ease,height .16s ease,background .16s ease}
+.da-weight:hover,.da-weight:focus-within{--da-knob-size:15px}
 .da-weight:hover .da-weight-knob,.da-weight:focus-within .da-weight-knob{
-  width:15px;height:15px;background:var(--dsw-alias-brand-primary,#176df2);
-  box-shadow:0 2px 7px rgba(20,40,80,.34)}
+  background:var(--dsw-alias-brand-primary,#176df2);
+  box-shadow:0 2px 7px rgba(20,40,80,.3)}
 /* The browser's own range, rotated upright and made transparent. It spans the whole
    rail so a press anywhere on it lands on the slider — including on the knob, which
    is why the knob is pointer-transparent. */
@@ -267,7 +259,7 @@ export const STYLES = `
    come from the mark it belongs to. It is a pill rather than a card — no head, no
    border between the field and the panel — so writing about a mark costs one line
    over the figure instead of a box that covers it. */
-.da-float-detail{width:300px;gap:0;padding:4px;border-radius:22px;
+.da-float-detail{width:300px;max-width:calc(100% - 16px);gap:0;padding:4px;border-radius:22px;
   flex-direction:row;align-items:flex-end;
   box-shadow:0 8px 26px rgba(20,40,80,.2),0 0 0 1px rgba(20,40,80,.04)}
 .da-float .da-comment{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;background:transparent;

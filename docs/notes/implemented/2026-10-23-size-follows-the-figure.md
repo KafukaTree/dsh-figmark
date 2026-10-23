@@ -149,3 +149,64 @@ wrong.
   what `tests/annotator-body.spec.tsx` now asserts in both directions.
 - `DETAIL_WIDTH`/`DETAIL_HEIGHT` in `popover.ts` were stale (252/196 against a 300px
   pill); they are now 300/48 and are only the pre-measurement estimate.
+
+## Follow-up: the number inside the pin, the pill at the edge, and the rail's finish
+
+Three things the reader found after using the first cut.
+
+**The number did not grow with the pin.** The rail multiplies a pin's radius, but the
+numeral inside it was drawn at `PIN_FONT_SIZE * unit` — the figure's multiple only. So
+the larger the pin got, the smaller its number looked, which is the opposite of the
+point: the rail was introduced because the pin was too small to see. `pinFontSizeOf`
+now carries the mark's weight as well, so the numeral keeps the same share of the head
+at every size. `Canvas` and the export both call it, so the picture the agent receives
+and the one on screen cannot disagree about it.
+
+**The pill could put its buttons past the edge.** Placement measured
+`detailRef.current`, the textarea — but the textarea gives up width to the two hand-off
+buttons as soon as there is something to send. A pill against the right edge therefore
+had its buttons placed inside the panel and its buttons drawn outside it. The pill is
+now measured whole (`pillRef`, a separate ref on the pill element) and carries
+`max-width: calc(100% - 16px)` so it can never be wider than the panel it lives in,
+however long the comment is.
+
+**The rail read as a black bar with cut corners.** Two separate faults. The track was
+shaded from `--dsw-alias-border-l3/l4`, which resolve near-black in the dark palette, so
+the wedge was a solid dark shape; it is now an svg gradient of translucent shadow
+(`rgba(20,40,80,.05)` at the neck to `.2` at the shoulders), which reads as a groove in
+both palettes. And the profile was a `clip-path` polygon, which cannot have rounded
+ends — the straight flanks and square cap are what made it look like a cut-out blade.
+The track is now one svg path on an 18×100 grid, eased along the flanks and closed with
+an arc wider than the shoulders, stretched vertically. The chosen part is the same path
+filled twice, with the second fill clipped to the chosen height, so the blue follows the
+wedge instead of being a bar sliding beside it.
+
+The knob was also overshooting at the top: `bottom: calc(fraction * 100% - 5.5px)`
+measured the rail, so at the heaviest weight the knob's box hung past the rail's top
+edge. It now travels `calc(12px + fraction * (100% - 24px - knob))` — the track's own
+inset — so its centre stops exactly at the top of the track.
+
+### Alternatives considered (follow-up)
+
+- **Scale the numeral with the figure but not the weight.** Rejected: that is the bug —
+  the pin's head grows with the weight, so a fixed numeral shrinks relative to it.
+- **Place the pill by the textarea and add the buttons' width as a constant.** Rejected:
+  the constant would be wrong the moment the buttons are hidden (empty comment) or the
+  pill wraps to a second line. Measuring the laid-out element needs no estimate.
+- **Shrink the buttons instead of widening the measurement.** Rejected: the buttons were
+  fine; the placement was wrong. Fixing the symptom would leave a 30px target on a
+  300px pill.
+- **Cap the pill's width with `overflow: hidden`.** Rejected: that hides the buttons
+  rather than moving them, which is the same failure the reader reported.
+- **Keep the polygon and round it with a bigger `border-radius`.** Rejected:
+  `border-radius` does not clip a `clip-path` polygon, so the corners stayed square.
+- **Draw the track with a CSS gradient wedge (the previous attempt) and blur it.**
+  Rejected: a blur would soften the shape but not give it a round end, and `filter:
+  blur` on a 12px-wide element washes the colour out to grey it was already grey.
+- **Make the fill a second wedge.** Rejected: a wedge scaled down to the chosen height
+  is narrower than the track under it, so the blue reads as drifting off the track
+  rather than filling it.
+- **Use `useId` inline in the JSX.** Rejected on the first try: the id is read below the
+  early returns for a figure that failed to load, so `useId` sat behind a conditional
+  call and React threw "Rendered fewer hooks than expected". It is now declared with the
+  other hooks at the top of the component.

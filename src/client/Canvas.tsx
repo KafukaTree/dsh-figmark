@@ -23,7 +23,7 @@ import {
 } from './handles'
 import { boxCentre, markBounds, shiftPoints, uprightBounds, type MarkBox } from './mark-geometry'
 import {
-  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
+  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, pinFontSizeOf, strokeWidthOf,
   markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from './render'
 import { figureUnit } from './scale'
@@ -699,7 +699,7 @@ export function Canvas(props: CanvasProps): ReactNode {
       <>
         <path d={pin} fill="#ffffff" stroke="#ffffff" strokeWidth={4.5 * unit} strokeLinejoin="round" />
         <path d={pin} fill={mark.color} stroke="#ffffff" strokeWidth={1.5 * unit} strokeLinejoin="round" />
-        <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={PIN_FONT_SIZE * unit}
+        <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={pinFontSizeOf(mark, unit)}
           fontWeight={700} fill={PIN_NUMBER_COLOR} textAnchor="middle" dominantBaseline="central">
           {number}
         </text>

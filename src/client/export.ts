@@ -9,7 +9,7 @@
 
 import type { AnnotationMark } from '../shared/annotation'
 import {
-  PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
+  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, pinFontSizeOf, strokeWidthOf,
   markPathData, pinNumberCentre, pinPathData,
 } from './render'
 import { figureUnit } from './scale'
@@ -70,7 +70,7 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
     if (number !== undefined) {
       parts.push(
         `<text x="${centre[0]}" y="${centre[1]}" font-family="${PIN_FONT_FAMILY}"`
-        + ` font-size="${PIN_FONT_SIZE * unit}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
+        + ` font-size="${pinFontSizeOf(mark, unit)}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
         + ` text-anchor="middle" dominant-baseline="central">${number}</text>`,
       )
     }

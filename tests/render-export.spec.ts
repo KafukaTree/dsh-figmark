@@ -185,6 +185,20 @@ describe('review image', () => {
     expect(svg).toContain('>1</text>')
   })
 
+  it('draws the number inside a pin as large as the pin itself', () => {
+    // The rail that makes a pin bigger has to make its number bigger with it: a head
+    // that grows around a fixed-size numeral reads as a circle with a speck in it, and
+    // at the large end the number stops being legible where it matters most.
+    const layer = { kind: 'raster' as const, dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 }
+    const pin = (weight: number): string => composeReviewSvg(layer, [
+      { id: 'p', kind: 'point', color: '#e03131', points: [[200, 150]], weight, detail: '这里' },
+    ])
+    const small = pin(1)
+    const large = pin(3)
+    expect(small).toContain(`font-size="${PIN_FONT_SIZE * MIN_UNIT}"`)
+    expect(large).toContain(`font-size="${PIN_FONT_SIZE * 3 * MIN_UNIT}"`)
+  })
+
   it('sizes the reviewed picture to the paper the marks need', () => {
     // A box drawn past the edge of the figure makes the picture wider than the
     // figure. A caller that rasterized at the figure's own size would crop away

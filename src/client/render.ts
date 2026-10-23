@@ -105,6 +105,21 @@ export const PIN_FONT_FAMILY = 'Helvetica, Arial, sans-serif'
  */
 export const PIN_NUMBER_COLOR = '#ffffff'
 
+/**
+ * Font size of the number inside a pin, in figure pixels.
+ *
+ * Scaled by the mark's weight as well as the figure: the rail that makes a pin bigger
+ * makes its head bigger, and a head that grows around a fixed-size numeral reads as a
+ * circle with a speck in it. The number is the pin's whole payload, so it keeps the
+ * same share of the head at every size.
+ * @param mark - the point mark whose pin is being drawn.
+ * @param unit - the figure's size multiple.
+ * @returns the font size to draw the number at.
+ */
+export function pinFontSizeOf(mark: AnnotationMark, unit = 1): number {
+  return PIN_FONT_SIZE * (mark.weight ?? 1) * unit
+}
+
 /** A box in figure pixels. */
 export interface MarkBox {
   /** Left edge. */

@@ -1567,6 +1567,34 @@ describe('the weight of the pen', () => {
     expect(defined(document.querySelector('.da-weight')).getAttribute('title')).toBe(zh.pinSize)
   })
 
+  it('draws the number inside a pin at the size the rail gives the pin', async () => {
+    // The complaint this answers: the pin grew but the numeral in it stayed the same,
+    // so the number got lost in its own head exactly where it had just been made
+    // legible. Both are one multiple of the mark's weight.
+    mounted = await svgBody({ annotation: pointOnly })
+    await selectFirstMark(document.body)
+    const numeral = (): Element | null => document.querySelector('[data-da-mark] text')
+    const before = Number(defined(numeral()).getAttribute('font-size'))
+    await type(rail(), '3')
+    const after = Number(defined(numeral()).getAttribute('font-size'))
+    expect(after).toBeGreaterThan(before)
+    // Three times the weight, three times the numeral — the same rule the pin follows.
+    expect(after / before).toBeCloseTo(3, 5)
+  })
+
+  it('keeps the comment buttons inside the panel when the pill sits at the edge', async () => {
+    // The bug: the field gave up width to the hand-off buttons as soon as there was
+    // something to send, but placement was measured from the field alone — so the two
+    // buttons were placed past the edge of the panel and could not be pressed. The
+    // whole pill is measured now, and it also refuses to be wider than the panel.
+    mounted = await svgBody({ annotation: saved })
+    await selectFirstMark(document.body)
+    await type(detailBox(), '这是一条足够长的评论，用来把两个发送按钮挤出来')
+    const pill = defined(document.querySelector('.da-float-detail'))
+    expect(pill.querySelectorAll('.da-comment-send-btn')).toHaveLength(2)
+    expect(getComputedStyle(pill).maxWidth).toBe('calc(100% - 16px)')
+  })
+
   it('stands the rail down when nothing is selected and no pen is out', async () => {
     // The feature the rail is for: it must not sit on the figure when there is no
     // decision to make, which is the whole point of a control that costs no room.
