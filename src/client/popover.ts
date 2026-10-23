@@ -22,11 +22,17 @@ export interface PopoverBox {
   readonly height: number
 }
 
-/** How wide the detail card is, in CSS pixels. */
-export const DETAIL_WIDTH = 252
+/**
+ * How wide the comment pill is, in CSS pixels.
+ *
+ * Kept in step with `.da-float-detail` in the stylesheet: the placement clamps the
+ * pill back inside the panel using this number, so a pill wider than it would be
+ * pushed off the edge by exactly the difference.
+ */
+export const DETAIL_WIDTH = 300
 
-/** How tall the detail card is, in CSS pixels. */
-export const DETAIL_HEIGHT = 196
+/** How tall the comment pill is with one line in it, in CSS pixels. */
+export const DETAIL_HEIGHT = 48
 
 /** The least empty space a card keeps from the panel's edge. */
 export const POPOVER_MARGIN = 8
@@ -83,6 +89,26 @@ export function scaledBox(
  * @param size - the card's size, in CSS pixels.
  * @returns the card's top-left corner, in the panel's coordinates.
  */
+/**
+ * The size to place a card by: the card's own, or a stand-in before it is measured.
+ *
+ * A comment pill grows with the sentence in it, so a placement that assumed one line
+ * would push a long comment off the bottom of the panel. The element is measured once
+ * it has been laid out; before that — the first frame of a selection, and in any
+ * environment that reports zero boxes — the caller's estimate is the only size there
+ * is, and the next pass corrects it.
+ * @param element - the laid-out card, when there is one.
+ * @param fallback - the size to use when the card has not been measured.
+ * @returns the width and height to place by.
+ */
+export function measuredSize(
+  element: { readonly offsetWidth: number; readonly offsetHeight: number } | null,
+  fallback: { readonly width: number; readonly height: number },
+): { readonly width: number; readonly height: number } {
+  if (element === null || element.offsetHeight === 0) return fallback
+  return { width: element.offsetWidth, height: element.offsetHeight }
+}
+
 export function placeCard(
   anchor: PopoverBox,
   panelWidth: number,
@@ -91,12 +117,16 @@ export function placeCard(
 ): { readonly left: number; readonly top: number } {
   const below = anchor.y + anchor.height + POPOVER_GAP
   const above = anchor.y - size.height - POPOVER_GAP
-  // Below when it fits, else above when that fits, else pinned to the top edge: a
-  // mark taller than the panel leaves no room either way, and a clamped card is
-  // still usable where an off-screen one is not.
-  const top = below + size.height <= panelHeight - POPOVER_MARGIN
+  const roomBelow = panelHeight - POPOVER_MARGIN - below
+  const roomAbove = anchor.y - POPOVER_GAP - POPOVER_MARGIN
+  // Below when it fits, else above when that fits, else wherever there is more room:
+  // a mark taller than the panel leaves no room either way, and a pill clamped to the
+  // edge it has least against is still readable where an off-screen one is not.
+  const top = roomBelow >= size.height
     ? below
-    : Math.max(POPOVER_MARGIN, above)
+    : roomAbove >= size.height
+      ? above
+      : Math.max(POPOVER_MARGIN, roomAbove > roomBelow ? above : below)
   const widest = Math.max(POPOVER_MARGIN, panelWidth - size.width - POPOVER_MARGIN)
   return {
     left: Math.min(Math.max(POPOVER_MARGIN, anchor.x), widest),

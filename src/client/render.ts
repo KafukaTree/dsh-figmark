@@ -21,7 +21,7 @@
 import type { AnnotationMark, FigurePoint, MarkKind } from '../shared/annotation'
 import { markBounds, markRadians } from './mark-geometry'
 
-/** Stroke width of every mark, in figure pixels. */
+/** Stroke width of a mark drawn at weight 1 on a reference-sized figure, in pixels. */
 export const STROKE_WIDTH = 2.5
 
 /**
@@ -32,11 +32,15 @@ export const STROKE_WIDTH = 2.5
  * thicker pen. The arrow's barbs are weighed by the same multiple, because an
  * arrow drawn with a thick pen has a thick head.
  *
+ * The figure's own unit multiplies everything drawn on it, so the same mark is a
+ * bold line on a thumbnail and a hairline on a scan — see `./scale`.
+ *
  * @param mark - the mark to weigh.
+ * @param unit - the figure's size multiple, 1 for a reference-sized figure.
  * @returns its stroke width in figure pixels.
  */
-export function strokeWidthOf(mark: AnnotationMark): number {
-  return STROKE_WIDTH * (mark.weight ?? 1)
+export function strokeWidthOf(mark: AnnotationMark, unit = 1): number {
+  return STROKE_WIDTH * (mark.weight ?? 1) * unit
 }
 
 /** Arrow head length, in figure pixels. */
@@ -45,8 +49,24 @@ const ARROW_HEAD = 14
 /** Half-angle of the arrow head, in radians. */
 const ARROW_SPREAD = Math.PI / 7
 
-/** Half-width of a `point` mark's pin head, in figure pixels. */
+/** Half-width of a `point` mark's pin head on a reference-sized figure. */
 export const POINT_RADIUS = 10
+
+/**
+ * Half-width of one pin's head, in figure pixels.
+ *
+ * A pin is a marker the reader compares against the line work, so it is sized like a
+ * stroke: by the figure's unit and by the mark's own weight. The weight is reused
+ * rather than given its own field because it already means "how big this mark is" to
+ * the reader, and one rail on the left is enough — a stroke and a pin are never the
+ * same mark, so the one number never has to mean two things at once.
+ * @param mark - the point mark.
+ * @param unit - the figure's size multiple.
+ * @returns its head's half-width in figure pixels.
+ */
+export function pinRadiusOf(mark: AnnotationMark, unit = 1): number {
+  return POINT_RADIUS * (mark.weight ?? 1) * unit
+}
 
 /**
  * How far a pin's head sits above its coordinate, as a multiple of its half-width.
@@ -144,13 +164,13 @@ function pointsBox(points: readonly FigurePoint[]): MarkBox | undefined {
  * @param points - the arrow's tail and tip.
  * @returns tail, tip and both barbs; the stored points alone when it is half drawn.
  */
-export function arrowBarbs(points: readonly FigurePoint[], weight = 1): readonly FigurePoint[] {
+export function arrowBarbs(points: readonly FigurePoint[], weight = 1, unit = 1): readonly FigurePoint[] {
   const [first, second] = points
   if (first === undefined || second === undefined) return points
   const angle = Math.atan2(second[1] - first[1], second[0] - first[0])
   // A thick pen draws a thick head: the barbs grow with the weight, so an arrow
   // stays one drawing rather than a fat shaft with a hairline tip.
-  const head = ARROW_HEAD * weight
+  const head = ARROW_HEAD * weight * unit
   const left: FigurePoint = [
     second[0] - head * Math.cos(angle - ARROW_SPREAD),
     second[1] - head * Math.sin(angle - ARROW_SPREAD),
@@ -238,10 +258,10 @@ export interface PinGeometry {
  * @param mark - the point mark.
  * @returns the marker's path, number centre and box, or undefined with no coordinate.
  */
-export function pinGeometry(mark: AnnotationMark): PinGeometry | undefined {
+export function pinGeometry(mark: AnnotationMark, unit = 1): PinGeometry | undefined {
   const tip = mark.points[0]
   if (tip === undefined) return undefined
-  const radius = POINT_RADIUS
+  const radius = pinRadiusOf(mark, unit)
   const lift = radius * PIN_LIFT
   const [tipX, tipY] = tip
   // Up by default; over when a head above the point would leave the picture.
@@ -275,8 +295,8 @@ export function pinGeometry(mark: AnnotationMark): PinGeometry | undefined {
  * @param mark - the point mark.
  * @returns path data, or undefined when the mark carries no coordinate.
  */
-export function pinPathData(mark: AnnotationMark): string | undefined {
-  return pinGeometry(mark)?.path
+export function pinPathData(mark: AnnotationMark, unit = 1): string | undefined {
+  return pinGeometry(mark, unit)?.path
 }
 
 /**
@@ -284,8 +304,8 @@ export function pinPathData(mark: AnnotationMark): string | undefined {
  * @param mark - the point mark.
  * @returns the number's centre, or undefined when the mark carries no coordinate.
  */
-export function pinNumberCentre(mark: AnnotationMark): FigurePoint | undefined {
-  return pinGeometry(mark)?.number
+export function pinNumberCentre(mark: AnnotationMark, unit = 1): FigurePoint | undefined {
+  return pinGeometry(mark, unit)?.number
 }
 
 /**
@@ -299,8 +319,8 @@ export function pinNumberCentre(mark: AnnotationMark): FigurePoint | undefined {
  * @param mark - the point mark.
  * @returns the pin's box, or undefined when the mark carries no point.
  */
-export function pointMarkBox(mark: AnnotationMark): MarkBox | undefined {
-  return pinGeometry(mark)?.box
+export function pointMarkBox(mark: AnnotationMark, unit = 1): MarkBox | undefined {
+  return pinGeometry(mark, unit)?.box
 }
 
 /** Whether a mark draws as a stroke (so the overlay can size its hit area). */
@@ -319,16 +339,16 @@ export function isStrokeKind(kind: MarkKind): boolean {
  * @param mark - the mark to measure.
  * @returns the box, or undefined when the mark carries no coordinate.
  */
-export function markOutline(mark: AnnotationMark): MarkBox | undefined {
-  if (mark.kind === 'point') return pointMarkBox(mark)
-  const geometry = mark.kind === 'arrow' ? arrowBarbs(mark.points, mark.weight ?? 1) : mark.points
+export function markOutline(mark: AnnotationMark, unit = 1): MarkBox | undefined {
+  if (mark.kind === 'point') return pointMarkBox(mark, unit)
+  const geometry = mark.kind === 'arrow' ? arrowBarbs(mark.points, mark.weight ?? 1, unit) : mark.points
   const straight = pointsBox(geometry)
   if (straight === undefined) return undefined
   // A turned mark covers the box its corners sweep, which is not the box the points
   // came in with; only the drawn extent says where the mark really reaches.
   const radians = markRadians(mark)
   const box = radians === 0 ? straight : turnedBox(geometry, straight, radians)
-  const grow = strokeWidthOf(mark) / 2
+  const grow = strokeWidthOf(mark, unit) / 2
   return { x: box.x - grow, y: box.y - grow, width: box.width + grow * 2, height: box.height + grow * 2 }
 }
 

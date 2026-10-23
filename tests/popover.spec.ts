@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DETAIL_HEIGHT, DETAIL_WIDTH, POPOVER_GAP, POPOVER_MARGIN,
-  placeAboveBar, placeCard, scaledBox, type PopoverBox,
+  measuredSize, placeAboveBar, placeCard, scaledBox, type PopoverBox,
 } from '../src/client/popover'
 
 /** A box, written the short way. */
@@ -38,6 +38,22 @@ describe('putting a figure box into the panel', () => {
   it('measures against the figure rather than the host when the figure has no width', () => {
     const at = scaledBox(box(0, 0, 5, 5), box(0, 0, 100, 50), box(0, 0, 400, 300), 0)
     expect(at).toEqual({ x: 0, y: 0, width: 5, height: 5 })
+  })
+})
+
+describe('the size a card is placed by', () => {
+  it('uses the card its own size once it has been laid out', () => {
+    // A comment pill grows with the sentence in it; placing by a one-line constant
+    // would push a long comment off the bottom of the panel.
+    expect(measuredSize({ offsetWidth: 300, offsetHeight: 96 }, { width: 300, height: 48 }))
+      .toEqual({ width: 300, height: 96 })
+  })
+
+  it('falls back to the estimate before the card has been measured', () => {
+    // First frame of a selection: the element exists but has no box yet.
+    expect(measuredSize(null, { width: 300, height: 48 })).toEqual({ width: 300, height: 48 })
+    expect(measuredSize({ offsetWidth: 0, offsetHeight: 0 }, { width: 300, height: 48 }))
+      .toEqual({ width: 300, height: 48 })
   })
 })
 

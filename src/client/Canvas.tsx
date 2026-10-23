@@ -9,6 +9,7 @@
  */
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor, MarkKind } from '../shared/annotation'
+import { WEIGHT_DEFAULT } from '../shared/annotation'
 import { anchorAtPoint } from './figure-dom'
 import {
   HANDLE_SIZE,
@@ -25,6 +26,7 @@ import {
   PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
   markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from './render'
+import { figureUnit } from './scale'
 
 /** The fields a handle drag can change on one mark. */
 export interface MarkPatch {
@@ -47,6 +49,20 @@ export interface MarkPatch {
 /** Tools the toolbar can activate. */
 export type Tool = 'select' | 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point'
 
+/**
+ * The `weight` field of a new mark, or nothing when it is the default.
+ *
+ * Absent means the default throughout this plugin, so writing `weight: 1` would put
+ * a field into every mark that says nothing — sidecars would grow a key for every
+ * mark ever drawn, and every comparison of two documents would see a difference
+ * where there is none.
+ * @param weight - the weight the next stroke is drawn at.
+ * @returns the field, or an empty object for the default.
+ */
+function weightField(weight: number): { weight?: number } {
+  return weight === WEIGHT_DEFAULT ? {} : { weight }
+}
+
 /** Hit width of an invisible selection stroke, in figure pixels. */
 const HIT_WIDTH = 14
 
@@ -58,10 +74,18 @@ const HANDLE_REACH = HANDLE_SIZE * 2.2
 
 /** Props of the drawing surface. */
 export interface CanvasProps {
-  /** Figure width in pixels. */
+  /** Width of the paper, in figure pixels: the figure plus anywhere marks reach. */
   readonly width: number
-  /** Figure height in pixels. */
+  /** Height of the paper, in figure pixels. */
   readonly height: number
+  /**
+   * Where figure coordinate `(0, 0)` sits on this paper.
+   *
+   * A mark drawn past the figure's top-left edge needs paper to sit on, so the
+   * surface grows around the drawing and the origin moves into it. Absent means the
+   * paper starts at the figure's own corner, which is the ordinary case.
+   */
+  readonly origin?: FigurePoint
   /** Committed marks, in draw order. */
   readonly marks: readonly AnnotationMark[]
   /** Active tool. */
@@ -145,6 +169,17 @@ export interface CanvasProps {
    */
   readonly onDrawn?: ((id: string) => void) | undefined
   /**
+   * The mark as it currently looks during a drag, and null once the drag is over.
+   *
+   * A gesture lives inside this component, so nothing outside it knows where the mark
+   * is mid-drag. Anything anchored to the mark — the comment pill — would sit where
+   * the mark *was* until the drag ended, which is the one moment the reader is most
+   * likely to be watching it. This reports the running geometry so the owner can keep
+   * its own furniture in step.
+   * @param mark - the mark mid-drag, or null when the drag has finished.
+   */
+  readonly onLiveEdit?: ((mark: AnnotationMark | null) => void) | undefined
+  /**
    * Each mark's number, when the marks on this surface are a slice of a longer list.
    *
    * A page of a PDF draws only its own marks, but the list the reader and the agent
@@ -209,7 +244,8 @@ interface PressEdit {
  */
 export function Canvas(props: CanvasProps): ReactNode {
   const { width, height, marks, tool, color, containerRef, anchoring } = props
-  const weight = props.weight ?? 1
+  const [originX, originY] = props.origin ?? [0, 0]
+  const weight = props.weight ?? WEIGHT_DEFAULT
   /**
    * Each mark's number, by id.
    *
@@ -218,6 +254,14 @@ export function Canvas(props: CanvasProps): ReactNode {
    * otherwise.
    */
   const numbers = new Map(marks.map((mark, index) => [mark.id, props.numbering?.get(mark.id) ?? index + 1]))
+  /**
+   * How big everything is drawn here, as a multiple of the base sizes.
+   *
+   * Derived from the surface rather than passed in: every mark on this canvas shares
+   * one figure, so one number decides the pen for all of them, and a caller that
+   * forgot to thread it through could not make a mark disagree with its hit area.
+   */
+  const unit = figureUnit(width, height)
   const [draft, setDraft] = useState<AnnotationMark | null>(null)
   const [press, setPress] = useState<Press | null>(null)
   const drawing = useRef(false)
@@ -268,8 +312,8 @@ export function Canvas(props: CanvasProps): ReactNode {
     const scaleX = rect.width === 0 ? 1 : width / rect.width
     const scaleY = rect.height === 0 ? 1 : height / rect.height
     return [
-      (event.clientX - rect.left) * scaleX,
-      (event.clientY - rect.top) * scaleY,
+      (event.clientX - rect.left) * scaleX - originX,
+      (event.clientY - rect.top) * scaleY - originY,
     ]
   }
 
@@ -467,6 +511,9 @@ export function Canvas(props: CanvasProps): ReactNode {
         kind: 'point',
         color,
         points: [point],
+        // A pin is sized by this same number, so the rail the reader set before
+        // placing it decides how big the pin lands.
+        ...weightField(weight),
         ...(anchor === undefined ? {} : { anchor }),
       }
       props.onAdd(mark)
@@ -482,7 +529,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     // A drag-shaped mark needs its two corners from the start; a freehand stroke
     // starts as the single sample it is, so no duplicate point enters the path.
     const seed: FigurePoint[] = tool === 'pen' ? [point] : [point, point]
-    setDraft({ id: nextMarkId(), kind: tool, color, points: seed, weight })
+    setDraft({ id: nextMarkId(), kind: tool, color, points: seed, ...weightField(weight) })
   }
 
   const move = (event: ReactPointerEvent<SVGSVGElement>): void => {
@@ -506,7 +553,17 @@ export function Canvas(props: CanvasProps): ReactNode {
       // The modifier is read before the edit is computed, so a snap applies to
       // this move rather than to the one after it.
       const held: Press = { ...press, snap: event.shiftKey }
-      setPress({ ...held, edit: editFor(held, point, dx, dy) })
+      const edit = editFor(held, point, dx, dy)
+      setPress({ ...held, edit })
+      // The mark as it now looks, so a card beside it can follow the hand rather
+      // than wait for the release.
+      const base = props.marks.find(candidate => candidate.id === press.id)
+      /* v8 ignore next -- a press always begins on a mark that is still in the list. */
+      if (base === undefined) return
+      const live: { -readonly [K in keyof AnnotationMark]: AnnotationMark[K] } = { ...base }
+      if (edit.points !== undefined) live.points = edit.points
+      if (edit.rotation !== undefined) live.rotation = edit.rotation
+      props.onLiveEdit?.(live)
       return
     }
     if (!drawing.current || draft === null) return
@@ -529,6 +586,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     if (press !== null) {
       const done = press.edit
       setPress(null)
+      props.onLiveEdit?.(null)
       // A press that never moved is the selection the press itself performed.
       if (done === null) return
       // A move is a statement about what the mark points at, so it re-anchors.
@@ -632,16 +690,16 @@ export function Canvas(props: CanvasProps): ReactNode {
    * compared to a washed-out sticker.
    */
   const renderPoint = (mark: AnnotationMark): ReactNode => {
-    const pin = pinPathData(mark)
-    const centre = pinNumberCentre(mark)
+    const pin = pinPathData(mark, unit)
+    const centre = pinNumberCentre(mark, unit)
     /* v8 ignore next -- a point mark carries exactly the one coordinate it was placed at. */
     if (pin === undefined || centre === undefined) return null
     const number = numbers.get(mark.id)
     return (
       <>
-        <path d={pin} fill="#ffffff" stroke="#ffffff" strokeWidth={4.5} strokeLinejoin="round" />
-        <path d={pin} fill={mark.color} stroke="#ffffff" strokeWidth={1.5} strokeLinejoin="round" />
-        <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={PIN_FONT_SIZE}
+        <path d={pin} fill="#ffffff" stroke="#ffffff" strokeWidth={4.5 * unit} strokeLinejoin="round" />
+        <path d={pin} fill={mark.color} stroke="#ffffff" strokeWidth={1.5 * unit} strokeLinejoin="round" />
+        <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={PIN_FONT_SIZE * unit}
           fontWeight={700} fill={PIN_NUMBER_COLOR} textAnchor="middle" dominantBaseline="central">
           {number}
         </text>
@@ -658,13 +716,14 @@ export function Canvas(props: CanvasProps): ReactNode {
    * handles that would do nothing.
    */
   const renderPointFrame = (shown: AnnotationMark): ReactNode => {
-    const box = pointMarkBox(shown)
+    const box = pointMarkBox(shown, unit)
     /* v8 ignore next -- a point mark carries exactly the one coordinate it was placed at. */
     if (box === undefined) return null
     return (
       <rect
-        x={box.x - 3} y={box.y - 3} width={box.width + 6} height={box.height + 6} rx={3}
-        fill="none" stroke="#4c8dff" strokeWidth={1} strokeDasharray="3 2"
+        x={box.x - 3 * unit} y={box.y - 3 * unit} width={box.width + 6 * unit}
+        height={box.height + 6 * unit} rx={3 * unit}
+        fill="none" stroke="#4c8dff" strokeWidth={unit} strokeDasharray={`${3 * unit} ${2 * unit}`}
         style={{ pointerEvents: 'none' }}
       />
     )
@@ -678,7 +737,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     const selected = props.selectedId === mark.id
     const transform = markTransform(shown)
     const isPoint = mark.kind === 'point'
-    const pin = isPoint ? pinPathData(shown) : undefined
+    const pin = isPoint ? pinPathData(shown, unit) : undefined
     /**
      * What a press on the drawn shape starts.
      *
@@ -687,7 +746,7 @@ export function Canvas(props: CanvasProps): ReactNode {
      * other kinds draw along their path.
      */
     const hitArea = pin === undefined || isDraft ? null : (
-      <path d={pin} fill="transparent" stroke="transparent" strokeWidth={HIT_WIDTH}
+      <path d={pin} fill="transparent" stroke="transparent" strokeWidth={HIT_WIDTH * unit}
         style={{ pointerEvents: 'all', cursor: 'pointer' }}
         onPointerDown={(event) => { if (!beginHandle(mark, event)) beginGesture(mark, event) }}
         onDoubleClick={(event) => { event.stopPropagation(); props.onEdit(mark.id) }} />
@@ -697,12 +756,12 @@ export function Canvas(props: CanvasProps): ReactNode {
         {isPoint ? renderPoint(shown) : null}
         {path === undefined ? null : (
           <g transform={transform}>
-            <path d={path} fill="none" stroke="#ffffff" strokeWidth={strokeWidthOf(shown) + 2.5}
+            <path d={path} fill="none" stroke="#ffffff" strokeWidth={strokeWidthOf(shown, unit) + 2.5 * unit}
               strokeLinecap="round" strokeLinejoin="round" />
-            <path d={path} fill="none" stroke={shown.color} strokeWidth={strokeWidthOf(shown)}
+            <path d={path} fill="none" stroke={shown.color} strokeWidth={strokeWidthOf(shown, unit)}
               strokeLinecap="round" strokeLinejoin="round" />
             {isDraft ? null : (
-              <path d={path} fill="none" stroke="transparent" strokeWidth={HIT_WIDTH}
+              <path d={path} fill="none" stroke="transparent" strokeWidth={HIT_WIDTH * unit}
                 style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
                 onPointerDown={(event) => { if (!beginHandle(mark, event)) beginGesture(mark, event) }}
                 onDoubleClick={(event) => { event.stopPropagation(); props.onEdit(mark.id) }} />
@@ -720,6 +779,7 @@ export function Canvas(props: CanvasProps): ReactNode {
     <svg
       className="da-overlay"
       data-da-overlay=""
+      style={{ left: originX, top: originY }}
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
@@ -749,8 +809,10 @@ export function Canvas(props: CanvasProps): ReactNode {
         props.onSelect(null)
       }}
     >
-      {marks.map(mark => renderMark(mark, false))}
-      {draft === null ? null : renderMark(draft, true)}
+      <g transform={`translate(${originX} ${originY})`}>
+        {marks.map(mark => renderMark(mark, false))}
+        {draft === null ? null : renderMark(draft, true)}
+      </g>
     </svg>
   )
 }

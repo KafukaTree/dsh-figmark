@@ -14,7 +14,8 @@ import {
   pinNumberCentre,
   pointMarkBox,
 } from '../src/client/render'
-import { bytesToDataUrl, composeReviewSvg, rasterizePng } from '../src/client/export'
+import { MIN_UNIT } from '../src/client/scale'
+import { bytesToDataUrl, composeReviewSvg, reviewSize, rasterizePng } from '../src/client/export'
 import { anchorAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '../src/client/figure-dom'
 import { defined, installDom, stubRasterizer, stubRect } from './dom'
 
@@ -178,8 +179,24 @@ describe('review image', () => {
     expect(svg).toContain('fill="#e03131"')
     // The number is white, because that is what reads on every colour in the palette.
     expect(svg).toContain('fill="#ffffff"')
-    expect(svg).toContain(`font-size="${PIN_FONT_SIZE}"`)
+    // A 400px-wide figure is below the reference size, so every drawn size — font
+    // included — is held at the smallest multiple rather than shrunk to nothing.
+    expect(svg).toContain(`font-size="${PIN_FONT_SIZE * MIN_UNIT}"`)
     expect(svg).toContain('>1</text>')
+  })
+
+  it('sizes the reviewed picture to the paper the marks need', () => {
+    // A box drawn past the edge of the figure makes the picture wider than the
+    // figure. A caller that rasterized at the figure's own size would crop away
+    // exactly the marks that made the paper grow.
+    const layer = { kind: 'raster' as const, dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 }
+    const inside = reviewSize(layer, [{ id: 'a', kind: 'rect', color: '#e03131', points: [[10, 10], [100, 80]] }])
+    expect(inside).toEqual({ width: 400, height: 300 })
+    const outside = reviewSize(layer, [{ id: 'b', kind: 'rect', color: '#e03131', points: [[-60, 10], [100, 80]] }])
+    expect(outside.width).toBeGreaterThan(400)
+    // And the SVG it describes agrees with it, which is what makes the pair usable.
+    const svg = composeReviewSvg(layer, [{ id: 'b', kind: 'rect', color: '#e03131', points: [[-60, 10], [100, 80]] }])
+    expect(svg).toContain(`width="${outside.width}" height="${outside.height}"`)
   })
 
   it('numbers a pin on the delivered picture, and leaves stroke marks unnumbered', () => {

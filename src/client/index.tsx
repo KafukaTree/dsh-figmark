@@ -19,6 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { AnnotatorBody } from './AnnotatorBody'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from './autosave'
+import { figureUnit } from './scale'
 import type { AnnotatorInjected } from './AnnotatorBody'
 import type { ComposerLike } from './composer'
 import { createDocumentSeat } from './document-seat'
@@ -148,6 +149,7 @@ export function apply(ctx: Context): void {
       createAutosave,
       annotationSignature,
       autosaveDelayMs: AUTOSAVE_DELAY_MS,
+      figureUnit,
       seat: createDocumentSeat({
         sessions: ctx.get('sessions') as SessionsLike | undefined,
         conversation: ctx.get('conversation') as ComposerLike | undefined,

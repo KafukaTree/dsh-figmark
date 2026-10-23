@@ -52,39 +52,53 @@ export const STYLES = `
 .da-palette .da-tool .da-tool-icon{height:auto}
 .da-palette .da-tool .da-tool-icon svg{width:16px;height:16px;stroke-width:1.9}
 
-/* --- the weight rail ----------------------------------------------------- */
-/* A vertical rail along the left edge of the figure. Idle it is a hairline: the
-   whole control is 6px wide, so it reads as a rule at the edge of the drawing
-   rather than as a panel competing with it. Crossing it opens it out to a track
-   with a knob, which is where the width can be read and dragged. A horizontal
-   range input is rotated upright inside the pill, because a range is the one
-   control the browser already knows how to drag with every pointer. */
+/* --- the size rail ------------------------------------------------------- */
+/* A vertical rail along the left edge of the figure: how heavy the pen is, and how
+   big a point mark's pin is. Idle it is a hairline, so it costs the figure nothing;
+   crossing it opens it out to a track. The track is *tapered* — a thin line at the
+   bottom and a broad one at the top — because the control's whole subject is
+   thickness, and a wedge says which way is heavier without reading a number.
+   A horizontal range input is rotated upright inside the pill: it keeps dragging,
+   arrow keys, the step and the accessible name, while the rail above does the
+   drawing. The drawn parts never take the pointer, or grabbing the knob would grab
+   the knob instead of the slider. */
 .da-weight{position:absolute;z-index:7;left:6px;top:50%;transform:translateY(-50%);
-  display:flex;align-items:center;justify-content:center;width:6px;height:132px;
+  display:flex;align-items:center;justify-content:center;width:7px;height:200px;
   border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.22));
   cursor:ns-resize;transition:width .16s ease,background .16s ease,box-shadow .16s ease}
-.da-weight:hover,.da-weight:focus-within{width:26px;background:var(--dsw-alias-bg-layer-2,#fff);
+.da-weight:hover,.da-weight:focus-within{width:30px;background:var(--dsw-alias-bg-layer-2,#fff);
   box-shadow:0 5px 18px rgba(20,40,80,.16),0 0 0 0.5px var(--dsw-alias-border-l2,currentColor)}
-/* The track: a hairline down the middle of the pill, only wide enough to see. */
-.da-weight::before{content:"";position:absolute;left:50%;top:11px;bottom:11px;width:2px;
-  transform:translateX(-50%);border-radius:1px;background:var(--dsw-alias-border-l3,rgba(127,127,127,.34))}
-/* The filled part of the track, drawn from the bottom up. */
-.da-weight-fill{position:absolute;left:50%;bottom:11px;width:2px;transform:translateX(-50%);
-  border-radius:1px;background:var(--dsw-alias-brand-primary,#176df2);opacity:0;transition:opacity .16s ease}
+/* The wedge: a hairline at the bottom, the heaviest width at the top. Drawn as a
+   clipped gradient box so it costs one element and no SVG. */
+.da-weight::before{content:"";position:absolute;left:50%;top:14px;bottom:14px;width:11px;
+  transform:translateX(-50%);opacity:0;
+  background:linear-gradient(to top,var(--dsw-alias-border-l3,rgba(127,127,127,.34)),
+    var(--dsw-alias-border-l4,rgba(127,127,127,.5)));
+  clip-path:polygon(calc(50% - 0.5px) 100%,calc(50% + 0.5px) 100%,
+    calc(50% + 5.5px) 0,calc(50% - 5.5px) 0);
+  transition:opacity .16s ease}
+.da-weight:hover::before,.da-weight:focus-within::before{opacity:1}
+/* The part already chosen, drawn from the bottom up in the brand colour. */
+.da-weight-fill{position:absolute;left:50%;bottom:14px;width:11px;transform:translateX(-50%);
+  opacity:0;pointer-events:none;transition:opacity .16s ease;
+  background:var(--dsw-alias-brand-primary,#176df2);
+  clip-path:polygon(calc(50% - 0.5px) 100%,calc(50% + 0.5px) 100%,
+    calc(50% + 5.5px) 0,calc(50% - 5.5px) 0)}
 .da-weight:hover .da-weight-fill,.da-weight:focus-within .da-weight-fill{opacity:1}
-/* The knob sits on the value. It is the only part that shows at rest, so the rail
-   reads as a slider waiting to be touched rather than a bare rule. */
-.da-weight-knob{position:absolute;left:50%;width:9px;height:9px;border-radius:50%;
-  transform:translateX(-50%);background:var(--dsw-alias-bg-layer-2,#fff);
+/* The knob sits on the value: the only part that shows at rest, so the rail reads as
+   a slider waiting to be touched rather than a bare rule. */
+.da-weight-knob{position:absolute;left:50%;width:11px;height:11px;border-radius:50%;
+  transform:translateX(-50%);pointer-events:none;
+  background:var(--dsw-alias-bg-layer-2,#fff);
   box-shadow:0 1px 4px rgba(20,40,80,.32),0 0 0 1px var(--dsw-alias-border-l3,currentColor);
   transition:width .16s ease,height .16s ease,background .16s ease}
 .da-weight:hover .da-weight-knob,.da-weight:focus-within .da-weight-knob{
-  width:13px;height:13px;background:var(--dsw-alias-brand-primary,#176df2);
+  width:15px;height:15px;background:var(--dsw-alias-brand-primary,#176df2);
   box-shadow:0 2px 7px rgba(20,40,80,.34)}
-/* The browser's own range, rotated upright and made transparent: it keeps the
-   dragging, the arrow keys, the step and the accessible name, while the rail above
-   does the drawing. */
-.da-weight-input{position:absolute;left:50%;top:50%;width:112px;height:26px;margin:0;opacity:0;
+/* The browser's own range, rotated upright and made transparent. It spans the whole
+   rail so a press anywhere on it lands on the slider — including on the knob, which
+   is why the knob is pointer-transparent. */
+.da-weight-input{position:absolute;left:50%;top:50%;width:200px;height:30px;margin:0;opacity:0;
   transform:translate(-50%,-50%) rotate(-90deg);cursor:ns-resize;appearance:none;background:transparent}
 
 /* --- the floating bar ---------------------------------------------------- */
@@ -175,6 +189,10 @@ export const STYLES = `
    needs to see where the drawing stops. */
 .da-stage{position:relative;display:flex;align-items:safe center;justify-content:safe center;flex:1 1 auto;overflow:auto;min-height:0;padding:14px;background:var(--dsw-alias-bg-document-preview,transparent)}
 .da-surface{position:relative;flex:0 0 auto;margin:0;transform-origin:top left;background:#fff;border-radius:4px;box-shadow:var(--dsw-elevation-prominent,0 1px 3px rgba(0,0,0,.14),0 8px 24px rgba(0,0,0,.08))}
+/* The paper: the figure plus the margin a mark may have needed. It is the white sheet
+   the drawing sits on, so a mark that reaches past the figure lands on paper rather
+   than on the panel behind it. */
+.da-paper{background:#fff}
 .da-figure{display:block;user-select:none;-webkit-user-drag:none}
 /* The table is a thing you can push. The hand only shows under the tools that
    leave a drag free to move the view: under a drawing tool the same drag draws. */
@@ -185,7 +203,7 @@ export const STYLES = `
 /* The rendered document takes the figure's place; the overlay above it owns every
    pointer event, which is also what keeps a link inside it from navigating. */
 .da-html{display:block;border:0;background:#fff;pointer-events:none}
-.da-overlay{position:absolute;inset:0;touch-action:none}
+.da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-mode="view"]{pointer-events:none}
 .da-overlay[data-tool="select"]{cursor:default}
 .da-overlay:not([data-tool="select"]){cursor:crosshair}
@@ -254,9 +272,14 @@ export const STYLES = `
   box-shadow:0 8px 26px rgba(20,40,80,.2),0 0 0 1px rgba(20,40,80,.04)}
 .da-float .da-comment{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;background:transparent;
   color:inherit;font:inherit;font-size:13px;line-height:1.55;padding:7px 10px;resize:none;
-  /* One line until the sentence needs more: the pill is a place to type, not a
-     panel, and the rule for the record cards' textareas sets a 74px floor. */
-  min-height:0;height:33px;max-height:120px;overflow-y:auto;outline:none;field-sizing:content}
+  /* One line until the sentence needs more, then as many as it takes: the pill is a
+     place to type, and a sentence read through a slot two lines tall is a sentence
+     the reader has to scroll to finish. The rule for the record cards' textareas sets
+     a 74px floor, hence the explicit reset. The scrollbar is hidden because it is not
+     a scroll view — wheel and keys still work once the sentence outgrows the pane. */
+  min-height:0;height:auto;max-height:min(180px,42vh);overflow-y:auto;outline:none;
+  field-sizing:content;scrollbar-width:none}
+.da-float .da-comment::-webkit-scrollbar{width:0;height:0}
 .da-float .da-comment::placeholder{color:var(--dsw-alias-label-tertiary,currentColor);opacity:.85}
 /* The hand-off appears only once the field says something: an empty pill is a
    place to type, not a decision to make. */

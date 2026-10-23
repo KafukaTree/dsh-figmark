@@ -12,7 +12,7 @@
  * @module dsh-figmark/client/document-seat
  */
 import { ANNOTATION_VERSION, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
-import { composeReviewSvg, rasterizePng, reviewScale } from './export'
+import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { deliverToComposer, type ComposerLike } from './composer'
 import { deleteAnnotation, loadAnnotation, saveAnnotation } from './host-api'
 import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
@@ -260,9 +260,10 @@ async function renderPageImages(
     const layer = { kind: 'raster' as const, dataUrl: page.dataUrl, width: page.width, height: page.height }
     const marks = document.marks.filter(mark => mark.page === page.page)
     const svg = composeReviewSvg(layer, marks, numbering)
+    const paper = reviewSize(layer, marks)
     images.push({
       page: page.page,
-      image: await rasterizePng(svg, page.width, page.height, reviewScale(page.width, page.height)),
+      image: await rasterizePng(svg, paper.width, paper.height, reviewScale(paper.width, paper.height)),
     })
   }
   return images

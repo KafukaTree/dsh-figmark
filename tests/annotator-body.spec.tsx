@@ -12,6 +12,7 @@ import type { SessionsLike } from '../src/client/session'
 import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
 import { PINCH_SETTLE_DELAY_MS } from '../src/client/zoom'
 import { readPreferences } from '../src/client/preferences'
+import { STROKE_WIDTH } from '../src/client/render'
 import { defined, stubRasterizer, stubRect } from './dom'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="10" y="20">102</text></svg>'
@@ -1517,50 +1518,72 @@ describe('the weight of the pen', () => {
     document.querySelector('[data-da-mark] path[stroke]:not([stroke="#ffffff"]):not([stroke="transparent"])'),
   ).getAttribute('stroke-width')
 
+  /**
+   * The size multiple the fixture's figure is drawn at.
+   *
+   * A 400px figure is below the reference edge, so every stroke is held at the
+   * smallest multiple rather than shrinking to a hairline. The numbers in these
+   * tests are the drawn width, so they carry the multiple.
+   */
+  const UNIT = 0.75
+
+  /** The rail, which only exists once there is something for it to size. */
+  const rail = (): HTMLInputElement => defined(
+    document.querySelector('.da-weight-input'),
+  ) as HTMLInputElement
+
   it('draws a new mark at the weight the rail is set to', async () => {
-    mounted = await svgBody()
-    // Nothing is selected on a fresh surface, so the rail is arming the next stroke.
-    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
-    await type(rail, '3')
+    // The rail sizes the mark being worked on, so with nothing selected it waits for
+    // a drawing tool: it stands down under `select`, where there is no next stroke.
+    mounted = await svgBody(undefined, { mode: 'annotate' })
+    await click(button(document.body, zh.toolArrow))
+    await type(rail(), '3')
     await drawArrow(document.body)
-    expect(paintedWidth()).toBe('7.5')
+    expect(paintedWidth()).toBe(String(STROKE_WIDTH * 3 * UNIT))
   })
 
   it('repaints the selected mark instead of the next one, and takes the heavier pen back with undo', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
-    await type(rail, '2')
-    expect(paintedWidth()).toBe('5')
+    await type(rail(), '2')
+    expect(paintedWidth()).toBe(String(STROKE_WIDTH * 2 * UNIT))
     await click(button(document.body, zh.undo))
-    expect(paintedWidth()).toBe('2.5')
+    expect(paintedWidth()).toBe(String(STROKE_WIDTH * UNIT))
   })
 
   it('records no undo step for the weight a mark already wears', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
     // The fixture's mark carries no weight, which is the default pen.
-    await type(rail, '1')
+    await type(rail(), '1')
     expect(button(document.body, zh.undo).disabled).toBe(true)
   })
 
-  it('stands the rail down for a point, which has no stroke to weigh', async () => {
+  it('offers the same rail for a point, where it sizes the pin rather than the pen', async () => {
+    // One control for one idea: how big the selected mark is. A pin has no stroke to
+    // weigh, so the rail keeps its place and changes its subject.
     mounted = await svgBody({ annotation: pointOnly })
     await selectFirstMark(document.body)
+    expect(defined(document.querySelector('.da-weight')).getAttribute('title')).toBe(zh.pinSize)
+  })
+
+  it('stands the rail down when nothing is selected and no pen is out', async () => {
+    // The feature the rail is for: it must not sit on the figure when there is no
+    // decision to make, which is the whole point of a control that costs no room.
+    mounted = await svgBody({ annotation: saved }, { mode: 'annotate' })
     expect(document.querySelector('.da-weight')).toBeNull()
   })
 
   it('remembers the weight across a reload', async () => {
-    const first = await svgBody()
-    mounted = first
-    const rail = defined(document.querySelector('.da-weight-input')) as HTMLInputElement
-    await type(rail, '2.5')
-    // A fresh mount is a fresh reader: nothing is selected in it, so the rail arms
-    // the next stroke rather than repainting a mark.
+    mounted = await svgBody(undefined, { mode: 'annotate' })
+    await click(button(document.body, zh.toolArrow))
+    await type(rail(), '2.5')
+    // A fresh mount is a fresh reader: the pen it left behind is the pen it starts
+    // with, so the reader does not re-set the same weight on every figure.
     mounted?.root.unmount()
-    mounted = await svgBody()
-    expect((defined(document.querySelector('.da-weight-input')) as HTMLInputElement).value).toBe('2.5')
+    mounted = await svgBody(undefined, { mode: 'annotate' })
+    await click(button(document.body, zh.toolArrow))
+    expect(rail().value).toBe('2.5')
   })
 })
 

@@ -43,6 +43,13 @@ export interface PageAnnotateInput {
   readonly transform: readonly number[]
   /** Marks drawn on this page, in page units. */
   readonly marks: readonly AnnotationMark[]
+  /**
+   * The page's size multiple, so the pen is the one the reader saw on screen.
+   *
+   * Absent means 1, which is what every exported page looked like before the size
+   * of a mark followed the size of the figure.
+   */
+  readonly unit?: number
 }
 
 /** Stroke width of every mark, matching the overlay's own (`src/client/render.ts`). */
@@ -262,7 +269,7 @@ function turnedRing(
  * @param transform - `[a b c d e f]`, user space → page units.
  * @returns the placed geometry.
  */
-function place(mark: AnnotationMark, transform: readonly number[]): PlacedMark {
+function place(mark: AnnotationMark, transform: readonly number[], unit: number): PlacedMark {
   const scale = unitScale(transform)
   const radians = ((mark.rotation ?? 0) * Math.PI) / 180
   const box = pointsBox(mark.points)
@@ -279,7 +286,7 @@ function place(mark: AnnotationMark, transform: readonly number[]): PlacedMark {
   }
   // The weight is a multiple of the same base width the overlay uses, so a mark
   // exported to PDF keeps the pen the reader drew it with.
-  const weight = mark.weight ?? 1
+  const weight = (mark.weight ?? 1) * unit
   return {
     points: points.map(point => toUserSpace(transform, point)),
     width: (STROKE_WIDTH * weight) / scale,
@@ -392,15 +399,16 @@ function strokeContent(mark: AnnotationMark, placed: PlacedMark, rect: UserRect)
  * @param rect - the box the appearance is drawn in.
  * @returns the content stream operators.
  */
-function pointContent(mark: AnnotationMark, placed: PlacedMark, rect: UserRect): string {
+function pointContent(mark: AnnotationMark, placed: PlacedMark, rect: UserRect, unit: number): string {
   const point = placed.points[0]
   /* v8 ignore next -- a point mark carries exactly the one coordinate it was placed at. */
   if (point === undefined) return ''
   const [x, y] = [point[0] - rect.x, point[1] - rect.y]
   // The radii are page-unit values, so a point stays the same on-screen size as
   // the strokes around it whatever the page's own scale is.
-  const radius = POINT_RADIUS / Math.max(placed.width / STROKE_WIDTH, 0.0001)
-  const dot = POINT_DOT_RADIUS / Math.max(placed.width / STROKE_WIDTH, 0.0001)
+  const base = Math.max(placed.width / (STROKE_WIDTH * unit), 0.0001)
+  const radius = POINT_RADIUS / base
+  const dot = POINT_DOT_RADIUS / base
   const ring = ellipsePath(x, y, radius, radius)
   const centre = ellipsePath(x, y, dot, dot)
   return `${colorOperators(mark.color, 'RG')} ${num(placed.width)} w 1 J ${ring} S`
@@ -455,8 +463,9 @@ function appearance(
   mark: AnnotationMark,
   placed: PlacedMark,
   rect: UserRect,
+  unit: number,
 ): PDFRef | undefined {
-  const content = mark.kind === 'point' ? pointContent(mark, placed, rect) : strokeContent(mark, placed, rect)
+  const content = mark.kind === 'point' ? pointContent(mark, placed, rect, unit) : strokeContent(mark, placed, rect)
   if (content === '') return undefined
   const dictionary = PDFDict.withContext(context)
   dictionary.set(PDFName.of('Type'), PDFName.of('XObject'))
@@ -497,8 +506,9 @@ function annotation(
   context: PDFContext,
   mark: AnnotationMark,
   transform: readonly number[],
+  unit: number,
 ): PDFDict {
-  const placed = place(mark, transform)
+  const placed = place(mark, transform, unit)
   const anchor = mark.points[0]
   if (anchor === undefined || placed.points[0] === undefined) {
     throw new Error('an annotation mark needs at least one coordinate pair')
@@ -506,7 +516,7 @@ function annotation(
   // A point mark's box is the ring drawn around it — there is no geometry of its
   // own to measure, so the box is padded out from that one coordinate.
   const rect = boundsOf(drawnPoints(mark, placed), placed.width * 2)
-  const box = mark.kind === 'point' ? boundsOf(placed.points, POINT_RADIUS * 2) : rect
+  const box = mark.kind === 'point' ? boundsOf(placed.points, POINT_RADIUS * unit * 2) : rect
   const dictionary = PDFDict.withContext(context)
   dictionary.set(PDFName.of('Type'), PDFName.of('Annot'))
   dictionary.set(PDFName.of('Subtype'), PDFName.of(annotationSubtype(mark)))
@@ -542,7 +552,7 @@ function annotation(
       dictionary.set(PDFName.of('LE'), endings)
     }
   }
-  const stream = appearance(context, mark, placed, box)
+  const stream = appearance(context, mark, placed, box, unit)
   if (stream !== undefined) {
     const streams = PDFDict.withContext(context)
     streams.set(PDFName.of('N'), stream)
@@ -598,7 +608,8 @@ export async function annotatePdf(bytes: Uint8Array, pages: readonly PageAnnotat
     if (input.marks.length === 0) continue
     const annots = pageAnnots(document.context, page)
     for (const mark of input.marks) {
-      annots.push(document.context.register(annotation(document.context, mark, input.transform)))
+      const unit = input.unit ?? 1
+      annots.push(document.context.register(annotation(document.context, mark, input.transform, unit)))
     }
   }
   return await document.save()

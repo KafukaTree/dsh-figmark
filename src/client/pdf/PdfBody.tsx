@@ -43,6 +43,14 @@ export interface PdfBodyInjected {
   /** How long the writer waits after the last edit. */
   readonly autosaveDelayMs: number
   /**
+   * The size multiple a page of this size draws its marks at.
+   *
+   * Injected for the same reason the writer is: this module must not hold a runtime
+   * reference into the entry bundle, or the two would be split into a shared chunk
+   * the browser factory cannot load.
+   */
+  readonly figureUnit: (width: number, height: number) => number
+  /**
    * The size and visibility a saved document records.
    *
    * Injected for the same reason the writer is: this module must not hold a runtime
@@ -477,7 +485,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     setStatus({ tone: 'info', text: copy(target === 'agent' ? 'sending' : 'composing') })
     try {
       const pages = markedPages(marks)
-      const annotatedPdf = await annotatePdf(bytes, await annotateInputs(pdf, pages))
+      const annotatedPdf = await annotatePdf(bytes, await annotateInputs(pdf, pages, props.figureUnit))
       const saved = await seats.save(address, input, annotatedPdf)
       autosave.cancel()
       writtenSignature.current = signature(input)
@@ -602,11 +610,22 @@ async function renderReviewPage(pdf: PdfDocument, page: number): Promise<PageBit
  * @param pages - the marked pages.
  * @returns one input per page, each with its marks and its user-space transform.
  */
-async function annotateInputs(pdf: PdfDocument, pages: readonly MarkedPage[]): Promise<PageAnnotateInput[]> {
+async function annotateInputs(
+  pdf: PdfDocument,
+  pages: readonly MarkedPage[],
+  unitOf: (width: number, height: number) => number,
+): Promise<PageAnnotateInput[]> {
   const inputs: PageAnnotateInput[] = []
   for (const entry of pages) {
     const size = await pdf.size(entry.page)
-    inputs.push({ page: entry.page, transform: size.transform, marks: entry.marks })
+    // The page's own size decides the pen, exactly as the figure's does on screen:
+    // a 4000px-wide page needs a heavier stroke than a 300px one to read the same.
+    inputs.push({
+      page: entry.page,
+      transform: size.transform,
+      marks: entry.marks,
+      unit: unitOf(size.width, size.height),
+    })
   }
   return inputs
 }

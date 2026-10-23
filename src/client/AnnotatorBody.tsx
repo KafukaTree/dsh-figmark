@@ -25,7 +25,7 @@ import {
 import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
 import { deliverToComposer } from './composer'
-import { composeReviewSvg, rasterizePng, bytesToDataUrl, type FigureLayer } from './export'
+import { composeReviewSvg, rasterizePng, bytesToDataUrl, reviewSize, type FigureLayer } from './export'
 import { figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from './figure-dom'
 import { RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
@@ -36,8 +36,13 @@ import { draggedMarks } from './mark-geometry'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
 import { PINCH_SETTLE_DELAY_MS, anchoredScroll, clampZoom, wheelZoomFactor } from './zoom'
-import { placeAboveBar, placeCard, scaledBox, type RecordPlacement } from './popover'
+import {
+  DETAIL_HEIGHT, DETAIL_WIDTH, measuredSize, placeAboveBar, placeCard, scaledBox,
+  type RecordPlacement,
+} from './popover'
 import { markOutline } from './render'
+import { plotBounds } from './plot'
+import { figureUnit } from './scale'
 
 export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, SurfaceDraft, Translate, TranslateVars } from './annotator-contract'
 
@@ -86,6 +91,15 @@ const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: 'pen', label: 'toolPen' },
   { tool: 'point', label: 'toolPoint' },
 ]
+
+/**
+ * The tools that draw something with a size the rail can set.
+ *
+ * `select` is not among them: it draws nothing, so with it armed and no mark
+ * selected the rail has no subject. `point` is, because a pin is sized by the same
+ * number — the rail asks "how big is this mark" either way.
+ */
+const WEIGHT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['arrow', 'rect', 'ellipse', 'pen', 'point'])
 
 /** The copy key naming the shape each kind of mark is, for the list's second line. */
 const TOOL_COPY: Record<AnnotationMark['kind'], string> = {
@@ -399,6 +413,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const [detailAt, setDetailAt] = useState<{ readonly left: number; readonly top: number } | null>(null)
   /**
+   * The selected mark as a drag is currently shaping it.
+   *
+   * Kept beside the stored marks rather than in them: the gesture is not committed
+   * until it is released, so writing it into the list would make every frame an
+   * undoable edit. It exists only so the pill can follow the hand.
+   */
+  const [liveMark, setLiveMark] = useState<AnnotationMark | null>(null)
+  /**
    * Shut the style panel when the reader picks up a tool.
    *
    * Arming a tool is the moment the panel has done its job; leaving it open over
@@ -575,6 +597,23 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     if (figure.kind === 'html') return { width: figure.width, height: htmlHeight }
     return rasterSize
   }, [figure, htmlHeight, rasterSize])
+  /**
+   * How big everything drawn is, as a multiple of the base sizes.
+   *
+   * One number for the whole surface: the pen, the pins and the review image all
+   * have to agree, and a stroke is only bold or thin relative to the figure it sits
+   * on. A 4000px scan and a 300px thumbnail get the same-looking mark this way.
+   */
+  const unit = size === null ? 1 : figureUnit(size.width, size.height)
+  /**
+   * The paper the drawing needs: the figure, plus anywhere the marks reach past it.
+   *
+   * A reader boxing the margin a plot clips, or flagging a spot just outside the
+   * axes, is drawing something the figure does not contain. The paper grows to hold
+   * it rather than the mark being clipped — and because the surface is white, a mark
+   * out there lands on paper instead of on nothing.
+   */
+  const paper = size === null ? null : plotBounds(size.width, size.height, marks, unit)
 
   /**
    * Everything a background write needs, read at write time.
@@ -802,28 +841,36 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const root = rootRef.current
     const host = figureRef.current
     const mark = marks.find(candidate => candidate.id === selectedId)
-    const box = mark === undefined ? undefined : markOutline(mark)
+    const drawn = liveMark !== null && liveMark.id === selectedId ? liveMark : mark
+    const box = drawn === undefined ? undefined : markOutline(drawn, unit)
     if (root === null || host === null || box === undefined || size === null) {
       setDetailAt(null)
       return
     }
     const panel = root.getBoundingClientRect()
-    const drawn = host.getBoundingClientRect()
+    const measured = host.getBoundingClientRect()
+    // The pill's own size, not a constant: it grows with the sentence, and a
+    // placement that assumed one line would push a long comment off the bottom.
+    const pillSize = measuredSize(detailRef.current, { width: DETAIL_WIDTH, height: DETAIL_HEIGHT })
     const at = placeCard(
       scaledBox(
         box,
-        { x: drawn.left, y: drawn.top, width: drawn.width, height: drawn.height },
+        { x: measured.left, y: measured.top, width: measured.width, height: measured.height },
         { x: panel.left, y: panel.top, width: panel.width, height: panel.height },
         size.width,
       ),
       panel.width,
       panel.height,
+      pillSize,
     )
     // Only a moved card is news. Storing a fresh object every time would make the
     // effect its own trigger: a page body rebuilds `size` from its owner's surface,
     // so an unconditional set here re-renders, re-runs, and spins.
     setDetailAt(previous => previous !== null && previous.left === at.left && previous.top === at.top ? previous : at)
-  }, [marks, selectedId, scale, size, htmlHeight])
+    // `marks` changes on every keystroke in the pill, which is also when the pill's own
+    // height can change, so the re-measurement happens by itself. The write is
+    // idempotent, so a measured height that did not move re-renders nothing.
+  }, [htmlHeight, liveMark, marks, scale, selectedId, size, unit])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -1158,8 +1205,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // The picture carries the numbers as the reader sized them: the agent reads the
     // same number the reader did, at the same place on the same shape.
     const svg = composeReviewSvg(target, marks)
-    const exportScale = Math.min(2, Math.max(1, 2400 / Math.max(target.width, target.height)))
-    return await rasterizePng(svg, target.width, target.height, exportScale)
+    const paper = reviewSize(target, marks)
+    const exportScale = Math.min(2, Math.max(1, 2400 / Math.max(paper.width, paper.height)))
+    return await rasterizePng(svg, paper.width, paper.height, exportScale)
   }, [marks])
 
   const buildDocument = useCallback((target: { readonly width: number; readonly height: number }, scope = marks): AnnotationDocument | null => {
@@ -1360,7 +1408,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * the next stroke, which is where the remembered preference comes in.
    */
   const shownColor = selected === null ? color : selected.color
-  const shownWeight = selected === null ? weight : (selected.weight ?? WEIGHT_DEFAULT)
+  /**
+   * What the size rail currently means, or null when it means nothing.
+   *
+   * It sizes one thing: the stroke of the mark the reader is working on, or the pen
+   * of the next stroke. With nothing selected and no drawing tool out there is no
+   * such thing, so the rail stands down instead of offering a control for a decision
+   * nobody is making. A point mark borrows the same number for its pin, so the rail
+   * stays when one is selected — it is the mark's size, whichever way it is drawn.
+   */
+  const shownWeight = selected === null
+    ? (WEIGHT_TOOLS.has(tool) ? weight : null)
+    : (selected.weight ?? WEIGHT_DEFAULT)
   /**
    * Change one attribute of the selected mark, or of the next stroke when nothing
    * is selected.
@@ -1393,12 +1452,23 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }
     repaintSelected(selected, { weight: held })
   }
-  const surfaceStyle: CSSProperties = size === null
+  const surfaceStyle: CSSProperties = paper === null
     ? {}
-    : { width: size.width * scale, height: size.height * scale }
-  const figureStyle: CSSProperties = size === null
+    : { width: paper.width * scale, height: paper.height * scale }
+  /**
+   * The paper at its unscaled size, with the figure placed at its own offset on it.
+   *
+   * The whole paper is scaled by one transform rather than each part scaling itself,
+   * so the figure and the overlay cannot drift apart at a fractional factor — which
+   * at 60% is exactly what a mark drawn on a line work and a mark drawn on paper
+   * would do.
+   */
+  const paperStyle: CSSProperties = paper === null
     ? {}
-    : { width: size.width, height: size.height, transform: `scale(${scale})`, transformOrigin: 'top left' }
+    : { position: 'relative', width: paper.width, height: paper.height, transform: `scale(${scale})`, transformOrigin: 'top left' }
+  const figureStyle: CSSProperties = paper === null
+    ? {}
+    : { position: 'absolute', left: -paper.x, top: -paper.y, width: size?.width, height: size?.height }
 
   return (
     <div className="da-root" ref={rootRef}>
@@ -1412,7 +1482,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         data-hand={tool === 'select' ? 'true' : undefined}
         data-panning={panning ? 'true' : undefined}>
         <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
-          <div ref={figureRef} style={{ ...figureStyle, position: 'relative' }}>
+          <div className="da-paper" style={paperStyle}>
+          <div ref={figureRef} style={figureStyle}>
             {figure?.kind === 'svg' ? (
               <div ref={figureHostRef} dangerouslySetInnerHTML={{ __html: figure.markup }} />
             ) : figure?.kind === 'raster' ? (
@@ -1441,10 +1512,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 style={{ width: figure.width, height: htmlHeight }}
               />
             ) : null}
-            {size === null ? null : (
+            {paper === null || size === null ? null : (
               <Canvas
-                width={size.width}
-                height={size.height}
+                // The paper, not the figure: a mark in the margin has to have
+                // somewhere to be drawn and somewhere to be pressed.
+                width={paper.width}
+                height={paper.height}
+                origin={[-paper.x, -paper.y]}
                 marks={marks}
                 tool={tool}
                 color={color}
@@ -1463,9 +1537,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 onPanEnd={() => { setPanning(false) }}
                 onEdit={editMark}
                 onDrawn={finishDrawing}
+                onLiveEdit={setLiveMark}
                 numbering={props.numbering}
               />
             )}
+          </div>
           </div>
         </div>
       </div>
@@ -1582,23 +1658,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             </div>
           )}
 
-      {/* How heavy the pen is, on a rail of its own down the left edge — the place a
-          drawing tool puts its weight, and the place the reader's eye already looks
-          for one. Idle it is a hairline, so it costs the figure nothing; crossing it
-          opens it out to a track with a knob. A point mark has no stroke to weigh,
-          so the rail stands down rather than offering a control that would do
-          nothing. */}
-      {tool === 'point' || selected?.kind === 'point' ? null : (
-        <label className="da-weight" title={t('weight')}>
+      {/* How heavy the pen is — or how big a point mark's pin is — on a rail of its
+          own down the left edge, which is where a drawing tool puts its weight and
+          where the reader's eye already looks for one. Idle it is a hairline, so it
+          costs the figure nothing; crossing it opens it out into a tapered track.
+          It only appears once there is something to size: a mark to change, or a
+          tool armed to draw the next one. Sitting on the rail when nothing is
+          selected and no pen is out is a control for a decision not being made. */}
+      {shownWeight === null ? null : (
+        <label className="da-weight" title={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}>
           <input type="range" className="da-weight-input"
-            aria-label={t('weight')}
+            aria-label={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}
             min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
             value={shownWeight}
             onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
           <span className="da-weight-fill" aria-hidden
             style={{ height: `${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}%` }} />
           <span className="da-weight-knob" aria-hidden
-            style={{ bottom: `calc(${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}% - 5px)` }} />
+            style={{ bottom: `calc(${((shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)) * 100}% - 5.5px)` }} />
         </label>
       )}
 

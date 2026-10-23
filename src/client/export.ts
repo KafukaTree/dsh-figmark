@@ -12,6 +12,8 @@ import {
   PIN_FONT_FAMILY, PIN_FONT_SIZE, PIN_NUMBER_COLOR, strokeWidthOf,
   markPathData, pinNumberCentre, pinPathData,
 } from './render'
+import { figureUnit } from './scale'
+import { plotBounds } from './plot'
 
 /** The figure layer placed under the marks. */
 export type FigureLayer =
@@ -43,30 +45,32 @@ export type FigureLayer =
  *
  * @param mark - the mark to draw.
  * @param number - the mark's number in the list, when it carries one.
+ * @param unit - the figure's size multiple, so the export is drawn at the same
+ *   weight the reader saw.
  * @returns the mark's elements.
  */
-function markSvg(mark: AnnotationMark, number: number | undefined): string {
+function markSvg(mark: AnnotationMark, number: number | undefined, unit: number): string {
   const path = markPathData(mark)
   const parts: string[] = []
   if (path !== undefined) {
     parts.push(
-      `<path d="${path}" fill="none" stroke="#ffffff" stroke-width="${strokeWidthOf(mark) + 2.5}"`
+      `<path d="${path}" fill="none" stroke="#ffffff" stroke-width="${strokeWidthOf(mark, unit) + 2.5 * unit}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
-      `<path d="${path}" fill="none" stroke="${mark.color}" stroke-width="${strokeWidthOf(mark)}"`
+      `<path d="${path}" fill="none" stroke="${mark.color}" stroke-width="${strokeWidthOf(mark, unit)}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
     )
   }
   // A point mark has no stroke: it is the marker standing on its one coordinate.
   // Drawn from the same geometry the overlay uses, so the picture the agent gets and
   // the one the reader approved cannot disagree about where the mark is.
-  const pin = mark.kind === 'point' ? pinPathData(mark) : undefined
-  const centre = mark.kind === 'point' ? pinNumberCentre(mark) : undefined
+  const pin = mark.kind === 'point' ? pinPathData(mark, unit) : undefined
+  const centre = mark.kind === 'point' ? pinNumberCentre(mark, unit) : undefined
   if (pin !== undefined && centre !== undefined) {
-    parts.push(`<path d="${pin}" fill="${mark.color}" stroke="#ffffff" stroke-width="2" stroke-linejoin="round"/>`)
+    parts.push(`<path d="${pin}" fill="${mark.color}" stroke="#ffffff" stroke-width="${2 * unit}" stroke-linejoin="round"/>`)
     if (number !== undefined) {
       parts.push(
         `<text x="${centre[0]}" y="${centre[1]}" font-family="${PIN_FONT_FAMILY}"`
-        + ` font-size="${PIN_FONT_SIZE}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
+        + ` font-size="${PIN_FONT_SIZE * unit}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
         + ` text-anchor="middle" dominant-baseline="central">${number}</text>`,
       )
     }
@@ -117,12 +121,40 @@ export function composeReviewSvg(
   numbering?: ReadonlyMap<string, number>,
 ): string {
   const numbers = new Map(marks.map((mark, index) => [mark.id, numbering?.get(mark.id) ?? index + 1]))
+  // Measured from the figure, not from this call's marks: the export has to look like
+  // the overlay, and the overlay sizes every mark by the surface they share.
+  const unit = figureUnit(layer.width, layer.height)
+  // The paper is the figure plus wherever the marks reach, so a box drawn past the
+  // edge lands on white rather than off the picture. Marks and figure are placed at
+  // the paper's own origin, which is why the whole content is shifted by one offset.
+  const paper = plotBounds(layer.width, layer.height, marks, unit)
+  const shift = `translate(${-paper.x} ${-paper.y})`
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
-    + ` width="${layer.width}" height="${layer.height}" viewBox="0 0 ${layer.width} ${layer.height}">`
-    + `<rect x="0" y="0" width="${layer.width}" height="${layer.height}" fill="#ffffff"/>`
+    + ` width="${paper.width}" height="${paper.height}" viewBox="0 0 ${paper.width} ${paper.height}">`
+    + `<rect x="0" y="0" width="${paper.width}" height="${paper.height}" fill="#ffffff"/>`
+    + `<g transform="${shift}">`
     + figureSvg(layer)
-    + marks.map(mark => markSvg(mark, numbers.get(mark.id))).join('')
-    + '</svg>'
+    + marks.map(mark => markSvg(mark, numbers.get(mark.id), unit)).join('')
+    + '</g></svg>'
+}
+
+/**
+ * The size of the picture {@link composeReviewSvg} builds.
+ *
+ * A caller has to know it before rasterizing: an SVG rendered at the figure's size
+ * would crop away exactly the marks that made the paper grow.
+ * @param layer - the figure to place underneath.
+ * @param marks - marks in draw order.
+ * @param unit - the figure's size multiple.
+ * @returns the paper's width and height, in figure pixels.
+ */
+export function reviewSize(
+  layer: FigureLayer,
+  marks: readonly AnnotationMark[],
+  unit = figureUnit(layer.width, layer.height),
+): { readonly width: number; readonly height: number } {
+  const paper = plotBounds(layer.width, layer.height, marks, unit)
+  return { width: paper.width, height: paper.height }
 }
 
 /**
