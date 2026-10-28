@@ -1099,6 +1099,20 @@ Recorded so the next reader does not re-investigate them.
 
 Found while auditing the same files; none of them changes what the plugin does.
 
+- **`src/client/popover.ts:78-91` — `placeCard`'s doc block sits on top of `measuredSize`.**
+  Two JSDoc blocks run back to back, and the first one — with all four `@param`
+  tags and its `@returns` — describes `placeCard`, which is declared ~25 lines
+  later with no comment at all. A tool that reads the doc of the next declaration
+  therefore attributes "the nearest corner to an anchor that still fits inside the
+  panel" to `measuredSize`, whose own block follows immediately. Pre-existing on
+  `4b3daa1`, not introduced here; it survived the split because a javadoc linter
+  cannot see a block with no declaration.
+  Nine other back-to-back pairs exist, and they are benign: eight are a module
+  header followed by the file's first declaration (`dom-path.ts`,
+  `pick.ts`, `scale.ts`, `shared/path-name.ts` and four more), and one is
+  `icons.tsx:68`. `AnnotatorBody.tsx` has five (`:215`, `:348`, `:1030`, `:1443`,
+  `:1624`) and the baseline already had seven of its own — a habit that outlived
+  the file it started in.
 - **`src/client/styles.ts` — eleven class rules nothing can match.** Extracted
   every `.da-…` class the stylesheet names and searched the rest of `src/` for it:
   `da-btn-icon`, `da-btn-count`, `da-chip`, `da-stylewrap`, `da-docbar-count`,
