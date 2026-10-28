@@ -1271,6 +1271,176 @@ message says where to find them.
 This is finding 42's mistake in a second place — the advice is written where the count is
 known, and the attachment is decided where the upload is known, and neither reads the other.
 
+### 60. Two saves that start in the same millisecond fight over one scratch file
+
+`src/host/store-write.ts:44` names the scratch file `${path}.tmp-${process.pid}-${Date.now()}`.
+`Date.now()` has millisecond resolution and there is no counter, so two overlapping saves
+of the same figure pick the **same** scratch name. The comment above it
+(`src/host/store-write.ts:36-38`) states the opposite as a guarantee: "The temporary name
+carries the pid and the clock so two saves that overlap cannot pick the same scratch file."
+
+Measured against the real filesystem through the real `writeAnnotation` entry point:
+
+- 30 rounds of two overlapping saves at ordinary size: **28 rounds lost one save** to
+  `ENOENT` (the loser's scratch file had already been renamed away), 2 rounds succeeded.
+- The file that survives is not corrupted: in 30/30 rounds it parsed, and in 20/20 big-file
+  rounds (20 KB summaries) the body was wholly one save's, never a blend. `writeFile` writes
+  the scratch file whole before either rename, so the damage is a **lost save**, not a
+  mangled one — the audit's "two bodies spliced into unparseable JSON" did not reproduce.
+- The window is the millisecond: `GAP 0ms` and `1ms` collide, `>= 2ms` does not.
+
+What the reader sees is one save's outcome being silently dropped. The failing path does
+report: the request's rejection becomes a 400 (`src/host/routes.ts:138-142`), and the client
+turns it into `setStatus(failureStatus(t, 'saveError', error))` through the autosave `onError`
+(`src/client/AnnotatorBody.tsx:1206`), so the reader is told "saving failed" — but the
+surviving save is the *other* one, and nothing says which. Two writers in
+one process is not hypothetical here: `src/client/AnnotatorBody.tsx:1266` awaits
+`saveAnnotation` on the delivery path while `:1087` fires `flush()` on unmount, and the
+autosave chain only serialises the debounced writes, not those two.
+
+Not shown: a UI sequence that reliably makes them overlap. Twelve rounds of the real
+timing — last keystroke, send 50ms later, delivery taking 700ms past the 600ms debounce —
+produced no failure, because the chain serialises the common case. The defect is in the
+naming scheme, which promises something the clock cannot deliver.
+
+### 61. Changing only the last newline says "changed" with nothing to show, and the buttons go quiet
+
+`src/shared/text-diff.ts` compares `before === after` **after** `textLines` has dropped one
+trailing newline, so removing or adding the file's final newline leaves both sides with the
+same lines: `{changed: true, hunks: [], added: 0, removed: 0}`. Measured: all four shapes
+(`"a\nb\n"` → `"a\nb"`, back again, `"a\n"` → `"a"`, `"a"` → `"a\n"`) give that result.
+
+`src/client/markdown/MarkdownBody.tsx:200` then decides `dirty = edit !== null`, which is
+true, so:
+
+- the toolbar reads **"改动 0 处 · +0 −0 行"**,
+- the diff view shows no hunk at all,
+- **all three buttons are enabled** (`:214`, `:216`, `:218`),
+- `send()` returns at `:170` on `diff.hunks.length === 0` without setting `busy` and without
+  setting a status, so pressing it does nothing at all — no spinner, no line, no failure.
+- `copyDiff()` returns at `:156` the same way, so the clipboard keeps whatever was in it.
+
+Two comments call this the design: "The only enforcement point: the button stays clickable
+so the guards below are what decides, not a disabled attribute that hides the reason"
+(`:168-169`, `:154-155`). The guard decides — and says nothing, which is the outcome the
+comment was written to avoid. This is finding 41's shape on a third path, but its root is
+upstream of the guard: a difference object that is `changed` with no hunks should not exist,
+and every consumer downstream has to defend against it separately.
+
+### 62. Putting a message in the composer re-flows the paragraph the reader already wrote
+
+`src/client/composer.ts:102-103`:
+
+```ts
+const existing = shell.snapshot.draft.trim()
+shell.setDraft(existing === '' ? message : `${existing}\n\n${message}`)
+```
+
+`.trim()` is applied to the whole existing draft, not to the check for emptiness. A reader
+who has typed, or pasted, a draft that begins with indentation — a fenced code block, a
+nested list — or ends with blank lines gets both ends cut off. Measured with the draft
+`"  indented line\n\nkeep trailing  \n\n"`: the written draft starts `"indented line"`, so
+the two leading spaces are gone, and the trailing blanks are gone with them.
+
+The docstring at `:80-82` argues for append over replace — "the reader may have written half
+a sentence, and losing it is worse than a longer draft" — and the append does keep the words.
+What it does not keep is their shape, and in a Markdown draft that is what the agent reads:
+an indented block that loses its indentation is no longer a code block.
+
+The emptiness test only needs to know whether there is anything to separate; `trimEnd()`
+would do. The bug is one argument away.
+
+### 63. One line past a thousand turns the whole file into the message
+
+`src/shared/text-diff.ts:145` gives up on the exact algorithm when
+`older.length * newer.length > DEFAULT_MAX_CELLS` (1,000,000), and the fallback is one hunk
+that replaces the entire file. The line counts are the lengths of the **trimmed middle**, so
+a document whose edits sit near both the first and last line has no common prefix or suffix
+to cut and the middle is the whole document.
+
+Measured with a two-line edit (first line and last line changed), through `fitDiff` and
+`buildEditMessage`:
+
+| lines | coarse | hunks | header the agent reads | bytes |
+|---|---|---|---|---|
+| 1000 | false | 2 | 改动 2 处, +2 −2 | 296 |
+| 1001 | true | 1 | 改动 1 处, +1001 −1001 | 20,024 |
+| 1500 | true | 1 | 改动 1 处, +1500 −1500 | 31,002 |
+
+So **one line past a thousand costs 68x the bytes**, and the growth is linear in the file
+after that — the audit measured 2.4MB at 20,000 lines and 6MB at 50,000. `fitDiff` cannot
+help: coarse produces exactly one hunk and `src/client/edit-message.ts:46-48` always keeps
+the first hunk, so `hidden` is 0, no `.edited.md` is attached, and the message claims
+"改动 1 处" while carrying the entire file.
+
+The reader's instruction is two lines long. The agent receives the document.
+
+### 64. A note written on a hunk outlives the change it was written about
+
+Hunk notes are keyed by `hunk.oldStart` (`src/client/markdown/MarkdownBody.tsx:96`, written
+at `:253`), and `describeNotes` (`src/client/edit-message.ts:88-107`) formats every key it
+finds in that record. Notes are only cleared when the document changes or the whole edit is
+discarded (`:124`, `:146`) — never when the change they belong to moves or goes away.
+
+Measured with the real diff and the real formatter: change line 4 (hunk `@@ -1,7 +1,7 @@`,
+`oldStart = 1`), write a note on it; then move the edit to line 20 instead, so the only hunk
+is `oldStart = 17`. The note's input box is not on screen any more — nothing renders
+`notes[17]` — but
+`describeNotes(second, notes)` still returns `"1. 第 1 行：this wording is wrong"`.
+
+So the reader sees no notes and sends one. It arrives anchored to `第 1 行`, which in this
+version was not edited at all, and the agent is told to look at a line nobody touched. The
+`@@` reference that would have disambiguated it is dropped too, because
+`formatHunkHeader` is only included when a hunk matches (`:98`).
+
+Note the difference from the recorded note-anchoring finding (#9): that one is about a note
+being filed under the wrong line while it is on screen. This one is about a note surviving
+the disappearance of its subject — the lifecycle, not the addressing.
+
+### 65. A note on inserted text is filed under the line it was inserted above
+
+`describeNotes` (`src/client/edit-message.ts:98`) labels a note with the bare number
+`第 N 行`, where `N` is the hunk's `oldStart`. For a pure insertion that is the line *before*
+the new text, not the new text — and in an empty file it is line 0.
+
+Measured with the real diff and formatter:
+
+- prepending `inserted` to a three-line file gives `@@ -1,3 +1,4 @@`, so the note reads
+  `1. 第 1 行（@@ -1,3 +1,4 @@）：note for prepend` — `第 1 行` in the new file is
+  `inserted`, in the old file it is `alpha`; the number cannot say which.
+- prepending `first` to an empty file gives `@@ -0,0 +1,1 @@`, so the note reads
+  `1. 第 0 行：n`. There is no line 0.
+
+The `@@` header travels with the note, which is the saving grace — an agent that reads
+unified-diff syntax can work out what happened. But the sentence in front of it is wrong,
+and "第 0 行" is the kind of label that makes a reader stop trusting the rest of the list.
+
+### 66. The caret column counts UTF-16 code units and calls them columns
+
+`src/client/markdown/edit.ts:74` computes `column: element.selectionStart - head.lastIndexOf('\n')`
+and the docstring above it (`:27`, `:67-69`) says "1-based on both axes". `selectionStart` is a
+code-unit offset, so an astral character (anything outside the BMP — emoji, rarer CJK, some
+symbols) counts twice, once for each half of its surrogate pair.
+
+Measured through the real `caretIn` with the caret after the last character:
+
+| text | length | reported |
+|---|---|---|
+| `ab` | 2 | column 3 |
+| `a😀b` | 4 | column **5** |
+| `e` + combining acute + `x` | 3 | column 4 |
+| `中文x` | 3 | column 4 |
+
+CJK is fine — one character, one code unit each — so `中文x` reporting column 4 with the caret
+at the end is right (three characters, one-based). The combining-mark row is also defensible:
+`e` + combining acute + `x` is three code points, and 4 is the one-based code-point column. The
+**astral** row is the one that is plainly wrong: `a😀b` is three characters and reports
+column **5**, because the emoji occupies two code units.
+
+This is a display-only number: the text and the diff are unaffected, which is why it is low.
+It is recorded because the field is labelled "column" and a column is not a code unit, and
+because the fix is `[...head].length + 1` rather than anything structural.
+
 
 ## Fixed during the refactor
 
