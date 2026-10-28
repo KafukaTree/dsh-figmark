@@ -929,6 +929,34 @@ accepted. Whether that one bites depends on the image part path, which the
 session takes unconditionally, so it is recorded here as the same mistake rather
 than as a separate finding.
 
+### 43. One keystroke in a CRLF file is reported as a rewrite of every line
+
+`editFrom` (`client/markdown/edit.ts:41-45`) takes the baseline from `loaded` —
+the text the owner delivered, which is the file as `readFile(path, 'utf8')`
+returned it — and the new side from the textarea's `value`. A `<textarea>`
+normalises CRLF to LF on its way in: assigning `"a\r\nb"` to it yields
+`"a\nb"`. So for a file with Windows line endings the two sides of the diff are
+written with different line terminators before the reader has changed anything.
+
+`textLines` (`shared/text-diff.ts:93-97`) splits on `\n` only and keeps the `\r`
+as part of the line's text, so every line reads as different.
+
+Reader impact: the *first* keystroke in a CRLF document turns the whole file into
+one hunk of `-N +N`. The reader sees "改动 1 处 · +5 −5 行" for one character, and
+the agent receives a diff that rewrites every line — which it is then told to
+apply. Applying it converts the file to LF as a side effect nobody asked for, and
+the reader's one real edit is buried in the noise.
+
+Shown: `MarkdownBody` over `content.text` = `"title\r\n\r\nbody line one\r\n…"`
+(the textarea's own value already prints as `"title\n\nbody line one\n…"`, no
+`\r`), then one character appended to the last line. The header the reader sees
+reads `改动 1 处 · +5 −5 行` on a five-line file.
+
+Not shown: the file being read with `\r\n` in the first place. That comes from
+`readFile(…, 'utf8')` on the Host (`host/store-read.ts:125`), which does not
+normalise, so a Windows-authored `.md` arrives that way; reproducing it end to end
+would need a fixture on disk rather than a string.
+
 ## Fixed during the refactor
 
 None yet: a fix would be a behaviour change, which is what this refactor exists
