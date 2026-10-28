@@ -112,7 +112,8 @@ argument for having it.
 The other half of the job was to find bugs without changing behaviour, so the
 findings live in two files rather than in patches:
 
-- `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown (39 entries)
+- `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown, delivery
+  (43 entries)
 - `docs/refactor/pdf-md-bugs.md` — the PDF and Markdown chains (12 entries)
 
 A fix is a behaviour change, and a behaviour change needs its own decision, its
@@ -138,7 +139,12 @@ The classes worth reading first, because each explains several entries at once:
   (findings 31, 35, 39);
 - **one quantity computed two different ways in two places** — the figure's
   width for fit against the paper's width for layout (30), the pointer's position
-  for re-anchoring against the mark's own point (36).
+  for re-anchoring against the mark's own point (36), the guard's idea of a body's
+  length in code units against the browser's idea of it in bytes (40);
+- **a claim made before the thing it claims has happened** — the edit message
+  states a copy travelled before the attachment is offered (42), the send button
+  is pressable before there is anything to send (41), and a comment says a guard
+  "explains the reason" while the guard returns in silence (41).
 
 ## What was checked on a real process, not just in vitest
 

@@ -30,7 +30,13 @@ body's length in code units (40) against the browser's idea of it in bytes.
 
 A fifth thread is quieter and worth naming on its own: **a unit or a budget that
 is right for ASCII and wrong for everything else.** Finding 40 is the HTTP form of
-it; findings 38 and the anchor-text rules are the drawing form.
+it and finding 43 is the line-ending form; finding 38 and the anchor-text rules
+are the drawing form.
+
+A sixth: **a claim made before the thing it claims has happened.** The edit
+message says a copy is attached before an attachment has been offered (42); the
+send button is pressable and silent while there is nothing to send, under a
+comment claiming it explains the reason (41).
 
 ## Open
 
