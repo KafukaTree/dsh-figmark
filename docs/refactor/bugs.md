@@ -12,11 +12,20 @@ not inferred from reading. Where one was *not* reproduced, it says so.
 
 The PDF and Markdown chains have their own file, `pdf-md-bugs.md` (12 entries);
 they are not repeated here. Between the two files, the high-severity findings
-cluster on three mistakes: **switching documents does not reset the state that
+cluster on four mistakes: **switching documents does not reset the state that
 belonged to the old one** (finding 19 and the PDF set), **a per-mark gesture
-running the whole-figure path** (findings 13, 15, 23), and **saving before the
-target has agreed to take the save** (findings 24, and the delivery half of
-finding 1).
+running the whole-figure path** (findings 13, 15, 23), **saving before the target
+has agreed to take the save** (findings 24, and the delivery half of finding 1),
+and **the delivered picture being drawn by code that does not read what the panel
+reads** (findings 27, 28, 29, 34 — the export path re-derives the drawing and
+disagrees with the screen on rotation, on the arrow head's size, on the pin's
+outline, and on what the paper has to be sized for).
+
+Two more threads are worth naming because they explain several entries at once:
+**a screen-pixel constant used as a figure-pixel one, or the reverse** (findings
+31, 35, 39), and **one quantity computed two different ways in two places** — the
+figure's width for fit (30) against the paper's width for layout, the pointer's
+position for re-anchoring (36) against the mark's own point.
 
 ## Open
 
@@ -572,6 +581,251 @@ they cannot. Severity: low; the panel is honest but unreadable at the moment it
 matters.
 
 Shown: the literal status text above, from finding 24's probe.
+
+### 27. The delivered picture draws every mark upright
+
+`composeReviewSvg` writes each mark with `markSvg` (`export.ts:53`), which draws
+`markPathData(mark)` — a function that knows nothing about rotation. The only
+transform in the document is the `translate(...)` at `export.ts:145` that shifts
+the whole drawing onto the paper. Rotation exists exactly once, as
+`markTransform` (`render.ts:446`), and exactly one caller reads it: the overlay
+(`canvas/overlay.tsx:183`). The paper, meanwhile, *is* measured with the turn
+applied — `markOutline` goes through `turnedBox`. The words contradict the
+picture too: `mark-summary.ts:139-141` writes "(rotated 45°)" into the text the
+agent reads.
+
+Reader impact: the reader approves a tilted box or arrow, and the picture the
+agent receives draws it axis-aligned, on a sheet sized for the turned shape. This
+is the mismatch `docs/notes/implemented/2026-10-20-rotated-marks-in-pdf.md`
+records as fixed for the PDF path; the PNG path never got that fix.
+
+Shown: a rect `[[100,100],[300,200]]` at 45° — `markTransform` returns
+`rotate(45 200 150)`, `composeReviewSvg` contains no `rotate(` at all, and
+`markPathData` of the turned mark is byte-identical to the upright one.
+
+### 28. A turned mark's outline is measured from two points, not four corners
+
+`markOutline` (`render.ts:379`) takes `geometry` — for a rect, its two opposite
+corners — and hands it to `turnedBox` (`:404`), which rotates *those points* and
+re-bounds the result. The extent of a rotated rectangle is not the extent of a
+rotated diagonal: re-bounding two turned points measures a line segment. The
+correct quantity already exists next door as `uprightBounds`
+(`mark-geometry.ts:132`), which turns all four corners.
+
+Reader impact, all from the same under-measurement: the paper never grows for a
+turned mark, so the corner it actually sweeps is clipped by the viewBox in the
+panel *and* in the export; the comment pill is placed from a box far too narrow;
+and because `grown` stays false, no dashed edge rule explains the crop.
+
+Shown: rect `[[620,220],[790,380]]` at 45° — `markOutline` gives
+`x 699.0, width 12.1, height 238.3`, `uprightBounds` gives
+`x 588.3, width 233.3, height 233.3`. The drawn corners reach `x = 821.7` while
+the paper ends at 800, so 21.7 px is cut off, and the export emits no rule.
+
+Not the same as finding 5 (`controlBox` turning the handles twice) or finding 10
+(the element stroke that is never painted): this is the extent that feeds paper
+size, cropping and pill placement.
+
+### 29. An arrow's head is drawn at one size and measured at another
+
+`render.ts:213` calls `arrowBarbs(mark.points, mark.weight ?? 1)` — the unit
+argument is omitted, so the painted head is always `14 × weight`. The measuring
+call at `:381` passes the unit, so the reserved head is `14 × weight × unit`. The
+comment directly above the first call claims the picture and the outline "cannot
+disagree".
+
+Reader impact on any figure whose unit is not 1 — every scan and every plot with a
+long edge past 800 px: `plotBounds` reserves margin the arrow never reaches, which
+flips `grown` and paints the dashed "figure edge" rule plus white margin onto a
+picture where nothing left the figure. The handles also sit outside the visible
+head, and because the shaft scales with unit while the head does not, arrows read
+as blunt darts (head/shaft 1.62 at unit 3, falling as the figure grows).
+
+Shown: arrow `[[100,100],[300,300]]` — `arrowBarbs` with unit 1 puts the barbs
+15.4 px from the tip and with unit 5 puts them 74.6 px from it, while
+`markPathData`'s barbs sit in the same place at every unit. The export renders
+that mark with the same head at unit 1 and unit 5.
+
+### 30. Fit-to-width fits the figure, but lays out the paper
+
+`drawingScale` (`annotator/geometry.ts:46`) divides the target width by
+`input.size.width` — the *figure's* width — and `AnnotatorBody.tsx:682` hands it
+`size`. What gets laid out is the paper (`surfaceBoxStyle`, `:95`, is
+`paper.width * scale`). The two agree only while no mark reaches past the figure,
+which is exactly the case a grown paper is not.
+
+Reader impact: in fit mode a mark drawn outside the figure makes the panel wider
+than its box, so the reader has to scroll horizontally to see the mark they just
+drew. Fit stops fitting at the moment a mark matters.
+
+Shown: an 800-wide figure whose paper grew to 1993.25 px, with a 1000 px fit
+target — `drawingScale` returns 1.25 (the paper wants 0.50), the surface lays out
+at 2491.6 px against a 996 px content box, overflow 1495.6 px.
+
+### 31. Horizontal zoom anchoring ignores the stage's padding once the surface overflows
+
+`surfaceOffset` (`zoom.ts:75`) resolves the *centring* regime:
+`max(0, (viewportWidth − surfaceWidth) / 2)`. `anchoredScroll` uses it for the
+horizontal term (`:127`) and never adds the padding. `.da-stage` is
+`justify-content: safe center` with `padding: 14px` (`styles.ts:230`), so once the
+surface overflows, `safe` falls back to `start` and the surface's left edge is at
+14, not 0.
+
+Reader impact: ~14 px of sideways drift per zoom step, precisely when the reader
+is zoomed in far enough to be placing a mark against a curve. Together with
+finding 6 (the vertical axis, which hardcodes a margin the CSS does not have) both
+axes slide, which is what makes it read as "zoom is unreliable" rather than "one
+axis is off".
+
+Shown: `clientWidth 1000`, surface 1200, `scrollLeft 900`, `clientX 500`, zoom
+1→2 — `anchoredScroll` returns `scrollLeft 2300`; honouring the 14 px padding
+gives 2286 (drift 14).
+
+A second instance of the same mismatch: `AnnotatorBody.tsx:674` subtracts 24 for
+28 px of padding, so fit mode starts 4 px too wide (a 1024 px stage has a 996 px
+content box but lays out a 1000 px surface).
+
+### 32. An SVG that declares a physical size is sized by its digits, then rewritten
+
+`svgIntrinsicSize` (`figure-dom.ts:105`) uses `Number.parseFloat` on the
+`width`/`height` attributes, which stops at the first non-digit: `6.4in` parses as
+6.4, `100%` as 100, `210mm` as 210. `decodeFigure` (`annotator/figure-source.ts:77`)
+then writes those bare numbers straight back onto the root, keeping the viewBox.
+So `width="6.4in"` with `viewBox="0 0 460 345"` becomes a 6.4 CSS px figure that
+draws 460 user units into it — 72× too small — and `figureUnit` clamps to its 0.2
+floor, leaving strokes, pins and hit areas sized for a canvas a few pixels wide.
+
+Reader impact: a figure authored in inches, millimetres or percent renders as an
+unreadable smudge with sub-pixel marks. It reads as a corrupt file, not a
+mis-scaled one.
+
+Shown: `svgIntrinsicSize` of `width="6.4in" height="4.8in"` gives
+`{width: 6.4, height: 4.8}`; `figureUnit(6.4, 4.8)` = 0.2; the decoded markup is
+`width="6.4" height="4.8" viewBox="0 0 460 345"`. `width="100%"` decodes to a
+100×100 figure.
+
+Why it has gone unnoticed: matplotlib writes `pt`, and Inkscape writes `mm` with a
+viewBox in the same mm, so the digits happen to equal the user-unit count and the
+figure is drawn at the wrong scale rather than collapsed.
+
+### 33. A second element mark on the same element cannot be pressed
+
+`elementNamedBy` (`canvas/hit.ts:51`) returns `marks.find(...)` — the first match
+— and that function is the only way an element mark gets selected from the figure
+(`canvas/gesture.ts:136`). `overlay.tsx:218` deliberately draws no frame and no
+handles for an `element` mark, so there is no other hit target. The element tool
+does not dedupe by selector, so clicking the same curve twice creates two marks
+that both light up but only one of which can be pressed.
+
+Reader impact: the second mark is dead on the figure and reachable only from the
+list, and pressing the curve while it is selected jumps the selection to the
+first mark.
+
+Shown: with two element marks carrying the same `anchor.selector`, a press on the
+element reports `e1` — the first — even though `e2` was the selected one.
+
+### 34. The delivered pin is drawn differently from the pin on screen
+
+The overlay (`canvas/overlay.tsx:89-90`) draws a white halo at `4.5 × unit` under
+a body stroked at `1.5 × unit`. `export.ts:70` draws a single path at `2 × unit`
+with no halo — matching neither constant.
+
+Reader impact: the halo is what separates the pin from dark line work; the picture
+the agent gets drops it and thickens the rim instead, so on a dense or dark figure
+the numbered pins are thinner and blend into the artwork. "The pin at the top of
+the peak" gets harder to find in exactly the figures where it matters.
+
+Shown: `composeReviewSvg` over one point mark at unit 1 emits one `<path>` with
+`stroke-width="2"`; the overlay emits two, at 4.5 and 1.5.
+
+### 35. A small mark cannot be moved, only resized
+
+`beginHandle` (`canvas/gesture.ts:191`) asks `handleAt` whether the press caught a
+handle, with a reach of `HANDLE_REACH × sizes.grip` (`:204`) — `HANDLE_REACH` is
+2.2 (`:34`) and `sizes.grip` is `HANDLE_SIZE / scale` (`canvas/controls.ts:32`),
+so the reach is a constant 15.4 *screen* px in figure units. The handles sit on
+the four corners and the four edge midpoints, and a mark's only pressable area is
+its own stroke (`overlay.tsx:208`). A handle therefore wins the press whenever the
+press is within 15.4 px of a handle — and for a small enough mark there is nowhere
+else to press.
+
+Reader impact: a tick label, a short arrow or a small box drawn at a fit scale can
+only be resized, never dragged, and the frame it shows while resizing is a resize
+it did not want. On a large figure at fit zoom the threshold is reached by any
+mark smaller than roughly 150 figure px.
+
+Shown: a square selected and pressed a quarter of the way along its top edge, then
+dragged — 40 figure px at scale 1 reports a resize; 80 px and 200 px report a move;
+the same 200 px square at scale 0.3 reports a resize again. So the outcome depends
+on the mark's on-screen size, not on where the reader pressed.
+
+### 36. A dragged mark re-anchors to what the pointer is over, not to what its own tip is over
+
+`finish` (`canvas/gesture.ts:345`) calls `anchorFor(event, last)` with the mark's
+own final point. On the HTML path `anchorOf` uses that point
+(`canvas/pointer.ts:86`). On the inline-SVG path it ignores the point entirely and
+asks `anchorAtPoint(container, event.clientX, event.clientY, …)` (`:101`) — the
+pointer's position, not the mark's. The two differ by the grab offset: the pointer
+is at `pressPoint + delta` while the mark's tip is at `originTip + delta`.
+
+Reader impact: grab an arrow by its middle and drop it over the legend, and the
+arrow re-anchors to the legend even though its tip landed elsewhere — the mark now
+claims to name something its own geometry does not point at, and the text the
+agent reads describes the wrong element.
+
+Shown: an arrow `[[150,150],[250,250]]` pressed at (200,200), dragged +50/+50 so
+the tip lands on `#near_tip` — the anchor reported is `under_hand`, the element
+under the pointer at (250,250).
+
+### 37. A pan that ends without a click leaves one click owing
+
+`panned` is set on the first real move of a pan (`canvas/gesture.ts:282`) and only
+ever cleared inside `onClick` when a click arrives on the surface itself
+(`:377-379`). `start` resets it (`:236`), but `finish` (`:322`) does not, and the
+`pointercancel` path goes through the same `finish`.
+
+Reader impact: after a pan that ends outside the surface, or a cancelled drag, the
+next click on blank paper does not clear the selection — it is spent on the pan
+that already ended. The reader clicks empty space expecting the mark to be let go
+and nothing happens, once.
+
+Shown: pan with `pointerup` and pan with `pointercancel`, then a fresh
+press-release-click on blank paper — both report `onSelect(null)`, i.e. the flag is
+consumed by nothing and the click does act. So the *conditional* half of this is
+the part that cannot be shown in jsdom: whether the browser fires a click after a
+release outside the surface. What is certain from the code is that nothing resets
+the flag except a click.
+
+### 38. A named group's anchor text runs every descendant string together
+
+`anchorAtPoint` (`figure-dom.ts:272`) takes the named element's `textContent`,
+collapses whitespace and trims — with no separator inserted between descendant
+texts. `html-dom.ts:198` does the same.
+
+Reader impact: for a matplotlib axes group, the text the agent reads is
+`0.00.51.0y label` — four separate labels with nothing to say where one ends.
+
+Shown: `<g id="axes_1">` holding `0.0`, `0.5`, `1.0` and `y label` reports
+`text: "0.00.51.0y label"`.
+
+### 39. The element-pick reach is in figure pixels, though it is documented as screen pixels
+
+`pick.ts:28` defines `PICK_REACH = 6` and documents it as "surface pixels".
+`pickInFigure` (`figure-dom.ts:321`) divides it by `Math.max(scaleX, scaleY)`,
+where `scaleX` is *figure pixels per client pixel* (`:248`). Dividing by that
+makes the reach smaller in figure units as the figure shrinks on screen — which
+inverts the intent: the probes end up spanning `6 / scale` figure px, i.e. a
+constant 6 *figure* px, and a fixed number of screen px only when the figure is
+drawn 1:1. The HTML surface has no such conversion (`html-dom.ts:124` passes a
+flat 6 in document px), so the two surfaces also disagree with each other.
+
+Reader impact: zoomed in 6×, the picker reaches 1 screen px — hairlines need
+sub-pixel aim; zoomed out 6×, it reaches 36 screen px, so the picker names things
+the reader is not pointing at.
+
+Shown: `anchorAtPoint` with scale 1 asks about a 12-client-px span; with scale 6
+(zoomed in) it asks about 2 client px; with scale 1/6 (zoomed out) it asks about
+72 client px. The probe count is 25 in all three cases.
 
 ## Fixed during the refactor
 
