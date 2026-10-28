@@ -1247,6 +1247,30 @@ recording rather than fixing is that it shows the pattern: a class name that was
 a rule is invisible to both the test suite and the dead-selector sweep (the class *is* in the
 markup), the same blind spot as finding 48.
 
+### 59. Past eight pages the message points at a PDF it did not attach
+
+`src/client/session.ts:252` sends at most `MAX_PAGE_IMAGES = 8` page images, and for the
+rest it pushes a warning (`:262-264`) that says, in Chinese and English, "see the annotated
+PDF". Whether that PDF is in the message is decided earlier and independently: `:250` calls
+`attachAnnotatedPdf`, which goes through `attachFile` and therefore gives up silently in
+three cases — no upload service, a sub-session, a refused upload — leaving only a warning of
+its own.
+
+So on a twelve-page document with no upload service the agent receives **eight images and a
+text part, no file part**, and two warnings that contradict each other:
+
+```
+本次组合没有附件服务，带批注 PDF未随消息发送。
+另有 4 页标注未附图，请看带批注 PDF。
+```
+
+The second sentence is the one that names the answer. A PDF search is a plausible response
+to it, which is a worse outcome than saying nothing: the reader's four pages are gone and the
+message says where to find them.
+
+This is finding 42's mistake in a second place — the advice is written where the count is
+known, and the attachment is decided where the upload is known, and neither reads the other.
+
 
 ## Fixed during the refactor
 
