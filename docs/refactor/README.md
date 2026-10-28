@@ -112,7 +112,7 @@ argument for having it.
 The other half of the job was to find bugs without changing behaviour, so the
 findings live in two files rather than in patches:
 
-- `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown (12 entries)
+- `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown (39 entries)
 - `docs/refactor/pdf-md-bugs.md` — the PDF and Markdown chains (12 entries)
 
 A fix is a behaviour change, and a behaviour change needs its own decision, its
@@ -122,12 +122,23 @@ golden dump look like the split moved rendering when it did not.
 Each entry carries the file and line, how to make it happen, what the reader
 sees, and a severity that is about the reader. Findings marked "shown" were
 reproduced against this tree, not inferred; several needed a driver to expose
-and the driver is described in the entry.
+and the driver is described in the entry. Where a read-only audit and the tree
+disagreed, the tree won and the entry says so — two audit findings had their
+direction reversed, and one could not be reproduced at all.
 
-The one class worth reading first: of the high-severity findings, three are the
-same mistake in three places — **switching documents does not reset the state
-that belonged to the old one** — and the worst of them writes one document's
-marks into another document's sidecar.
+The classes worth reading first, because each explains several entries at once:
+
+- **switching documents does not reset the state that belonged to the old one** —
+  the worst of them writes one document's marks into another document's sidecar;
+- **the delivered picture is drawn by code that does not read what the panel
+  reads** — the export path re-derives the drawing and disagrees with the screen
+  about rotation, the arrow head's size, the pin's outline, and what the paper
+  has to be sized for (findings 27, 28, 29, 34);
+- **a screen-pixel constant used as a figure-pixel one, or the reverse**
+  (findings 31, 35, 39);
+- **one quantity computed two different ways in two places** — the figure's
+  width for fit against the paper's width for layout (30), the pointer's position
+  for re-anchoring against the mark's own point (36).
 
 ## What was checked on a real process, not just in vitest
 
