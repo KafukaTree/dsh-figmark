@@ -963,6 +963,38 @@ Not shown: the file being read with `\r\n` in the first place. That comes from
 normalise, so a Windows-authored `.md` arrives that way; reproducing it end to end
 would need a fixture on disk rather than a string.
 
+### 44. A note with a line break in it splits the numbered list the agent reads
+
+`describeMark` (`shared/mark-summary.ts:203-220`) builds one line per mark:
+`① 框选 (10,10)-(40,30)，批注：<the note>`. The note is `mark.detail` verbatim —
+`detail.trim()` and nothing else — and `annotation-message.ts:100` joins the list
+with `'\n'`. The pill that writes the note is a `<textarea rows={1}>`
+(`annotator/detail-pill.tsx:55-63`) with no key handler that swallows Return, so a
+line break is something a reader types without trying.
+
+Reader impact: two lines of one note become, to the agent, two lines of list — and
+the second one starts without a marker, so the numbered list a reader was told to
+read "one mark per line" is no longer one mark per line. Worse, the shape is
+silently ambiguous: an unmarked line looks like prose the agent may or may not
+attribute to the previous mark. The same note is also what the circled numbers on
+the picture are keyed to, so a mismatch shows up as a mark answered twice or not
+at all.
+
+Shown: three marks, the middle one carrying `这里\n应该\n换行三次`, rendered through
+the real `describeMark`:
+
+```
+① 框选 (10,10)-(40,30)，批注：标号指错了
+② 框选 (10,10)-(40,30)，批注：这里
+应该
+换行三次
+③ 框选 (10,10)-(40,30)，批注：第三处
+```
+
+`describeMarks` still returns three strings — the split happens when the message
+is assembled, not when the mark is described, which is why the unit tests that
+count entries stay green.
+
 ## Fixed during the refactor
 
 None yet: a fix would be a behaviour change, which is what this refactor exists
@@ -1049,6 +1081,21 @@ Recorded so the next reader does not re-investigate them.
 
 Found while auditing the same files; none of them changes what the plugin does.
 
+- **`src/client/figure-dom.ts:32-41`** — the comment on `REMOTE_STYLE_RULES` says
+  a remote `url(…)` "inside `style` is caught by the same check its markup
+  equivalent is". Neither half holds. `stripRemoteStyleRules` rewrites only the
+  text of `<style>` elements; the `style` *attribute* is never inspected, and
+  no attribute at all is checked for `url(…)` — only `href`/`xlink:href` are.
+  Measured over the real sanitiser: an inline `<svg>` carrying
+  `fill="url(http://host/a.svg#g)"`, `clip-path="url(…)"`, `stroke="url(…)"`,
+  `mask="url(…)"` or `style="fill:url(…)"` comes out of `parseFigureSvg`
+  unchanged, and a real Chromium inlining that markup issues the request. What
+  actually stops it is the *host page's* policy — `img-src 'self' data: blob:`
+  in the app shell — so the plugin is safe today by a rule it does not control
+  and its own comment does not mention. The export path is contained for a
+  different reason again: the review SVG is rasterized from a `data:` URL in an
+  `<img>`, where the fetch does not happen. Worth knowing before anyone
+  relaxes the host policy or reuses `parseFigureSvg` outside the panel.
 - **`src/client/AnnotatorBody.tsx:1031-1046`** — two orphaned JSDoc blocks with no
   declaration beneath them; they document `chooseColor`/`repaintSelected`, which
   live at `:1593-1611` undocumented.
