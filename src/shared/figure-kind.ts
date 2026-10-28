@@ -2,6 +2,7 @@
  * Document suffixes, shared by the browser and Node halves.
  * @module dsh-figmark/shared/figure-kind
  */
+import { suffixOf } from './path-name'
 
 /**
  * File suffixes this plugin treats as annotatable documents.
@@ -17,25 +18,8 @@
  */
 export const FIGURE_EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'ico', 'pdf', 'html', 'htm'] as const
 
-/**
- * Read a path's lower-case suffix without the dot.
- * @param path - file path or name.
- * @returns the suffix, or an empty string when there is none.
- */
-export function suffixOf(path: string): string {
-  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
-  const dot = name.lastIndexOf('.')
-  return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
-}
-
-/**
- * Whether a path names a document this plugin renders.
- * @param path - file path.
- * @returns true when the suffix is one this plugin annotates.
- */
-export function isFigurePath(path: string): boolean {
-  return (FIGURE_EXTENSIONS as readonly string[]).includes(suffixOf(path))
-}
+/** Media type of a document that has pages rather than one surface. */
+export const PAGED_MEDIA_TYPE = 'application/pdf'
 
 /**
  * Media type of one document path.
@@ -44,7 +28,7 @@ export function isFigurePath(path: string): boolean {
  */
 export function figureMediaType(path: string): string | undefined {
   switch (suffixOf(path)) {
-    case 'pdf': return 'application/pdf'
+    case 'pdf': return PAGED_MEDIA_TYPE
     case 'svg': return 'image/svg+xml'
     case 'png': return 'image/png'
     case 'jpg':
@@ -57,4 +41,41 @@ export function figureMediaType(path: string): string | undefined {
     case 'htm': return 'text/html'
     default: return undefined
   }
+}
+
+/**
+ * Whether a path names a document this plugin renders.
+ * @param path - file path.
+ * @returns true when the suffix is one this plugin annotates.
+ */
+export function isFigurePath(path: string): boolean {
+  return (FIGURE_EXTENSIONS as readonly string[]).includes(suffixOf(path))
+}
+
+/**
+ * Whether one media type is the paged-document one.
+ *
+ * The browser half holds a media type rather than a path when it decides which
+ * JSON field carries a review artifact, so the comparison is named here too
+ * instead of being re-spelled at that call site.
+ * @param mediaType - media type of the figure.
+ * @returns true when the figure has pages.
+ */
+export function isPagedMediaType(mediaType: string): boolean {
+  return mediaType === PAGED_MEDIA_TYPE
+}
+
+/**
+ * Whether a figure's suffix calls for the paged-document treatment.
+ *
+ * One predicate for the whole plugin: the Host picks the review artifact's file
+ * extension from it, the store refuses a review whose kind contradicts it, and the
+ * browser half picks which JSON field carries the artifact from it. Reading the
+ * media type instead would work today and break the day a second suffix maps to
+ * `application/pdf`.
+ * @param path - file path.
+ * @returns true when the figure is a paged document.
+ */
+export function isPagedFigurePath(path: string): boolean {
+  return figureMediaType(path) === PAGED_MEDIA_TYPE
 }

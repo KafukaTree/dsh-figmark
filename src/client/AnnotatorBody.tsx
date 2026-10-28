@@ -23,14 +23,13 @@ import { resolveTranslate, type AnnotatorBodyProps, type TranslateVars } from '.
 import { parseFileAddress } from '../shared/address'
 import type { AnnotationDocument, AnnotationMark, FigurePoint, MarkAnchor } from '../shared/annotation'
 import {
-  ANNOTATION_VERSION, WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, clampWeight, needsReviewImage,
+  WEIGHT_DEFAULT, clampWeight, needsReviewImage,
 } from '../shared/annotation'
 import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
 import { deliverToComposer } from './composer'
-import { composeReviewSvg, rasterizePng, bytesToDataUrl, reviewSize, type FigureLayer } from './export'
-import { figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from './figure-dom'
-import { RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument } from './html-dom'
+import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
+import { anchorInDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
@@ -41,7 +40,6 @@ import {
 } from './host-actions'
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
-import { draggedMarks } from './mark-geometry'
 import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
@@ -53,341 +51,37 @@ import {
 import { markOutline } from './render'
 import { plotBounds } from './plot'
 import { figureUnit } from './scale'
+import { FigureBar, ToolPalette, type StripHandle } from './annotator/chrome'
+import { DetailPill } from './annotator/detail-pill'
+import { FigureMenuCard } from './annotator/figure-menu-card'
+import { FigureRoom } from './annotator/figure-room'
+import { useAnnotationHistory } from './annotator/history'
+import {
+  drawingScale,
+  figurePlacementStyle,
+  paperTransformStyle,
+  railFraction,
+  railWeight,
+  surfaceBoxStyle,
+} from './annotator/geometry'
+import { buildAnnotationDocument } from './annotator/documents'
+import { DEFAULT_PALETTE, draggedSpot, placementStyle } from './annotator/placement'
+import {
+  clipStatus, failureStatus, handoffDelivered, handoffStarted, hostGestureStatus,
+} from './annotator/delivery'
+import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
+import {
+  appendedMarks, detailedMarks, movedMarks, patchedMarks, patchChangesNothing, removedMarks,
+} from './annotator/mark-edits'
+import { MarkList, SummaryRecord } from './annotator/records'
+import { collectLitSpots } from './annotator/spotlights'
+import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
+import { WeightRail } from './annotator/weight-rail'
 
 export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, SurfaceDraft, Translate, TranslateVars } from './annotator-contract'
 
-/** Palette offered by the toolbar. */
-const COLORS = ['#e03131', '#1971c2', '#f08c00', '#2f9e44'] as const
 
-/**
- * The surface once its content is readable.
- *
- * One value rather than four pieces of state: a raster's own size only arrives
- * when the browser decodes it, and spread across separate `useState` calls that
- * produced combinations (a size with no layer, a URL with no bytes) the rest of
- * the component would have to defend against.
- */
-type LoadedFigure =
-  | {
-    readonly kind: 'svg'
-    readonly width: number
-    readonly height: number
-    /** Sanitized markup, already sized and classed for both panel and export. */
-    readonly markup: string
-    /** The `viewBox` the export renders under. */
-    readonly viewBox: string
-  }
-  | {
-    readonly kind: 'raster'
-    /** Object URL the `<img>` reads, owned until the effect is torn down. */
-    readonly objectUrl: string
-    /** `data:` URL the export embeds, which an object URL could not be. */
-    readonly dataUrl: string
-  }
-  | {
-    readonly kind: 'html'
-    /** Width the document is rendered at, in figure pixels; marks are measured in it. */
-    readonly width: number
-    /** Complete document for the frame, drawing policy included. */
-    readonly document: string
-  }
 
-/** Tools in toolbar order. */
-/**
- * The rail's track, drawn on an 18x100 grid and stretched to whatever height it gets.
- *
- * The control's subject is thickness, so the track says which way is heavier: a little
- * narrower at the bottom, about one part in six. "A little" is the whole note — a
- * water-drop taper reads as decoration rather than as a gauge, and the reader said so
- * twice. One cubic per side and no shoulders, so each flank is a single continuous
- * curve from end to end with nothing for the eye to catch on; the two ends close with
- * faint arcs so the track looks drawn rather than cut off.
- *
- * Stretching it vertically (preserveAspectRatio="none") is what makes the caps need
- * care: the svg is 18x100 over a box about 180 tall, so one y unit is 1.8 of an x unit.
- * An `r` that reads as a circle in the viewBox would be a tall ellipse on screen — the
- * cap's `ry` is therefore set to `rx / 1.8`, which is what puts a round end on it.
- */
-const WEIGHT_TRACK = [
-  'M 6.9 98.9',
-  'A 2.1 1.15 0 0 0 11.1 98.9',
-  'C 11.4 66 11.9 33 12.2 1.1',
-  'A 3.2 1.15 0 0 0 5.8 1.1',
-  'C 6.1 33 6.6 66 6.9 98.9',
-  'Z',
-].join(' ')
-/**
- * How far the blue reaches, as a `height` in the rail.
- *
- * The same expression as the knob's `bottom`, because the blue has to end exactly where
- * the knob's centre is: written once as a function so a change to the travel cannot
- * leave the fill behind. `inset` keeps both clear of the rail's rounded caps; the extra
- * half knob at each end keeps the knob's whole circle between the two ends of the bar
- * rather than hanging half of itself past the top when the pen is at its heaviest.
- */
-const travelHeight = (fraction: number): string =>
-  `calc(var(--da-track-inset) + var(--da-knob-size) / 2`
-  + ` + (100% - 2 * var(--da-track-inset) - var(--da-knob-size)) * ${fraction})`
-
-const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
-  { tool: 'select', label: 'toolSelect' },
-  { tool: 'arrow', label: 'toolArrow' },
-  { tool: 'rect', label: 'toolRect' },
-  { tool: 'ellipse', label: 'toolEllipse' },
-  { tool: 'pen', label: 'toolPen' },
-  { tool: 'point', label: 'toolPoint' },
-  { tool: 'element', label: 'toolElement' },
-]
-
-/**
- * The tools that only mean something on a surface made of elements.
- *
- * An inline SVG and a rendered HTML document are both trees, so a picker can name a
- * node in either one. A raster figure is one bitmap: there is nothing inside it to
- * point at, so the tool would sit in the row offering a gesture that could only ever
- * answer "no element here". It is left out there rather than shown and refused —
- * but it is kept in {@link TOOLS} for both surfaces that can use it, because a tool
- * that appears and disappears with media type has to be one list, not two.
- */
-const ELEMENT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['element'])
-
-/**
- * The tools that draw something with a size the rail can set.
- *
- * `select` is not among them: it draws nothing, so with it armed and no mark
- * selected the rail has no subject. `point` is, because a pin is sized by the same
- * number — the rail asks "how big is this mark" either way.
- */
-const WEIGHT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['arrow', 'rect', 'ellipse', 'pen', 'point'])
-
-/** The copy key naming the shape each kind of mark is, for the list's second line. */
-const TOOL_COPY: Record<AnnotationMark['kind'], string> = {
-  arrow: 'toolArrow',
-  rect: 'toolRect',
-  ellipse: 'toolEllipse',
-  pen: 'toolPen',
-  point: 'toolPoint',
-  element: 'toolElement',
-}
-
-/**
- * The pointer a `select` tool wears instead of the word "select".
- *
- * Every other tool is a picture of what it draws — an arrow, a box, a circle — and
- * this one draws nothing, so the pointer is the honest shape: it is the tool you use
- * with the mouse rather than a mark you leave behind. Drawn rather than written so
- * the toolbar stays one row of controls at any locale or font size.
- */
-/**
- * The handle's dots: six of them, three by two, turned as the reader asked.
- *
- * The palette stands up and takes a grip three columns wide by two rows tall; the bar
- * lies down and takes one two columns wide by three rows tall. That is the pair the
- * reader called for, and it is the opposite of what the strips' own proportions would
- * suggest — noted here so it is not "corrected" back by the next pair of eyes.
- *
- * Drawn instead of typed — the braille character this replaces was one glyph at one
- * size, so the dots could not be sized or spaced, and at 9px they came out a smudge.
- */
-function GripDots({ wide }: { readonly wide: boolean }): ReactNode {
-  // The grid is the size the dots are drawn at, one svg unit to one pixel: the marks
-  // stay small and sharp rather than being scaled down out of a larger frame.
-  const xs = wide ? [2, 6, 10] : [2, 6]
-  const ys = wide ? [2, 6] : [2, 6, 10]
-  return (
-    <svg className="da-grip-dots" viewBox={wide ? '0 0 12 8' : '0 0 8 12'}
-      aria-hidden="true" focusable="false">
-      {ys.map(y => xs.map(x => <circle key={`${x}-${y}`} cx={x} cy={y} r={1.4} />))}
-    </svg>
-  )
-}
-
-/**
- * The select tool: an open hand.
- *
- * The hand is what the tool *is* — dragging with it moves the paper, and the stage's
- * own cursor already says `grab` while it is armed. A cursor arrow here said the
- * opposite thing: an arrow is the pointer a marking tool wears, and `element` wears
- * one, so the two tiles looked like the same tool.
- *
- * The shape is Tabler's `hand-stop`, taken whole at its own 24 grid: five fingers drawn
- * as five strokes would be a smudge at 17px, and this one's palm-and-thumb silhouette
- * survives the size.
- */
-function GrabIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d={'M8 13v-7.5a1.5 1.5 0 0 1 3 0v6.5'} />
-      <path d={'M11 5.5v-2a1.5 1.5 0 1 1 3 0v8.5'} />
-      <path d={'M14 5.5a1.5 1.5 0 1 1 3 0v6.5'} />
-      <path d={'M17 7.5a1.5 1.5 0 1 1 3 0v8.5a6 6 0 0 1 -6 6h-2h.208a6 6 0 0 1 '
-        + '-5.012 -2.7a69.74 69.74 0 0 1 -.196 -.3c-.312 -.479 -1.407 -2.388 '
-        + '-3.286 -5.728a1.5 1.5 0 0 1 .536 -2.022a1.867 1.867 0 0 1 2.28 .28l1.47 1.47'} />
-    </svg>
-  )
-}
-
-/**
- * The element tool: a cursor, outlined rather than filled.
- *
- * It is the arrow the whole panel used to wear for `select`, moved to the tool that
- * actually behaves like a pointer: `element` asks what is under the cursor and takes the
- * thing it is over. Where `select` got it, it named a tool that does not point at
- * anything — it drags the paper.
- *
- * Filled, it read as a black blob against the dark chip — the silhouette was there but
- * the direction it points was not, which is the only thing a cursor has to say. As an
- * outline it belongs to the same stroke set as the other glyphs.
- *
- * The shape is Tabler's `cursor-text`-sibling `pointer` glyph, taken whole at its own
- * 24 grid: its body is one closed curve with round joins rather than the seven hard
- * corners a hand-traced outline has, and at 16px that softness is the whole difference
- * between a cursor and a shard. Scaled by hand it lost exactly that.
- */
-const POINTER_PATH = 'M15.02 14.03l4.74 -1.85c1.36 -.53 1.29 -2.49 -.11 -2.92l-12.03 -3.68'
-  + 'c-1.18 -.36 -2.29 .75 -1.93 1.93l3.68 12.03c.43 1.4 2.39 1.47 2.92 .11'
-  + 'l1.85 -4.74a1.55 1.55 0 0 1 .88 -.88'
-
-/**
- * The stroke each marking tool draws, so the row says it in pictures as well as words.
- *
- * Every icon in the row is drawn on the same 24-unit grid. That is not cosmetic:
- * `stroke-width` in an inline SVG is measured in the icon's own units, so a 16-unit
- * icon and a 24-unit icon given the same number draw at different thicknesses. On one
- * grid they cannot drift, and the whole row reads as one set.
- *
- * `select` never comes here: it draws nothing, so it wears the open hand. `element` does
- * come here, because a mark that is an element is drawn as the box around it, and the
- * arrow beside it says the tool picks rather than draws.
- */
-function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
-  const shape = tool === 'arrow'
-    ? <><path d="M 4.5 19.5 L 19 5" /><path d="M 10 5 h 9 v 9" /></>
-    : tool === 'rect'
-      ? <rect x="4" y="6" width="16" height="12" rx="2" />
-      : tool === 'ellipse'
-        ? <circle cx="12" cy="12" r="8.2" />
-        : tool === 'pen'
-          ? <path d="M 4 18 C 7 6 12 20 20 5" />
-          // The element tool points at what it takes, so it wears the arrow; the same
-          // path the `select` tile used to wear, from one constant so the two can never
-          // drift apart again.
-          : tool === 'element'
-            ? <path d={POINTER_PATH} />
-            // The point tool wears the mark it places: a filled drop with a hole where
-            // the number goes, and a dot inside it. The hole is a second subpath cut out
-            // with evenodd; the dot is a separate circle rather than a third subpath,
-            // because evenodd would cut that hole back open.
-            : (
-              <>
-                <path fillRule="evenodd"
-                  d="M 12 22.4 Q 4.9 15.1 4.1 10.16 A 7.9 7.9 0 1 1 19.9 10.16 Q 19.1 15.1 12 22.4 Z
-                     M 12 16.02 A 5.62 5.62 0 1 0 12 4.78 A 5.62 5.62 0 1 0 12 16.02 Z"
-                  fill="currentColor" stroke="none" />
-                <circle cx="12" cy="10.4" r="2" fill="currentColor" stroke="none" />
-              </>
-            )
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{shape}</svg>
-  )
-}
-
-/**
- * The overall goal's mark: an arrow that has hit a target.
- *
- * The record this heads is not a note about one place on the figure — it is what the
- * whole picture is meant to become — so it wears the one symbol that means "aim"
- * rather than the note the per-mark detail uses. At 16 pixels the arrow is one shaft
- * and two barbs; anything finer reads as a smudge.
- */
-function GoalIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <circle cx="10.5" cy="13.5" r="7.8" />
-      <circle cx="10.5" cy="13.5" r="3.45" />
-      <path d="M 20.7 3.3 L 12.3 11.7" />
-      <path d="M 14.4 3.9 L 20.7 3.3 L 20.1 9.6" />
-    </svg>
-  )
-}
-
-/** The list card's mark: three stacked rows, the shape of the card itself. */
-function ListIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M 9 6.75 h 10.5 M 9 12 h 10.5 M 9 17.25 h 10.5" />
-      <circle cx="4.8" cy="6.75" r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="4.8" cy="12" r="1.5" fill="currentColor" stroke="none" />
-      <circle cx="4.8" cy="17.25" r="1.5" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-/** The empty list's picture: an open box, the usual "nothing here yet". */
-function BoxIcon(): ReactNode {
-  return (
-    <svg className="da-empty-ico" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-      <path d="M 12 20 l 12 -6 l 12 6 v 12 l -12 6 l -12 -6 z" />
-      <path d="M 12 20 l 12 6 l 12 -6" />
-      <path d="M 24 26 v 12" />
-      <path d="M 17 14.5 l 4.5 2.5 M 31 14.5 l -4.5 2.5" />
-    </svg>
-  )
-}
-
-/** A step back, as the usual curved arrow. */
-function UndoIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M 4.8 11.25 H 14.25 a 5.1 5.1 0 0 1 0 10.2 H 9" />
-      <path d="M 8.7 6.6 L 4.05 11.25 L 8.7 15.9" />
-    </svg>
-  )
-}
-
-/** The same arrow the other way. */
-function RedoIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M 19.2 11.25 H 9.75 a 5.1 5.1 0 0 0 0 10.2 H 15" />
-      <path d="M 15.3 6.6 L 19.95 11.25 L 15.3 15.9" />
-    </svg>
-  )
-}
-
-/** The primary action's mark: a paper plane, the usual "this leaves here". */
-function SendIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M 3 12 L 21 3.9 L 15.9 21 L 12 14.1 Z" />
-      <path d="M 12 14.1 L 21 3.9" />
-    </svg>
-  )
-}
-
-/** The secondary action's mark: a speech bubble, "this goes to the chat box". */
-function ChatIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M 3.75 9.75 a 3 3 0 0 1 3 -3 h 10.5 a 3 3 0 0 1 3 3 v 4.5 a 3 3 0 0 1 -3 3 h -6 l -4.5 3.3 v -3.3 a 3 3 0 0 1 -3 -3 z" />
-    </svg>
-  )
-}
-
-/**
- * What one mark's anchor names, most specific first.
- *
- * An inline SVG figure names itself through its `<title>`; a rendered document
- * has none, and names itself through its own text or its place in the document.
- * @param mark - the mark to name.
- * @returns the name, or an empty string when the mark points at no element.
- */
-function anchorName(mark: AnnotationMark): string {
-  const anchor = mark.anchor
-  if (anchor === undefined) return ''
-  return [anchor.title, anchor.text, anchor.selector].find(value => value !== undefined && value !== '') ?? ''
-}
 
 /**
  * Render one figure with its annotation layer.
@@ -545,7 +239,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const remembered = useMemo(() => readPreferences(), [])
   const [color, setColor] = useState<string>(remembered.color ?? COLORS[0])
   const [weight, setWeight] = useState<number>(remembered.weight ?? WEIGHT_DEFAULT)
-  const [marks, setMarks] = useState<AnnotationMark[]>(() => [...(props.draft?.marks ?? [])])
+  /**
+   * The marks and the trail behind them, as one machine.
+   *
+   * Kept together because no edit touches only one of the three: a commit pushes the
+   * old marks onto the trail and drops the redo, an undo swaps a step across. Held as
+   * separate state the surface could be left in a shape the reader never produced.
+   */
+  const history = useAnnotationHistory(props.draft?.marks ?? [])
+  const marks = history.marks
   /**
    * What the list shows.
    *
@@ -555,8 +257,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * with nothing extra.
    */
   const listedMarks = props.documentMarks ?? marks
-  const [past, setPast] = useState<AnnotationMark[][]>([])
-  const [future, setFuture] = useState<AnnotationMark[][]>([])
   const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null)
   /**
    * The selection, kept by the owner when there is one.
@@ -703,24 +403,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const paletteRef = useRef<HTMLDivElement | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragFrom = useRef<{ pointerId: number; origin: PaletteSpot; box: DOMRect } | null>(null)
-  /**
-   * Where the palette sits before the reader moves it: top left, out of the way of
-   * the figure's own middle and of the bar along the bottom.
-   */
-  const DEFAULT_PALETTE: PaletteSpot = { x: 0.02, y: 0.04 }
-  const spot = palette ?? DEFAULT_PALETTE
-  /**
-   * The palette's box, in percentages of the panel.
-   *
-   * Percentages rather than pixels so the parking spot survives a resize: a reader
-   * who narrows the pane keeps the palette where it was in the picture, not off the
-   * edge of the panel. The negative margins pull it back inside at the far corner.
-   */
-  const paletteStyle: CSSProperties = {
-    left: `${spot.x * 100}%`,
-    top: `${spot.y * 100}%`,
-    transform: `translate(${spot.x >= 0.5 ? '-100%' : '0'}, ${spot.y >= 0.5 ? '-100%' : '0'})`,
-  }
+  /** The palette's box, in percentages of the panel. */
+  const paletteStyle = placementStyle(palette ?? DEFAULT_PALETTE)
 
   /**
    * The floating bar's own spot, and the bits a drag of it needs.
@@ -759,22 +443,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     /* v8 ignore next */
     if (held === null || root === null || !(root instanceof Element)) return
     const bounds = root.getBoundingClientRect()
-    const x = held.origin.x + (event.clientX - held.box.left) / Math.max(1, bounds.width)
-    const y = held.origin.y + (event.clientY - held.box.top) / Math.max(1, bounds.height)
-    // The strip is placed from a corner and hangs from it, so a fraction of 1 puts
-    // its *near* edge on the far edge of the pane — its body entirely outside. The
-    // usable range is what is left of the pane once the strip's own width or height
-    // is taken out of it.
-    /* v8 ignore start -- both call sites hold a live ref for the whole drag. */
+    /* v8 ignore next -- both call sites hold a live ref for the whole drag. */
     const width = strip?.offsetWidth ?? 0
+    /* v8 ignore next -- both call sites hold a live ref for the whole drag. */
     const height = strip?.offsetHeight ?? 0
-    /* v8 ignore stop */
-    const roomX = Math.max(0, bounds.width - width) / Math.max(1, bounds.width)
-    const roomY = Math.max(0, bounds.height - height) / Math.max(1, bounds.height)
-    write({
-      x: Math.min(roomX, Math.max(0, x)),
-      y: Math.min(roomY, Math.max(0, y)),
-    })
+    write(draggedSpot(held, event, bounds, { width, height }))
   }, [])
   const dragPalette = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     followPointer(event, dragFrom, setPalette, paletteRef.current)
@@ -782,6 +455,63 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const dragBar = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     followPointer(event, barFrom, setBarSpot, barRef.current)
   }, [followPointer])
+
+  /**
+   * The palette's drag, as one bundle.
+   *
+   * A strip's handle takes four handlers that all have to agree about the same
+   * press, and the two strips differ only in which ref and which setter they use —
+   * so each bundle is assembled once here rather than inline in the markup, where
+   * the press would be remembered against whichever render happened to be current.
+   */
+  const paletteHandle: StripHandle = {
+    dragging,
+    onDown: (event) => {
+      /* v8 ignore next -- nothing to measure against until the panel is mounted. */
+      if (rootRef.current === null) return
+      /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      dragFrom.current = {
+        pointerId: event.pointerId,
+        origin: palette ?? DEFAULT_PALETTE,
+        box: { left: event.clientX, top: event.clientY } as DOMRect,
+      }
+      setDragging(true)
+    },
+    onMove: dragPalette,
+    onUp: (event) => {
+      /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
+      event.currentTarget.releasePointerCapture?.(event.pointerId)
+      dragFrom.current = null
+      setDragging(false)
+    },
+    onCancel: () => { dragFrom.current = null; setDragging(false) },
+  }
+
+  /** The bar's drag, on the same terms as the palette's. */
+  const barHandle: StripHandle = {
+    dragging: barDragging,
+    onDown: (event) => {
+      /* v8 ignore next -- nothing to measure against until the panel is mounted. */
+      if (rootRef.current === null) return
+      /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      barFrom.current = {
+        pointerId: event.pointerId,
+        origin: barSpot ?? DEFAULT_PALETTE,
+        box: { left: event.clientX, top: event.clientY } as DOMRect,
+      }
+      setBarDragging(true)
+    },
+    onMove: dragBar,
+    onUp: (event) => {
+      /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
+      event.currentTarget.releasePointerCapture?.(event.pointerId)
+      barFrom.current = null
+      setBarDragging(false)
+    },
+    onCancel: () => { barFrom.current = null; setBarDragging(false) },
+  }
 
   useEffect(() => {
     rememberPreferences({ color, weight, ...(palette === undefined ? {} : { palette }), ...(barSpot === undefined ? {} : { bar: barSpot }) })
@@ -795,63 +525,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * been dragged it is placed by fractions like the palette, and the same
    * edge-flipping transform keeps its far corner on the panel.
    */
-  /**
-   * A record's inline placement, from whatever has been measured so far.
-   *
-   * Both sides are always written: one with a real offset and one `auto`. A card
-   * that grows downwards must not also be pinned by its bottom edge, or with no
-   * height of its own it stretches to fill the space between them. Before the
-   * measurement lands there is no offset at all — the card is briefly at the
-   * panel's corner, which is off the figure and gone before it can be seen.
-   */
-  const recordStyle = (at: RecordPlacement | null): CSSProperties => ({
-    left: at?.left,
-    top: at?.top ?? 'auto',
-    bottom: at?.bottom ?? 'auto',
-  })
-
   const barStyle: CSSProperties | undefined = barSpot === undefined
     ? undefined
-    : {
-        left: `${barSpot.x * 100}%`,
-        top: `${barSpot.y * 100}%`,
-        transform: `translate(${barSpot.x >= 0.5 ? '-100%' : '0'}, ${barSpot.y >= 0.5 ? '-100%' : '0'})`,
-      }
+    : placementStyle(barSpot)
 
   useEffect(() => { ensureStyles(document) }, [])
 
   const data = props.content?.kind === 'bytes' ? props.content.data : undefined
 
-  const layer = useMemo((): FigureLayer | null => {
-    if (figure === null) return null
-    if (figure.kind === 'svg') {
-      return {
-        kind: 'svg',
-        markup: figure.markup,
-        width: figure.width,
-        height: figure.height,
-        viewBox: figure.viewBox,
-      }
-    }
-    // A rendered document has no layer: the browser cannot turn a live document
-    // into a picture, so this surface's marks travel as the marks file alone.
-    if (figure.kind === 'html') return null
-    // A raster has no size until the browser has decoded it.
-    if (rasterSize === null) return null
-    return { kind: 'raster', dataUrl: figure.dataUrl, width: rasterSize.width, height: rasterSize.height }
-  }, [figure, rasterSize])
+  const layer = useMemo(() => figureLayer(figure, rasterSize), [figure, rasterSize])
 
   /**
    * The surface's measurable size; null until its content and dimensions are both
    * known. A rendered document is measurable as soon as its width is — the frame
    * reports how tall its content is, and until it does the surface has no height.
    */
-  const size = useMemo((): { readonly width: number; readonly height: number } | null => {
-    if (figure === null) return null
-    if (figure.kind === 'svg') return { width: figure.width, height: figure.height }
-    if (figure.kind === 'html') return { width: figure.width, height: htmlHeight }
-    return rasterSize
-  }, [figure, htmlHeight, rasterSize])
+  const size = useMemo(() => figureSize(figure, rasterSize, htmlHeight), [figure, htmlHeight, rasterSize])
   /**
    * How big everything drawn is, as a multiple of the base sizes.
    *
@@ -897,43 +586,23 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // to decode: decoding them here would fight the renderer that owns them.
     if (surface !== undefined) return
     if (data === undefined || mediaType === undefined) return
-    if (mediaType === 'image/svg+xml') {
-      const root = parseFigureSvg(new TextDecoder().decode(data))
-      if (root === undefined) {
-        setFigureError(t('loadFailed'))
-        return
-      }
-      const intrinsic = svgIntrinsicSize(root)
-      // The size and the panel class are baked into the markup, so the string
-      // the panel inlines and the string the export embeds are the same one.
-      root.setAttribute('width', String(intrinsic.width))
-      root.setAttribute('height', String(intrinsic.height))
-      root.classList.add('da-figure')
-      setFileFigure({
-        kind: 'svg',
-        width: intrinsic.width,
-        height: intrinsic.height,
-        markup: figureSvgMarkup(root),
-        viewBox: svgViewBox(root, intrinsic),
-      })
+    const decoded = decodeFigure(data, mediaType)
+    const loaded = decoded.figure
+    if (loaded === undefined) {
+      setFigureError(t('loadFailed'))
       return
     }
-    if (mediaType === 'text/html') {
+    if (loaded.kind === 'html') {
       // The frame is sized to its content, so the height it reports is the whole
       // document's; until it reports one the marks file has no surface to describe.
       setHtmlHeight(0)
       setFigureError(null)
-      setFileFigure({
-        kind: 'html',
-        width: RENDER_WIDTH,
-        document: buildRenderedDocument(new TextDecoder().decode(data)),
-      })
-      return
     }
-    const objectUrl = URL.createObjectURL(new Blob([data], { type: mediaType }))
-    setFileRasterSize(null)
-    setFileFigure({ kind: 'raster', objectUrl, dataUrl: bytesToDataUrl(data, mediaType) })
-    return () => { URL.revokeObjectURL(objectUrl) }
+    // A raster has no size until the browser has decoded it, and this is a new one.
+    if (loaded.kind === 'raster') setFileRasterSize(null)
+    setFileFigure(loaded)
+    if (loaded.kind !== 'raster') return
+    return () => { URL.revokeObjectURL(loaded.objectUrl) }
   }, [data, mediaType, surface, t])
 
   // --- rendered document ----------------------------------------------------
@@ -981,7 +650,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         setLoaded(result)
         setHostError(null)
         if (result.annotation !== null) {
-          setMarks([...result.annotation.marks])
+          history.replace(result.annotation.marks)
           writeSummary(result.annotation.summary ?? '')
           // The saved document's number style describes the picture on screen, so it
           // wins over the remembered preference: the annotation and its image have to
@@ -1009,16 +678,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     return () => { observer.disconnect() }
   }, [])
 
-  const scale = useMemo(() => {
-    if (size === null) return 1
-    if (zoom !== 'fit') return zoom
-    // The owner's width wins over this body's own measurement: in a column every
-    // page measures its box at a different moment, and one that measured nothing
-    // would draw at its own pixel size — a document of mismatched sheets.
-    const target = props.fitWidth ?? fitWidth
-    if (target <= 0) return 1
-    return Math.min(1.5, Math.max(0.05, target / size.width))
-  }, [zoom, fitWidth, size, props.fitWidth])
+  const scale = useMemo(
+    () => drawingScale({ zoom, fitWidth, size, ownerWidth: props.fitWidth }),
+    [zoom, fitWidth, size, props.fitWidth],
+  )
 
   /**
    * Where the records hang: above the bar, centred on it.
@@ -1254,13 +917,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   // --- edits ----------------------------------------------------------------
 
-  const commit = useCallback((next: AnnotationMark[]): void => {
-    setPast(history => [...history, marks].slice(-50))
-    setFuture([])
-    setMarks(next)
-  }, [marks])
+  const { commit } = history
 
-  const addMark = useCallback((mark: AnnotationMark): void => { commit([...marks, mark]) }, [commit, marks])
+  const addMark = useCallback((mark: AnnotationMark): void => { commit(appendedMarks(marks, mark)) }, [commit, marks])
 
   const removeMark = useCallback((id: string): void => {
     // A mark on another page of the document cannot be removed from this page's own
@@ -1269,7 +928,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       props.onDocumentRemove(id)
       return
     }
-    commit(marks.filter(mark => mark.id !== id))
+    commit(removedMarks(marks, id))
     setSelectedId(current => (current === id ? null : current))
   }, [commit, marks, props.onDocumentRemove])
 
@@ -1283,7 +942,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param value - the new text.
    */
   const setMarkDetail = useCallback((id: string, value: string): void => {
-    setMarks(current => current.map(mark => (mark.id === id ? { ...mark, detail: value } : mark)))
+    history.amend(current => detailedMarks(current, id, value))
   }, [])
 
   /**
@@ -1352,8 +1011,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param patch - the fields that changed.
    */
   const updateMark = useCallback((id: string, patch: MarkPatch): void => {
-    const next = marks.map(mark => (mark.id === id ? { ...mark, ...patch } : mark))
-    commit(next)
+    commit(patchedMarks(marks, id, patch))
   }, [commit, marks])
 
   /**
@@ -1363,7 +1021,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * it had, and no undo step is recorded for a gesture that changed nothing.
    */
   const moveMark = useCallback((id: string, points: readonly FigurePoint[], anchor: MarkAnchor | undefined): void => {
-    const next = draggedMarks(marks, id, points, anchor)
+    const next = movedMarks(marks, id, points, anchor)
     /* v8 ignore next -- the surface only reports a press that left its mark somewhere else. */
     if (next === null) return
     commit(next)
@@ -1387,25 +1045,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * there or was removed while it was selected.
    * @param patch - the attribute to change.
    */
-  const undo = useCallback((): void => {
-    setPast(history => {
-      const previous = history[history.length - 1]
-      if (previous === undefined) return history
-      setFuture(futureState => [marks, ...futureState].slice(0, 50))
-      setMarks(previous)
-      return history.slice(0, -1)
-    })
-  }, [marks])
-
-  const redo = useCallback((): void => {
-    setFuture(futureState => {
-      const next = futureState[0]
-      if (next === undefined) return futureState
-      setPast(history => [...history, marks].slice(-50))
-      setMarks(next)
-      return futureState.slice(1)
-    })
-  }, [marks])
+  const { undo, redo } = history
 
   /**
    * Report every edit upward, so an owner that unmounts this surface (a page
@@ -1508,22 +1148,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   const buildDocument = useCallback((target: { readonly width: number; readonly height: number }, scope = marks): AnnotationDocument | null => {
     if (loaded === null) return null
-    const now = new Date().toISOString()
-    return {
-      version: ANNOTATION_VERSION,
-      figure: {
-        address,
-        path: loaded.path,
-        mediaType: loaded.mediaType,
-        width: target.width,
-        height: target.height,
-        sha256: loaded.sha256,
-      },
-      createdAt: createdAt ?? now,
-      updatedAt: now,
+    return buildAnnotationDocument({
+      figure: { address, path: loaded.path, mediaType: loaded.mediaType, sha256: loaded.sha256 },
+      size: target,
       marks: scope,
-      ...(summary.trim() === '' ? {} : { summary: summary.trim() }),
-    }
+      summary,
+      createdAt,
+      now: new Date().toISOString(),
+    })
   }, [address, createdAt, loaded, marks, summary])
 
   /**
@@ -1555,28 +1187,23 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         }
         const signature = annotationSignature(state.marks, state.summary)
         if (signature === writtenSignature.current) return
-        const now = new Date().toISOString()
-        const document: AnnotationDocument = {
-          version: ANNOTATION_VERSION,
+        const document = buildAnnotationDocument({
           figure: {
             address: state.address,
             path: state.loaded.path,
             mediaType: state.loaded.mediaType,
-            width: state.size.width,
-            height: state.size.height,
             sha256: state.loaded.sha256,
           },
-          createdAt: state.createdAt ?? now,
-          updatedAt: now,
+          size: state.size,
           marks: state.marks,
-          ...(state.summary.trim() === '' ? {} : { summary: state.summary.trim() }),
-        }
+          summary: state.summary,
+          createdAt: state.createdAt,
+          now: new Date().toISOString(),
+        })
         await saveAnnotation(state.address, document, undefined, true)
         writtenSignature.current = signature
       },
-      onError: (error: unknown) => {
-        setStatus({ tone: 'error', text: `${t('saveError')}${error instanceof Error ? error.message : String(error)}` })
-      },
+      onError: (error: unknown) => { setStatus(failureStatus(t, 'saveError', error)) },
     })
   }
 
@@ -1600,7 +1227,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     try {
       await deleteAnnotation(address)
     } catch (error) {
-      setStatus({ tone: 'error', text: `${t('clearError')}${error instanceof Error ? error.message : String(error)}` })
+      setStatus(failureStatus(t, 'clearError', error))
     }
     commit([])
     setCreatedAt(null)
@@ -1627,7 +1254,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const scope = only === undefined ? marks : [only]
     if (scope.length === 0 || size === null || size.height <= 0) return
     setBusy('sending')
-    setStatus({ tone: 'info', text: t(target === 'agent' ? 'sending' : 'composing') })
+    setStatus(handoffStarted(t, target))
     try {
       const document_ = buildDocument(size, scope)
       if (document_ === null) throw new Error(t('loadFailed'))
@@ -1655,7 +1282,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
           locale,
         })
-        setStatus({ tone: 'ok', text: t('composed') })
+        setStatus(handoffDelivered(t, 'composer'))
         await discard()
         return
       }
@@ -1672,10 +1299,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         annotatedPdf: undefined,
         locale,
       })
-      setStatus({ tone: 'ok', text: t('sent') })
+      setStatus(handoffDelivered(t, 'agent'))
       await discard()
     } catch (error) {
-      setStatus({ tone: 'error', text: `${t('saveError')}${error instanceof Error ? error.message : String(error)}` })
+      setStatus(failureStatus(t, 'saveError', error))
     } finally {
       setBusy(null)
     }
@@ -1772,13 +1399,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     if (id === 'sendToComposer') { void run('composer'); return }
     if (id === 'open') {
       void openOnDesktop(props.remote, path).then(ok => {
-        setStatus(ok ? { tone: 'ok', text: t('menuOpened') } : { tone: 'error', text: t('menuOpenFailed') })
+        setStatus(hostGestureStatus(t, ok, 'menuOpened', 'menuOpenFailed'))
       })
       return
     }
     if (id === 'reveal') {
       void revealOnDesktop(props.remote, path).then(ok => {
-        setStatus(ok ? { tone: 'ok', text: t('menuRevealed') } : { tone: 'error', text: t('menuRevealFailed') })
+        setStatus(hostGestureStatus(t, ok, 'menuRevealed', 'menuRevealFailed'))
       })
       return
     }
@@ -1787,9 +1414,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       if (layer === null) return
       void exportPng(layer).then(async image => {
         const copied = await copyImageToClipboard(image)
-        setStatus(copied ? { tone: 'ok', text: t('menuCopied') } : { tone: 'error', text: t('menuCopyFailed') })
+        setStatus(clipStatus(t, copied))
       }, () => {
-        setStatus({ tone: 'error', text: t('menuCopyFailed') })
+        setStatus(clipStatus(t, false))
       })
       return
     }
@@ -1797,9 +1424,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     /* v8 ignore next */
     if (text === null) return
     void navigator.clipboard.writeText(text).then(() => {
-      setStatus({ tone: 'ok', text: t('menuCopied') })
+      setStatus(clipStatus(t, true))
     }, () => {
-      setStatus({ tone: 'error', text: t('menuCopyFailed') })
+      setStatus(clipStatus(t, false))
     })
   }, [exportPng, layer, props.remote, run, t])
 
@@ -1867,28 +1494,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param preview - the element the picker is offering, if any.
    * @returns what to light, in a stable enough order that the class work is minimal.
    */
-  const litSpots = useCallback((preview: MarkAnchor | undefined): readonly LitSpot[] => {
-    const spots: LitSpot[] = []
-    const seen = new Set<Element>()
-    for (const mark of marks) {
-      const selector = mark.kind === 'element' ? mark.anchor?.selector : undefined
-      if (selector === undefined) continue
-      const element = findElement(selector)
-      if (element === undefined || seen.has(element)) continue
-      seen.add(element)
-      spots.push({ element, selected: props.selectedId === mark.id })
-    }
-    if (preview?.selector !== undefined) {
-      const element = findElement(preview.selector)
-      // A preview over an element that already carries a mark just brightens it: two
-      // classes on one element would be two statements about the same shape.
-      if (element !== undefined && !seen.has(element)) {
-        seen.add(element)
-        spots.push({ element, selected: false })
-      }
-    }
-    return spots
-  }, [findElement, marks, props.selectedId])
+  const litSpots = useCallback(
+    (preview: MarkAnchor | undefined): readonly LitSpot[] => collectLitSpots({
+      marks,
+      selectedId: props.selectedId,
+      preview,
+      findElement,
+    }),
+    [findElement, marks, props.selectedId],
+  )
 
   /**
    * Hand the light to whatever the current state says should wear it.
@@ -1960,22 +1574,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * nobody is making. A point mark borrows the same number for its pin, so the rail
    * stays when one is selected — it is the mark's size, whichever way it is drawn.
    */
-  const shownWeight = selected === null
-    ? (WEIGHT_TOOLS.has(tool) ? weight : null)
-    // An element mark has no stroke and no marker: it is the light on the element it
-    // names, and nothing about it is sized. The rail stood open on one anyway, reading
-    // the weight the mark used to carry when it was still drawn as a box — a slider
-    // that moved nothing, on a mark with nothing to move.
-    : (selected.kind === 'element' ? null : (selected.weight ?? WEIGHT_DEFAULT))
+  const shownWeight = railWeight(selected, tool, weight)
   /**
    * How far up the rail that value sits, from 0 at the lightest to 1 at the heaviest.
    *
    * One number for the fill, the knob and the input: computed three times the three
    * could round differently and the knob would sit a pixel off the fill it belongs to.
    */
-  const weightFraction = shownWeight === null
-    ? 0
-    : (shownWeight - WEIGHT_MIN) / (WEIGHT_MAX - WEIGHT_MIN)
+  const weightFraction = railFraction(shownWeight)
   /**
    * Change one attribute of the selected mark, or of the next stroke when nothing
    * is selected.
@@ -1985,13 +1591,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param patch - the attribute to change.
    */
   const repaintSelected = (mark: AnnotationMark, patch: MarkPatch): void => {
-    // Compared key by key rather than object by object: spreading always makes a
-    // new object, so a reference compare would report every press as a change and
-    // record an undo step that undoes nothing.
-    const unchanged = (Object.keys(patch) as (keyof MarkPatch)[])
-      .every(key => mark[key] === patch[key])
-    if (unchanged) return
-    commit(marks.map(entry => (entry.id === mark.id ? { ...entry, ...patch } : entry)))
+    if (patchChangesNothing(mark, patch)) return
+    commit(patchedMarks(marks, mark.id, patch))
   }
   const chooseColor = (value: string): void => {
     if (selected === null) {
@@ -2008,9 +1609,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }
     repaintSelected(selected, { weight: held })
   }
-  const surfaceStyle: CSSProperties = paper === null
-    ? {}
-    : { width: paper.width * scale, height: paper.height * scale }
+  const surfaceStyle = surfaceBoxStyle(paper, scale)
   /**
    * The paper at its unscaled size, with the figure placed at its own offset on it.
    *
@@ -2019,12 +1618,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * at 60% is exactly what a mark drawn on a line work and a mark drawn on paper
    * would do.
    */
-  const paperStyle: CSSProperties = paper === null
-    ? {}
-    : { position: 'relative', width: paper.width, height: paper.height, transform: `scale(${scale})`, transformOrigin: 'top left' }
-  const figureStyle: CSSProperties = paper === null
-    ? {}
-    : { position: 'absolute', left: -paper.x, top: -paper.y, width: size?.width, height: size?.height }
+  const paperStyle = paperTransformStyle(paper, scale)
+  const figureStyle = figurePlacementStyle(paper, size)
 
   /**
    * The floating chrome: the weight rail, the tool palette and the bar.
@@ -2045,169 +1640,41 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   const chromeStrips = (
     <>
-      <div className="da-palette" ref={paletteRef}
-        data-dragging={dragging ? 'true' : undefined}
+      <ToolPalette
+        stripRef={paletteRef}
         style={paletteStyle}
-        role="toolbar" aria-label={t('tools')}>
-        <div className="da-palette-grip" title={t('moveTools')}
-          onPointerDown={(event) => {
-            const root = rootRef.current
-            /* v8 ignore next */
-            if (root === null) return
-            /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
-            event.currentTarget.setPointerCapture?.(event.pointerId)
-            dragFrom.current = {
-              pointerId: event.pointerId,
-              origin: palette ?? DEFAULT_PALETTE,
-              box: { left: event.clientX, top: event.clientY } as DOMRect,
-            }
-            setDragging(true)
-          }}
-          onPointerMove={(event) => { dragPalette(event) }}
-          onPointerUp={(event) => {
-            event.currentTarget.releasePointerCapture?.(event.pointerId)
-            dragFrom.current = null
-            setDragging(false)
-          }}
-          onPointerCancel={() => { dragFrom.current = null; setDragging(false) }}>
-          <GripDots wide />
-        </div>
-        {tools.map(entry => (
-          <button key={entry.tool} type="button" className="da-btn da-tool"
-            aria-pressed={tool === entry.tool}
-            aria-label={t(entry.label)}
-            title={t(entry.label)}
-            onClick={() => { setTool(entry.tool) }}>
-            <span className="da-tool-icon" aria-hidden>
-              {entry.tool === 'select' ? <GrabIcon /> : ToolIcon(entry.tool)}
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {/* Every control lives along the bottom, in one bar: the marks palette, the
-          style fold, the history steps, the view jumps, the records and the way out.
-          The figure above is what the panel is for, so nothing takes a row from it —
-          and a control along the bottom edge is a control the reader's eye already
-          knows to look for, from every viewer they have used. */}
-      {/* The bar is the same kind of object as the palette: a dark rounded strip
-          that floats over the figure and can be dragged clear of whatever the
-          reader is looking at. It carries the records and the hand-off; the tools
-          have their own strip so either can be parked on its own. */}
-      <div className="da-bar" ref={barRef} data-dragging={barDragging ? 'true' : undefined}
-        /* A parked bar is placed from the top, and the stylesheet's own bottom offset
-           has to go with it or the strip stretches to fill the pane. An attribute
-           rather than `bottom:auto` inline, because the offset is a rule and a rule
-           beats nothing but loses to any inline value that happens to survive. */
-        data-parked={barSpot === undefined ? undefined : 'true'} style={barStyle}>
-        <div className="da-palette-grip" title={t('moveBar')}
-          onPointerDown={(event) => {
-            const root = rootRef.current
-            /* v8 ignore next */
-            if (root === null) return
-            /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
-            event.currentTarget.setPointerCapture?.(event.pointerId)
-            barFrom.current = {
-              pointerId: event.pointerId,
-              origin: barSpot ?? DEFAULT_PALETTE,
-              box: { left: event.clientX, top: event.clientY } as DOMRect,
-            }
-            setBarDragging(true)
-          }}
-          onPointerMove={(event) => { dragBar(event) }}
-          onPointerUp={(event) => {
-            event.currentTarget.releasePointerCapture?.(event.pointerId)
-            barFrom.current = null
-            setBarDragging(false)
-          }}
-          onPointerCancel={() => { barFrom.current = null; setBarDragging(false) }}>
-          <GripDots wide={false} />
-        </div>
-        {/* Where the document is, and how to move through it, before the pen: paging
-            is what the reader decides first, and the colour belongs to the stroke
-            that comes after. Drawn by the paged owner and only placed here, because
-            the page number is that owner's to keep. */}
-        {props.pagingSlot === undefined ? null : (
-          <>
-            {props.pagingSlot}
-            <span className="da-sep" aria-hidden />
-          </>
-        )}
-        {/* The fold that steers the next stroke: the colour it is drawn in. It opens
-            upwards, clear of the bar itself. */}
-        <div className="da-bar-tools">
-          <button type="button" className="da-btn da-style" aria-expanded={styleOpen}
-            aria-label={t('style')} title={t('style')}
-            onClick={() => { setOpenPanel(open => (open === 'style' ? null : 'style')) }}>
-            <span className="da-swatch-dot" style={{ background: shownColor }} />
-            <span className="da-style-caret" aria-hidden>{styleOpen ? '\u25b4' : '\u25be'}</span>
-          </button>
-        </div>
-        {/* The fold that steers the next stroke, opened upwards clear of the bar. */}
-        {styleOpen ? (
-          <div className="da-style-row" role="group" aria-label={t('style')}
-            data-side={foldOpensDown ? 'below' : 'above'}>
-            <span className="da-style-label">{t('styleColor')}</span>
-            <div className="da-style-colors">
-              {COLORS.map(value => (
-                <button key={value} type="button" className="da-swatch" aria-pressed={shownColor === value}
-                  style={{ background: value }} aria-label={value} title={value}
-                  onClick={() => { chooseColor(value) }} />
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <span className="da-sep" aria-hidden />
-        <span className="da-spacer" />
-        {/* One fold for each record, with the count riding on the one that has a
-            count to give. */}
-        <button type="button" className="da-dock-btn" aria-pressed={goalOpen}
-          aria-label={t('summary')} title={t('summary')}
-          onClick={() => { setOpenPanel(open => (open === 'goal' ? null : 'goal')) }}>
-          <GoalIcon />
-          {summary.trim() === '' ? null : <span className="da-dock-dot" aria-hidden />}
-        </button>
-        <button type="button" className="da-dock-btn" aria-pressed={listOpen}
-          aria-label={t('marks')} title={t('marks')}
-          onClick={() => { setOpenPanel(open => (open === 'list' ? null : 'list')) }}>
-          <ListIcon />
-          {/* The badge counts the document, not this sheet: the column moves the
-              chrome from page to page, and a count that changed as the reader
-              scrolled would be describing a different document every second. */}
-          {listedMarks.length === 0 ? null : <span className="da-dock-count">{listedMarks.length}</span>}
-        </button>
-        <span className="da-dock-sep" aria-hidden />
-        {/* The keyboard reaches undo and redo whatever the buttons show, so the
-            disabled state is an affordance and the guards behind the handlers are
-            what actually decide. */}
-        <button type="button" className="da-dock-btn" aria-label={t('undo')} title={t('undo')}
-          disabled={past.length === 0} onClick={undo}>
-          <UndoIcon />
-        </button>
-        <button type="button" className="da-dock-btn" aria-label={t('redo')} title={t('redo')}
-          disabled={future.length === 0} onClick={redo}>
-          <RedoIcon />
-        </button>
-        {/* The hand-off is the last thing on the bar, past everything that edits,
-            because it ends the session rather than continuing it. A page body has no
-            seat of its own, so its owner's callback stands in — the marks still go
-            out from one place, whichever page the reader happened to be on. */}
-        {isPage && props.onSend === undefined ? null : (
-          <>
-            <span className="da-dock-sep" aria-hidden />
-            <button type="button" className="da-dock-btn" disabled={busy !== null}
-              aria-label={t('sendToAgent')} title={t('sendToAgent')}
-              onClick={() => { if (props.onSend === undefined) void run('agent'); else props.onSend('agent') }}>
-              <SendIcon />
-            </button>
-            <button type="button" className="da-dock-btn" disabled={busy !== null}
-              aria-label={t('sendToComposer')} title={t('sendToComposer')}
-              onClick={() => { if (props.onSend === undefined) void run('composer'); else props.onSend('composer') }}>
-              <ChatIcon />
-            </button>
-          </>
-        )}
-      </div>
+        handle={paletteHandle}
+        tools={tools}
+        tool={tool}
+        onChoose={setTool}
+        t={t} />
+      <FigureBar
+        stripRef={barRef}
+        style={barStyle}
+        parked={barSpot !== undefined}
+        handle={barHandle}
+        pagingSlot={props.pagingSlot}
+        shownColor={shownColor}
+        styleOpen={styleOpen}
+        foldOpensDown={foldOpensDown}
+        onToggleStyle={() => { setOpenPanel(open => (open === 'style' ? null : 'style')) }}
+        onChooseColor={chooseColor}
+        goalOpen={goalOpen}
+        summary={summary}
+        onToggleGoal={() => { setOpenPanel(open => (open === 'goal' ? null : 'goal')) }}
+        listOpen={listOpen}
+        listedMarks={listedMarks}
+        onToggleList={() => { setOpenPanel(open => (open === 'list' ? null : 'list')) }}
+        pastCount={history.depth.past}
+        futureCount={history.depth.future}
+        undo={undo}
+        redo={redo}
+        isPage={isPage}
+        onSend={props.onSend}
+        sendToAgent={() => { if (props.onSend === undefined) void run('agent'); else props.onSend('agent') }}
+        sendToComposer={() => { if (props.onSend === undefined) void run('composer'); else props.onSend('composer') }}
+        busy={busy !== null}
+        t={t} />
     </>
   )
 
@@ -2217,92 +1684,71 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
       {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
 
-      {/* `data-hand` asks for the grab cursor only under `select`, because that is
-          the one tool whose drag has no other job; `data-panning` is the hand closed. */}
-      <div className="da-stage" ref={attachStage}
+      <FigureRoom
+        stageRef={attachStage}
+        surfaceRef={surfaceRef}
+        paperRef={paperRef}
+        figureRef={figureRef}
+        hostRef={figureHostRef}
+        frameRef={frameRef}
+        surfaceStyle={surfaceStyle}
+        paperStyle={paperStyle}
+        figureStyle={figureStyle}
+        figure={figure}
+        size={size}
+        htmlHeight={htmlHeight}
+        stageClass={{ hand: tool === 'select', panning }}
         onContextMenu={openMenu}
-        data-hand={tool === 'select' ? 'true' : undefined}
-        data-panning={panning ? 'true' : undefined}>
-        <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
-          <div className="da-paper" ref={paperRef} style={paperStyle}>
-          <div className="da-figure-frame" ref={figureRef} style={figureStyle}>
-            {figure?.kind === 'svg' ? (
-              <div ref={figureHostRef} dangerouslySetInnerHTML={{ __html: figure.markup }} />
-            ) : figure?.kind === 'raster' ? (
-              <img
-                className="da-figure"
-                src={figure.objectUrl}
-                width={size?.width}
-                height={size?.height}
-                alt=""
-                onLoad={(event) => {
-                  const image = event.currentTarget
-                  setFileRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
-                }}
-              />
-            ) : figure?.kind === 'html' ? (
-              // Same origin, scripts off: the body may read the frame's markup and
-              // nothing inside it can run or reach anywhere. The overlay above
-              // takes every pointer event, so the document is never navigated.
-              <iframe
-                ref={frameRef}
-                className="da-html"
-                title={t('htmlFrame')}
-                sandbox="allow-same-origin"
-                // The height the frame reported for its own content: until it
-                // reports one, the surface is not there to draw on.
-                style={{ width: figure.width, height: htmlHeight }}
-              />
-            ) : null}
-          </div>
-            {paper === null || size === null ? null : (
-              <Canvas
-                // The paper, not the figure: a mark in the margin has to have
-                // somewhere to be drawn and somewhere to be pressed.
-                width={paper.width}
-                height={paper.height}
-                origin={[-paper.x, -paper.y]}
-                marks={marks}
-                tool={tool}
-                color={color}
-                weight={weight}
-                scale={scale}
-                containerRef={figureHostRef}
-                anchoring={isVector}
-                anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                onAdd={addMark}
-                onMove={moveMark}
-                onUpdate={updateMark}
-                onRemove={removeMark}
-                onPan={panBy}
-                onPanStart={() => { setPanning(true) }}
-                onPanEnd={() => { setPanning(false) }}
-                onHover={lightElement}
-                onEdit={editMark}
-                onDrawn={finishDrawing}
-                onLiveEdit={setLiveMark}
-                numbering={props.numbering}
-              />
-            )}
-          </div>
-        </div>
-      </div>
+        onRasterLoad={setFileRasterSize}
+        overlay={paper === null || size === null ? null : (
+          <Canvas
+            // The paper, not the figure: a mark in the margin has to have
+            // somewhere to be drawn and somewhere to be pressed.
+            width={paper.width}
+            height={paper.height}
+            origin={[-paper.x, -paper.y]}
+            marks={marks}
+            tool={tool}
+            color={color}
+            weight={weight}
+            scale={scale}
+            containerRef={figureHostRef}
+            anchoring={isVector}
+            anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onAdd={addMark}
+            onMove={moveMark}
+            onUpdate={updateMark}
+            onRemove={removeMark}
+            onPan={panBy}
+            onPanStart={() => { setPanning(true) }}
+            onPanEnd={() => { setPanning(false) }}
+            onHover={lightElement}
+            onEdit={editMark}
+            onDrawn={finishDrawing}
+            onLiveEdit={setLiveMark}
+            numbering={props.numbering}
+          />
+        )}
+        t={t}
+      />
 
       {/* The figure's own menu: the file behind it, and the way out to someone who
           can act on it. Drawn at the pointer and closed by anything else, the way a
           context menu is everywhere. */}
       {menuAt === null ? null : (
-        <div className="da-menu" ref={menuRef} role="menu" aria-label={t('menuLabel')}
-          style={{ left: menuAt.left, top: menuAt.top }}>
-          {menuItems.map(item => (
-            <button key={item.id} type="button" className="da-menu-item" role="menuitem"
-              onClick={() => { runMenu(item.id, menuAt.path, menuAt.workspace) }}>
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <FigureMenuCard
+          menuRef={menuRef}
+          at={{ left: menuAt.left, top: menuAt.top }}
+          rows={menuItems}
+          onChoose={(id) => {
+            /* v8 ignore next -- a row is only offered once a figure has loaded. */
+            if (menuAt === null) return
+            runMenu(id as FigureMenuAction, menuAt.path, menuAt.workspace)
+          }}
+          t={t}
+        />
       )}
 
       {/* The figure keeps the whole panel; the words about it float over it. Each
@@ -2310,190 +1756,70 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           about a record sits on screen while the reader is drawing. */}
       {/* What the figure as a whole should become. One per figure, so it is a
           fold of its own rather than a field beside one mark. */}
-          {goalOpen ? (
-            <div className="da-float da-float-record da-float-goal" role="group" aria-label={t('summary')}
-              style={recordStyle(floatsAt)}>
-              <div className="da-float-head">
-                <span className="da-card-title">
-                  <GoalIcon />{t('summary')}
-                  <span className="da-hintdot" title={t('overallHint')}>?</span>
-                </span>
-                <button type="button" className="da-btn da-btn-quiet"
-                  aria-label={t('close')} title={t('close')}
-                  onClick={() => { setOpenPanel(null) }}>✕</button>
-              </div>
-              <label className="da-field">
-                <textarea
-                  value={summary}
-                  placeholder={t('summaryPlaceholder')}
-                  onChange={(event) => { writeSummary(event.target.value) }}
-                />
-                <span className="da-count">{summary.length}/300</span>
-              </label>
-            </div>
-          ) : null}
+      {/* The figure keeps the whole panel; the words about it float over it. Each
+          is opened from the actions row and closes on its own button, so nothing
+          about a record sits on screen while the reader is drawing. */}
+      {/* What the figure as a whole should become. One per figure, so it is a
+          fold of its own rather than a field beside one mark. */}
+      {goalOpen ? (
+        <SummaryRecord
+          at={floatsAt}
+          summary={summary}
+          onWrite={writeSummary}
+          onClose={() => { setOpenPanel(null) }}
+          t={t}
+        />
+      ) : null}
 
-          {/* The map of the document: every mark it holds, numbered as the document
-              numbers it. A page body lists the whole file, not its own sheet, because
-              the list is what the reader checks before sending — and what is sent is
-              the file. */}
-          {listOpen ? (
-            <div className="da-float da-float-record da-float-list" role="group" aria-label={t('marks')}
-              style={recordStyle(floatsAt)}>
-              <div className="da-float-head">
-                <span className="da-card-title">
-                  <ListIcon />{t('marks')}
-                  <span className="da-card-count">{listedMarks.length}</span>
-                </span>
-                <button type="button" className="da-btn da-btn-quiet" disabled={listedMarks.length === 0}
-                  onClick={() => { void discard() }}>{t('clear')}</button>
-                <button type="button" className="da-btn da-btn-quiet"
-                  aria-label={t('close')} title={t('close')}
-                  onClick={() => { setOpenPanel(null) }}>✕</button>
-              </div>
-              <div className="da-marks">
-                {listedMarks.length === 0 ? (
-                  <div className="da-empty">
-                    <BoxIcon />
-                    <div className="da-empty-title">{t('noMarks')}</div>
-                    <div className="da-empty-hint">{t('noMarksHint')}</div>
-                  </div>
-                ) : listedMarks.map((mark, index) => (
-                  <div className="da-mark" key={mark.id} data-selected={mark.id === selectedId}
-                    onClick={() => { reveal(mark) }}>
-                    {/* Two light strokes, one colour: the number and the shape are
-                        both facts about this mark, so they are drawn the way the mark
-                        itself is drawn — as a thin line in its colour, not as a slab
-                        of fill. The list is a list; a block of colour on every row is
-                        a wall of colour that competes with the figure the reader came
-                        here to look at. */}
-                    {/* The number is not a legend: the row already says which mark
-                        it is by being the nth row, and a differently coloured numeral
-                        per row turns an index into something the reader has to
-                        decode. It is neutral; the shape beside it keeps the mark's
-                        colour, which is the one thing colour is actually carrying
-                        here — which of the four tools drew this. */}
-                    <span className="da-mark-n">{index + 1}</span>
-                    <span className="da-mark-glyph" style={{ color: mark.color }}
-                      title={t('markKindLabel', { kind: t(TOOL_COPY[mark.kind]) })}>
-                      {ToolIcon(mark.kind)}
-                    </span>
-                    <button type="button" className="da-mark-text"
-                      onClick={(event) => { event.stopPropagation(); reveal(mark) }}>
-                      <span className="da-mark-title">
-                        {mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail : t('emptyDetail')}
-                      </span>
-                      {anchorName(mark) === '' ? null : (
-                        <span className="da-mark-meta">{anchorName(mark)}</span>
-                      )}
-                    </button>
-                    {/* The page at the end of the row, where a list puts the number that
-                        is not part of the sentence. It used to share the second line
-                        with the anchor, which stacked two short facts into a column of
-                        ragged text under every row. */}
-                    {mark.page === undefined ? null : (
-                      <span className="da-mark-page">{t('markPage', { page: mark.page })}</span>
-                    )}
-                    <button type="button" className="da-mark-del" aria-label={t('delete')}
-                      title={t('delete')}
-                      onClick={(event) => { event.stopPropagation(); removeMark(mark.id) }}>
-                      <span className="da-mark-del-x" aria-hidden="true">✕</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+      {/* The map of the document: every mark it holds, numbered as the document
+          numbers it. A page body lists the whole file, not its own sheet, because
+          the list is what the reader checks before sending — and what is sent is
+          the file. */}
+      {listOpen ? (
+        <MarkList
+          at={floatsAt}
+          marks={listedMarks}
+          selectedId={selectedId}
+          onReveal={reveal}
+          onRemove={removeMark}
+          onClear={() => { void discard() }}
+          onClose={() => { setOpenPanel(null) }}
+          t={t}
+        />
+      ) : null}
 
-          {/* The selected mark's words, beside the mark rather than under the figure.
-              Selecting a mark is the gesture that asks for this card, so it needs no
-              button of its own; a reader who has picked something out means to say
-              what is wrong with it. */}
-          {selected === null || detailAt === null ? null : (
-            /* One pill, not a card: a single rounded field that opens on the spot
-               the reader just marked. It has no title, no badge and no close button —
-               the sentence itself says which mark it belongs to, because it appeared
-               next to it, and clicking anywhere else puts it away. The hand-off
-               buttons only exist once there is something to hand off. */
-            <div className="da-float da-float-detail" role="group" aria-label={t('detail')}
-              ref={pillRef}
-              style={{ left: detailAt.left, top: detailAt.top }}>
-              <textarea
-                ref={detailRef}
-                className="da-comment"
-                value={selected.detail ?? ''}
-                placeholder={selected.detail === undefined || selected.detail.trim() === '' ? t('addComment') : t('detailPlaceholder')}
-                rows={1}
-                onChange={(event) => { setMarkDetail(selected.id, event.target.value) }}
-              />
-              {selected.detail === undefined || selected.detail.trim() === '' ? null : (
-                <div className="da-comment-send">
-                  <button type="button" className="da-comment-send-btn da-comment-send-primary"
-                    disabled={busy !== null}
-                    aria-label={t('sendToAgent')} title={t('sendToAgent')}
-                    onClick={() => { void run('agent', selected) }}>
-                    <SendIcon />
-                  </button>
-                  <button type="button" className="da-comment-send-btn"
-                    disabled={busy !== null}
-                    aria-label={t('sendToComposer')} title={t('sendToComposer')}
-                    onClick={() => { void run('composer', selected) }}>
-                    <ChatIcon />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
+      {/* The selected mark's words, beside the mark rather than under the figure.
+          Selecting a mark is the gesture that asks for this card, so it needs no
+          button of its own; a reader who has picked something out means to say
+          what is wrong with it. */}
+      {selected === null || detailAt === null ? null : (
+        <DetailPill
+          pillRef={pillRef}
+          inputRef={detailRef}
+          at={{ left: detailAt.left, top: detailAt.top }}
+          mark={selected}
+          onWrite={(value) => { setMarkDetail(selected.id, value) }}
+          onSendToAgent={() => { void run('agent', selected) }}
+          onSendToComposer={() => { void run('composer', selected) }}
+          busy={busy !== null}
+          t={t}
+        />
+      )}
 
       {/* How heavy the pen is — or how big a point mark's pin is — on a rail of its
           own down the left edge, which is where a drawing tool puts its weight and
-          where the reader's eye already looks for one. Idle it is a hairline, so it
-          costs the figure nothing; crossing it opens it out into a tapered track.
-          It only appears once there is something to size: a mark to change, or a
-          tool armed to draw the next one. Sitting on the rail when nothing is
-          selected and no pen is out is a control for a decision not being made. */}
+          where the reader's eye already looks for one. It only appears once there is
+          something to size: a mark to change, or a tool armed to draw the next one. */}
       {!chrome || shownWeight === null ? null : (
-        <label className="da-weight" title={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}>
-          <input type="range" className="da-weight-input"
-            aria-label={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}
-            min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
-            value={shownWeight}
-            onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
-          {/* The track is drawn, not styled: one path, filled twice. The second fill is
-              the same outline clipped to the height already chosen, so the blue follows
-              the wedge instead of sliding a bar next to it. An svg keeps the ends round,
-              which a clip-path polygon cannot. */}
-          {/* The groove is drawn, not styled: one path, so its ends stay round at any
-              length, which a background on a plain div cannot promise. It carries the
-              shadow and nothing else — the blue is a separate element, because the blue
-              has to stop where the knob is and that is a length in the rail, not in the
-              track's own coordinates. */}
-          <svg className="da-weight-svg" viewBox="0 0 18 100" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              {/* A shadow, not a fill: the track reads as a groove pressed into the panel
-                  rather than a black bar laid on top of it. */}
-              <linearGradient id={`${trackId}-shade`} x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0" stopColor="rgba(20,40,80,.06)" />
-                <stop offset=".55" stopColor="rgba(20,40,80,.13)" />
-                <stop offset="1" stopColor="rgba(20,40,80,.24)" />
-              </linearGradient>
-            </defs>
-            <path d={WEIGHT_TRACK} fill={`url(#${trackId}-shade)`} />
-          </svg>
-          <span className="da-weight-fill" aria-hidden
-            style={{ height: travelHeight(weightFraction) }} />
-          {/* The knob's *centre* is the fill's top edge, so both are computed from one
-              number and cannot drift apart. Two things follow, and both are wanted:
-              the knob's box straddles the track's ends rather than being clamped inside
-              it (a knob that stops short of the end it is at looks like the slider has
-              further to go), and the travel is measured on the track — inset 12px from
-              the rail — rather than on the rail, which is what carried the knob's box
-              past the rail's rounded cap at the heaviest weight. */}
-          <span className="da-weight-knob" aria-hidden
-            style={{ bottom: `calc(${travelHeight(weightFraction)} - var(--da-knob-size) / 2)` }} />
-        </label>
+        <WeightRail
+          trackId={trackId}
+          value={shownWeight}
+          fraction={weightFraction}
+          forPin={selected?.kind === 'point' || tool === 'point'}
+          onChange={chooseWeight}
+          t={t}
+        />
       )}
-
       {/* The tools float, so they can be parked off whichever corner of the figure
           the reader is working on. The handle above the tiles is what drags it; the
           tiles themselves stay buttons, because a drag that starts on a tool should

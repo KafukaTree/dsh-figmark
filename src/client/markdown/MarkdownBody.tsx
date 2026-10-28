@@ -17,11 +17,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseFileAddress } from '../../shared/address'
-import { EMPTY_DIFF, diffLines, formatUnifiedDiff, textLines } from '../../shared/text-diff'
+import { formatUnifiedDiff } from '../../shared/text-diff'
 import { resolveTranslate, type Translate, type TranslateVars } from '../annotator-contract'
 import { deliverEdit, type FileUploadLike, type SessionsLike } from '../session'
 import { ensureStyles } from '../styles'
 import { DiffView } from './DiffView'
+import {
+  NO_NOTES, START_CARET, caretIn, diffOf, editFrom, editedText, lineCount, type Caret, type Edit,
+} from './edit'
 
 /** Text content the document owner delivers. */
 export interface MarkdownContent {
@@ -65,19 +68,6 @@ export interface MarkdownBodyProps {
   readonly localeId?: string | undefined
 }
 
-/**
- * The reader's edit: the text editing began from, and its current value.
- *
- * One value, so "a draft without its baseline" cannot be represented; the
- * difference is only ever computed between two texts that both exist.
- */
-interface Edit {
-  /** The loaded text as it was when the first keystroke arrived. */
-  readonly baseline: string
-  /** The text as it stands now. */
-  readonly text: string
-}
-
 /** What the body last saw, so a document that moves under an edit is noticed. */
 interface Seen {
   /** Address the text belonged to. */
@@ -85,17 +75,6 @@ interface Seen {
   /** The loaded text at that point. */
   readonly text: string | undefined
 }
-
-/** Where the caret sits, in the units the reader counts in. */
-interface Caret {
-  /** 1-based line the caret is on. */
-  readonly line: number
-  /** 1-based column the caret is at. */
-  readonly column: number
-}
-
-/** No notes, as the one value the reader's empty state reuses. */
-const NO_NOTES: Readonly<Record<number, string>> = {}
 
 /**
  * Render one Markdown document with its editor and its difference.
@@ -115,7 +94,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
   )
   const [edit, setEdit] = useState<Edit | null>(null)
   const [notes, setNotes] = useState<Readonly<Record<number, string>>>(NO_NOTES)
-  const [caret, setCaret] = useState<Caret>({ line: 1, column: 1 })
+  const [caret, setCaret] = useState<Caret>(START_CARET)
   const [stale, setStale] = useState(false)
   const [view, setView] = useState<'edit' | 'diff'>('edit')
   const [busy, setBusy] = useState(false)
@@ -123,12 +102,9 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
   const seen = useRef<Seen>({ address, text: loaded })
   const gutter = useRef<HTMLDivElement | null>(null)
 
-  const diff = useMemo(
-    () => (edit === null ? EMPTY_DIFF : diffLines(edit.baseline, edit.text)),
-    [edit],
-  )
-  const text = edit?.text ?? loaded ?? ''
-  const lines = textLines(text).length
+  const diff = useMemo(() => diffOf(edit), [edit])
+  const text = editedText(edit, loaded)
+  const lines = lineCount(text)
 
   useEffect(() => { ensureStyles(document) }, [])
 
@@ -156,11 +132,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
 
   /** Read the caret out of the element that moved it. */
   const readCaret = useCallback((element: HTMLTextAreaElement): void => {
-    const head = element.value.slice(0, element.selectionStart)
-    setCaret({
-      line: head.split('\n').length,
-      column: element.selectionStart - head.lastIndexOf('\n'),
-    })
+    setCaret(caretIn(element))
   }, [])
 
   /** Keep the gutter on the row the textarea is showing. */
@@ -270,9 +242,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
             onChange={(event) => {
               const value = event.currentTarget.value
               readCaret(event.currentTarget)
-              setEdit(previous => (previous === null
-                ? { baseline: loaded, text: value }
-                : { baseline: previous.baseline, text: value }))
+              setEdit(previous => editFrom(previous, loaded, value))
             }}
           />
         </div>

@@ -1,22 +1,28 @@
 /**
  * HTTP routes of the annotator.
  *
- * The routes live outside the `/api` channel, so they carry their own guard: a
- * required request header (which a cross-origin form or image request cannot
- * set without a preflight this plugin never answers) plus an origin check on
- * browsers that send `Sec-Fetch-Site`. Writes are limited to the two sidecar
- * files derived from a figure that already exists.
+ * This module is only the assembly: it maps a method and a URL to one handler,
+ * and each handler is one operation on one resolved figure. The pieces it leans on
+ * each own their hazard instead —
+ *
+ * - `route-http.ts` holds the guard, the body cap, and the one way to answer;
+ * - `figure-target.ts` is the only place a request string becomes a path;
+ * - `review-payload.ts` is the only place request bytes become a review artifact.
+ *
+ * Writes are limited to the two sidecar files derived from a figure that already
+ * exists, because the only path any handler passes to the store is the one
+ * `resolveTarget` produced.
  * @module dsh-figmark/host/routes
  */
-import { stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { isAbsolute, resolve } from 'node:path'
-import { parseFileAddress } from '../shared/address'
-import { GUARD_HEADER } from '../shared/http'
-import {
-  figureMediaType,
-  isFigurePath,
-} from './sidecar'
+import type {
+  AnnotationReadBody,
+  AnnotationRemoveBody,
+  AnnotationSaveBody,
+} from '../shared/http'
+import { resolveTarget, type FigureTarget } from './figure-target'
+import { guarded, readBody, sendFailure, sendJson } from './route-http'
+import { readReview } from './review-payload'
 import {
   MAX_REVIEW_BYTES,
   fileDigest,
@@ -24,16 +30,9 @@ import {
   readAnnotationDocument,
   removeAnnotation,
   writeAnnotation,
-  type ReviewArtifact,
 } from './store'
 
 export { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
-
-/** Largest accepted request body. */
-const MAX_BODY_BYTES = MAX_REVIEW_BYTES * 2
-
-/** First bytes of every PDF file, used to tell one payload from another. */
-const PDF_HEADER = '%PDF-'
 
 /** What the routes need from the plugin. */
 export interface RouteDeps {
@@ -45,130 +44,74 @@ export interface RouteDeps {
   readonly sessionCwd: (sessionId: string) => Promise<string | undefined>
 }
 
-/** One resolved figure target. */
-interface FigureTarget {
-  /** Requested address, echoed into the sidecar. */
-  readonly address: string
-  /** Absolute path of the figure. */
-  readonly path: string
-  /** Media type implied by the suffix. */
-  readonly mediaType: string
-  /**
-   * Absolute directory of the Session that owns this figure, or null when the
-   * address is absolute and names no Session.
-   *
-   * The browser needs it for the one thing it cannot work out alone: a path
-   * relative to the reader's workspace, which is the form worth copying because
-   * it survives the project being moved.
-   */
-  readonly workspace: string | null
+/** One handler's answer: either the body to send, or a refusal with its status. */
+type Answer<T> =
+  | { readonly ok: true; readonly body: T }
+  | { readonly ok: false; readonly status: number; readonly error: string }
+
+/**
+ * Resolve the figure one request names, as an answer rather than an exception.
+ * @param address - the address the request carried, empty when it carried none.
+ * @param deps - Session lookup.
+ * @returns the target, or the 404 refusal to send.
+ */
+async function targetOf(address: string, deps: RouteDeps): Promise<Answer<FigureTarget>> {
+  const resolved = await resolveTarget(address, deps.sessionCwd)
+  return resolved.ok
+    ? { ok: true, body: resolved.target }
+    : { ok: false, status: 404, error: resolved.message }
 }
 
 /**
- * Resolve one request address to an existing figure file.
- * @param address - `dsh-resource://file/…` address from the preview tab.
- * @param deps - Session lookup used for a relative path.
- * @returns the target, or an error message describing why it cannot be annotated.
+ * Read the figure's current hash and its saved annotation.
+ * @param target - the resolved figure.
+ * @returns the read body.
  */
-async function resolveTarget(
-  address: string,
-  deps: RouteDeps,
-): Promise<{ ok: true; target: FigureTarget } | { ok: false; message: string }> {
-  const parsed = parseFileAddress(address)
-  if (parsed === undefined) return { ok: false, message: `not a file address: ${address}` }
-  const sessionId = parsed.sessionId
-  const cwd = sessionId === undefined ? undefined : await deps.sessionCwd(sessionId)
-  let absolute: string
-  if (isAbsolute(parsed.path)) {
-    absolute = parsed.path
-  } else {
-    if (cwd === undefined) {
-      return { ok: false, message: `cannot resolve this Session's directory for a relative path: ${address}` }
-    }
-    absolute = resolve(cwd, parsed.path)
+async function readAnswer(target: FigureTarget): Promise<AnnotationReadBody> {
+  const [sha256, saved] = await Promise.all([fileDigest(target.path), readAnnotation(target.path)])
+  return { ok: true, figure: { ...target, sha256 }, annotation: saved }
+}
+
+/**
+ * Write the annotation one request carried.
+ * @param target - the resolved figure.
+ * @param raw - the parsed request body.
+ * @returns the save body, or the refusal to send.
+ */
+async function saveAnswer(target: FigureTarget, raw: Record<string, unknown>): Promise<Answer<AnnotationSaveBody>> {
+  // The body is validated before the review artifact is decoded: a document this
+  // plugin did not write is refused without spending the memory its bytes claim.
+  const document = readAnnotationDocument(raw['annotation'])
+  const review = readReview(raw)
+  if (review !== undefined && review.bytes.byteLength > MAX_REVIEW_BYTES) {
+    return { ok: false, status: 413, error: 'the review artifact is too large' }
   }
-  if (!isFigurePath(absolute)) return { ok: false, message: `not an annotatable figure: ${absolute}` }
-  const mediaType = figureMediaType(absolute)
-  /* v8 ignore next -- isFigurePath already restricted the suffixes figureMediaType covers. */
-  if (mediaType === undefined) return { ok: false, message: `no media type for ${absolute}` }
-  try {
-    const info = await stat(absolute)
-    if (!info.isFile()) return { ok: false, message: `not a regular file: ${absolute}` }
-  } catch {
-    return { ok: false, message: `no such figure: ${absolute}` }
+  const saved = await writeAnnotation(target.path, document, review)
+  return {
+    ok: true,
+    body: {
+      ok: true,
+      annotationPath: saved.paths.annotation,
+      reviewPath: saved.wroteReview ? saved.paths.review : null,
+    },
   }
-  return { ok: true, target: { address, path: absolute, mediaType, workspace: cwd ?? null } }
 }
 
 /**
- * Read the one flattened review artifact a save may carry.
- *
- * The kind is taken from the payload, and the store refuses a pair that
- * contradicts the figure's own suffix — so a caller cannot name PNG bytes as the
- * review of a PDF.
- *
- * @param body - parsed request body.
- * @returns the artifact, or undefined when the save carried none.
- * @throws {Error} when both payloads are present, or the PDF bytes are not a PDF.
+ * Remove the sidecars of one figure.
+ * @param target - the resolved figure.
+ * @returns the removal body.
  */
-function readReview(body: Record<string, unknown>): ReviewArtifact | undefined {
-  const image = typeof body['reviewImage'] === 'string' ? body['reviewImage'] : ''
-  const pdf = typeof body['annotatedPdf'] === 'string' ? body['annotatedPdf'] : ''
-  if (image !== '' && pdf !== '') throw new Error('a save carries one review artifact, not both')
-  if (pdf !== '') {
-    const bytes = new Uint8Array(Buffer.from(pdf, 'base64'))
-    if (!Buffer.from(bytes.subarray(0, PDF_HEADER.length)).toString('latin1').startsWith(PDF_HEADER)) {
-      throw new Error('the annotated document is not a PDF')
-    }
-    return { kind: 'pdf', bytes }
+async function removeAnswer(target: FigureTarget): Promise<AnnotationRemoveBody> {
+  // The figure survives; only the two files derived from it go. That is what
+  // makes a deleted or delivered annotation stay gone across a reload.
+  const removed = await removeAnnotation(target.path)
+  return {
+    ok: true,
+    annotationPath: removed.paths.annotation,
+    reviewPath: removed.paths.review,
+    removed: removed.removed,
   }
-  if (image !== '') return { kind: 'image', bytes: new Uint8Array(Buffer.from(image, 'base64')) }
-  return undefined
-}
-
-/**
- * Whether a request carries the plugin guard and a same-origin posture.
- * @param req - incoming request.
- * @returns true when the request may proceed.
- */
-function guarded(req: IncomingMessage): boolean {
-  if (req.headers[GUARD_HEADER] === undefined) return false
-  const site = req.headers['sec-fetch-site']
-  if (typeof site !== 'string') return true
-  return site === 'same-origin' || site === 'none'
-}
-
-/**
- * Write one JSON response.
- * @param res - response to own.
- * @param status - HTTP status code.
- * @param body - JSON-serializable payload.
- */
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const text = JSON.stringify(body)
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store',
-  })
-  res.end(text)
-}
-
-/**
- * Read a request body with a byte cap.
- * @param req - incoming request.
- * @returns the body text.
- * @throws {Error} when the body exceeds the cap.
- */
-async function readBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = []
-  let total = 0
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer
-    total += buffer.length
-    if (total > MAX_BODY_BYTES) throw new Error(`request body exceeds ${MAX_BODY_BYTES} bytes`)
-    chunks.push(buffer)
-  }
-  return Buffer.concat(chunks).toString('utf8')
 }
 
 /**
@@ -181,73 +124,54 @@ export function createHandlers(deps: RouteDeps): {
 } {
   const annotation = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!guarded(req)) {
-      sendJson(res, 403, { ok: false, error: 'missing plugin guard header' })
+      sendFailure(res, 403, 'missing plugin guard header')
       return
     }
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
-      if (req.method === 'GET') {
-        const address = url.searchParams.get('address') ?? ''
-        const resolved = await resolveTarget(address, deps)
-        if (!resolved.ok) {
-          sendJson(res, 404, { ok: false, error: resolved.message })
-          return
-        }
-        const [sha256, saved] = await Promise.all([
-          fileDigest(resolved.target.path),
-          readAnnotation(resolved.target.path),
-        ])
-        sendJson(res, 200, {
-          ok: true,
-          figure: { ...resolved.target, sha256 },
-          annotation: saved,
-        })
+      const answer = await route(req, url, deps)
+      if (answer.ok) {
+        sendJson(res, 200, answer.body)
         return
       }
-      if (req.method === 'POST') {
-        const body = JSON.parse(await readBody(req)) as Record<string, unknown>
-        const address = typeof body['address'] === 'string' ? body['address'] : ''
-        const resolved = await resolveTarget(address, deps)
-        if (!resolved.ok) {
-          sendJson(res, 404, { ok: false, error: resolved.message })
-          return
-        }
-        const document = readAnnotationDocument(body['annotation'])
-        const review = readReview(body)
-        if (review !== undefined && review.bytes.byteLength > MAX_REVIEW_BYTES) {
-          sendJson(res, 413, { ok: false, error: 'the review artifact is too large' })
-          return
-        }
-        const saved = await writeAnnotation(resolved.target.path, document, review)
-        sendJson(res, 200, {
-          ok: true,
-          annotationPath: saved.paths.annotation,
-          reviewPath: saved.wroteReview ? saved.paths.review : null,
-        })
-        return
-      }
-      if (req.method === 'DELETE') {
-        // The figure survives; only the two files derived from it go. That is what
-        // makes a deleted or delivered annotation stay gone across a reload.
-        const address = url.searchParams.get('address') ?? ''
-        const resolved = await resolveTarget(address, deps)
-        if (!resolved.ok) {
-          sendJson(res, 404, { ok: false, error: resolved.message })
-          return
-        }
-        const removed = await removeAnnotation(resolved.target.path)
-        sendJson(res, 200, {
-          ok: true,
-          annotationPath: removed.paths.annotation,
-          reviewPath: removed.paths.review,
-          removed: removed.removed,
-        })
-        return
-      }
-      sendJson(res, 405, { ok: false, error: `method ${req.method ?? ''} is not allowed` })
+      sendFailure(res, answer.status, answer.error)
     } catch (error) {
-      sendJson(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      // Every failure is reported in the browser's own terms: a 400 with the
+      // message the validator or the filesystem produced, never a silent close.
+      sendFailure(res, 400, error instanceof Error ? error.message : String(error))
     }
   }
   return { annotation }
+}
+
+/**
+ * Dispatch one guarded request to the operation its method names.
+ * @param req - incoming request.
+ * @param url - the request's URL.
+ * @param deps - Session lookup.
+ * @returns the answer to send.
+ */
+async function route(
+  req: IncomingMessage,
+  url: URL,
+  deps: RouteDeps,
+): Promise<Answer<AnnotationReadBody | AnnotationSaveBody | AnnotationRemoveBody>> {
+  const address = url.searchParams.get('address') ?? ''
+  if (req.method === 'GET') {
+    const target = await targetOf(address, deps)
+    if (!target.ok) return target
+    return { ok: true, body: await readAnswer(target.body) }
+  }
+  if (req.method === 'POST') {
+    const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+    const target = await targetOf(typeof body['address'] === 'string' ? body['address'] : '', deps)
+    if (!target.ok) return target
+    return await saveAnswer(target.body, body)
+  }
+  if (req.method === 'DELETE') {
+    const target = await targetOf(address, deps)
+    if (!target.ok) return target
+    return { ok: true, body: await removeAnswer(target.body) }
+  }
+  return { ok: false, status: 405, error: `method ${req.method ?? ''} is not allowed` }
 }

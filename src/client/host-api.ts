@@ -8,33 +8,28 @@
  */
 
 import type { AnnotationDocument } from '../shared/annotation'
-import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
+import { toBase64 } from '../shared/base64'
+import { isPagedMediaType } from '../shared/figure-kind'
+import { GUARD_HEADER, ROUTE_PREFIX, type FigureFacts, type SidecarWriteResult } from '../shared/http'
 
-/** Figure facts and any saved annotation the Host reported. */
-export interface LoadedAnnotation {
-  /** Absolute path of the figure on the Host. */
-  readonly path: string
-  /** Media type implied by the figure's suffix. */
-  readonly mediaType: string
-  /** Content hash of the figure at read time. */
-  readonly sha256: string
+/**
+ * Figure facts and any saved annotation the Host reported.
+ *
+ * The figure half is the Host's own {@link FigureFacts} minus the address this
+ * module already knows it asked for; declaring the fields a second time is how a
+ * field renamed on the Host side stops travelling here.
+ */
+export type LoadedAnnotation = Omit<FigureFacts, 'address'> & {
   /** The saved document, or null when the figure was never annotated. */
   readonly annotation: AnnotationDocument | null
-  /**
-   * Absolute directory of the Session that owns the figure, or null when the
-   * Host could not name one. The menu needs it to offer a workspace-relative
-   * path; everything else about the figure works without it.
-   */
-  readonly workspace: string | null
 }
 
-/** Result of one annotation save. */
-export interface SavedAnnotation {
-  /** Absolute path of the marks file. */
-  readonly annotationPath: string
-  /** Absolute path of the flattened review artifact, when one was written. */
-  readonly reviewPath: string | null
-}
+/**
+ * Result of one annotation save.
+ *
+ * The same shape the Host answers with, so the two cannot drift.
+ */
+export type SavedAnnotation = SidecarWriteResult
 
 /** Error carrying the Host's own message. */
 export class AnnotatorHostError extends Error {
@@ -45,21 +40,6 @@ export class AnnotatorHostError extends Error {
     super(message)
     this.name = 'AnnotatorHostError'
   }
-}
-
-/**
- * Encode one artifact as base64 for the JSON body.
- * @param source - bytes, or the blob an export produced.
- * @returns base64 text.
- */
-async function toBase64(source: Blob | Uint8Array): Promise<string> {
-  const bytes = source instanceof Uint8Array ? source : new Uint8Array(await source.arrayBuffer())
-  let binary = ''
-  const chunk = 0x8000
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk))
-  }
-  return btoa(binary)
 }
 
 /**
@@ -125,7 +105,7 @@ export async function saveAnnotation(
   review?: Blob | Uint8Array,
   keepalive = false,
 ): Promise<SavedAnnotation> {
-  const paged = document.figure.mediaType === 'application/pdf'
+  const paged = isPagedMediaType(document.figure.mediaType)
   const payload = JSON.stringify({
     address,
     annotation: document,

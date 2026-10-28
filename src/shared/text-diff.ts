@@ -17,7 +17,7 @@
  * that ends without one does not read as a changed last line.
  * @module dsh-figmark/shared/text-diff
  */
-import { baseNameOf } from './address'
+import { baseNameOf } from './path-name'
 
 /** How one displayed line differs from the older text. */
 export type DiffLineKind = 'context' | 'add' | 'remove'

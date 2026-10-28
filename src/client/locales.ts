@@ -6,7 +6,7 @@
  * @module dsh-figmark/client/locales
  */
 
-import type { TranslateVars } from './annotator-contract'
+import { interpolate, type TranslateVars } from './translate'
 
 /** Chinese copy (the product's primary language). */
 export const zh = {
@@ -247,8 +247,5 @@ export function fallbackTranslate(locale: string, key: string, vars?: TranslateV
   const dictionary = locale.startsWith('en') ? en : zh
   const text = (dictionary as Record<string, string>)[key] ?? key
   if (vars === undefined) return text
-  return text.replace(/\{(\w+)\}/gu, (placeholder, name: string) => {
-    const value = vars[name]
-    return value === undefined ? placeholder : String(value)
-  })
+  return interpolate(text, vars)
 }

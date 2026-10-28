@@ -8,13 +8,22 @@
  * unified diff of what the reader changed instead of marks, and the edited text
  * itself as an attachment when the diff exceeds the message's budget. Nothing
  * bypasses the session log, so what the agent saw is what the transcript holds.
+ *
+ * What the message *says* lives in `./annotation-message` and `./edit-message`;
+ * what this module does is put it into a session, which fails differently: an
+ * upload can be refused, a subagent takes no files, and a session that is not live
+ * has to be resumed first. All three are warnings or errors here, never text the
+ * agent would read as its instructions.
  * @module dsh-figmark/client/session
  */
 
-import { baseNameOf } from '../shared/address'
+import { toBase64 } from '../shared/base64'
+import { baseNameOf } from '../shared/path-name'
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
-import { annotatedPages, describeFigureScope, describeMarks, needsReviewImage, pageFileSuffix } from '../shared/annotation'
-import { formatHunkHeader, formatUnifiedDiff, type DiffHunk, type TextDiff } from '../shared/text-diff'
+import { pageFileSuffix } from '../shared/annotation'
+import type { TextDiff } from '../shared/text-diff'
+import { buildAnnotationMessage, type DeliveredPaths } from './annotation-message'
+import { buildEditMessage, fitDiff } from './edit-message'
 
 /** The session face this module calls. */
 interface SessionFaceLike {
@@ -62,14 +71,6 @@ export interface FileUploadLike {
   >
 }
 
-/** Paths the annotation was written to, as the message must name them. */
-export interface DeliveredPaths {
-  /** Absolute path of the marks file. */
-  readonly annotationPath: string
-  /** Absolute path of the flattened review artifact, when one was written. */
-  readonly reviewPath: string | null
-}
-
 /** Most annotated pages whose review image one message carries. */
 export const MAX_PAGE_IMAGES = 8
 
@@ -101,93 +102,19 @@ export interface DeliveryInput {
   readonly locale: SummaryLocale
 }
 
-/**
- * Compose the user message that carries one annotation.
- * @param document - the saved document.
- * @param paths - sidecar paths the Host wrote.
- * @param locale - message language.
- * @returns the message text.
- */
-export function buildAnnotationMessage(
-  document: AnnotationDocument,
-  paths: DeliveredPaths,
-  locale: SummaryLocale,
-): string {
-  // The paths themselves are never printed: the sidecars are deleted once the
-  // annotation has been delivered, so a path in the message would be a dead
-  // reference by the time the agent reads it. What the paths do tell us is whether
-  // an artifact exists, which is what lets the message describe the attachment it
-  // actually carries instead of guessing from the marks.
-  const zh = locale === 'zh'
-  const { figure, marks } = document
-  const scope = describeFigureScope(figure, locale)
-  // A rendered document is measured in the pixels it was laid out in, and it has
-  // no picture: the marks file and the locators inside it are the whole payload.
-  const rendered = figure.mediaType === 'text/html'
-  const size = figure.width === undefined || figure.height === undefined
-    ? ''
-    : rendered
-      ? (zh
-        ? `渲染面 ${Math.round(figure.width)}×${Math.round(figure.height)}，`
-        : `rendered surface ${Math.round(figure.width)}x${Math.round(figure.height)}, `)
-      : (zh
-        ? `图面 ${Math.round(figure.width)}×${Math.round(figure.height)}，`
-        : `figure ${Math.round(figure.width)}x${Math.round(figure.height)}, `)
-  const pages = annotatedPages(document)
-  const marked = pages.length === 0
-    ? ''
-    : (zh ? `其中 ${pages.length} 页有标注，` : `${pages.length} pages marked, `)
-  const kind = rendered
-    ? (zh ? '【HTML 标注】' : '[HTML annotations]')
-    : (zh ? '【附图标注】' : '[figure annotations]')
-  const header = zh
-    ? `${kind}${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处）`
-    : `${kind} ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks)`
-  const paged = figure.pageCount !== undefined
-  // A written review artifact is the evidence that a picture travels with this
-  // message: the save names it, so a message that claims an attachment cannot be
-  // describing one the Host declined to write.
-  const pictured = paths.reviewPath !== null
-  const attachment = !pictured
-    ? []
-    : [paged
-      ? (zh ? '带批注 PDF 已作为本条消息的附件发送，可直接在阅读器里核对。' : 'The annotated PDF is attached to this message; you can check it in any reader.')
-      : (zh ? '标注图已作为本条消息的附件发送。' : 'The annotated image is attached to this message.')]
-  // Only point marks: one coordinate and a sentence each. There is nothing for a
-  // picture to add, so none was rendered — the figure's own path above is the index.
-  const noPicture = !pictured && !rendered && marks.length > 0 && !needsReviewImage(document)
-    ? [zh
-      ? '本条标注只有位置点，没有标注图：按上面逐条的坐标与说明处理原图即可。'
-      : 'These marks are points only, so no annotated image was made: work from the coordinates and notes above against the original figure.']
-    : []
-  const summary = document.summary !== undefined && document.summary.trim() !== ''
-    ? [zh ? `这张图是：${document.summary.trim()}` : `the figure shows: ${document.summary.trim()}`, '']
-    : []
-  // The closing line is one sentence, not a paragraph. The standing rules — read every
-  // mark, answer mark by mark, edit the source rather than the bitmap — are already in
-  // the prompt section that every one of these messages arrives under, and repeating
-  // them per message only made the part the agent has to act on harder to find.
-  const closer = rendered
-    ? (zh ? '逐条改 HTML 生成源。' : 'Edit the HTML source, mark by mark.')
-    : paged
-      ? (zh ? '逐条处理该 PDF。' : 'Work through the PDF, mark by mark.')
-      : (zh ? '逐条改生成源。' : 'Edit the generating source, mark by mark.')
-  return [header, ...attachment, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closer].join('\n')
-}
 
 /**
  * Encode one PNG blob as base64 for the prompt's image part.
+ *
+ * Delegates to the shared encoder: the review artifact travelling to the Host and
+ * the page image travelling to the model are the same bytes-to-text problem, and
+ * a second chunk loop here is a second place its chunk size can drift.
+ *
  * @param blob - PNG bytes.
  * @returns base64 text.
  */
 async function encodePng(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  let binary = ''
-  const chunk = 0x8000
-  for (let offset = 0; offset < bytes.length; offset += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk))
-  }
-  return btoa(binary)
+  return await toBase64(blob)
 }
 
 /** What one attachment needs to travel, or to fail loudly in the reader's language. */
@@ -341,138 +268,6 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
   return warnings
 }
 
-/** Most diff lines one edit message carries before it defers to an attachment. */
-export const MAX_DIFF_LINES = 400
-
-/** One diff fitted into a message. */
-export interface FittedDiff {
-  /** The unified diff the message carries. */
-  readonly text: string
-  /** Hunks the message left out because they did not fit. */
-  readonly hidden: number
-}
-
-/**
- * Fit a difference into the message's line budget, whole hunks at a time.
- *
- * A hunk is never cut in half — a half hunk is not a diff anyone can apply — so
- * the budget drops trailing hunks and reports how many went with the attachment
- * instead. The first hunk always travels, however large it is: a message that
- * carries nothing but "see the attachment" would be worse than a long one.
- *
- * @param displayPath - the path the diff header names.
- * @param diff - the difference to fit.
- * @param maxLines - the message's diff budget, header lines included.
- * @returns the diff text and the number of hunks left out.
- */
-export function fitDiff(displayPath: string, diff: TextDiff, maxLines: number = MAX_DIFF_LINES): FittedDiff {
-  const kept: DiffHunk[] = []
-  let used = 0
-  for (const hunk of diff.hunks) {
-    const size = hunk.lines.length + 1
-    if (kept.length > 0 && used + size > maxLines) break
-    kept.push(hunk)
-    used += size
-  }
-  return {
-    text: formatUnifiedDiff(displayPath, { ...diff, hunks: kept }),
-    hidden: diff.hunks.length - kept.length,
-  }
-}
-
-/** What one edit message is composed from. */
-export interface EditMessageInput {
-  /** Path the message names: the document's own, or its address when unparsed. */
-  readonly documentPath: string
-  /** The whole difference. */
-  readonly diff: TextDiff
-  /** The part of it the message carries. */
-  readonly fitted: FittedDiff
-  /** The reader's notes, keyed by the baseline line the change starts at. */
-  readonly notes: Readonly<Record<number, string>>
-  /** Whether the loaded baseline moved while the reader was editing. */
-  readonly stale: boolean
-  /** Message language. */
-  readonly locale: SummaryLocale
-}
-
-/**
- * Spell the reader's notes as the numbered list the message carries.
- *
- * A note is keyed by the baseline line its change starts at, so it stays put
- * while the reader keeps editing; the hunk that starts there is named when one
- * still does. A note whose change the reader has since removed is still sent —
- * the line number is the reader's own reference and they wrote it on purpose —
- * it just travels without a hunk header.
- *
- * @param diff - the whole difference, for pairing notes with their hunk.
- * @param notes - the reader's notes.
- * @param locale - message language.
- * @returns one line per note, in line order; empty when there are none.
- */
-export function describeNotes(
-  diff: TextDiff,
-  notes: Readonly<Record<number, string>>,
-  locale: SummaryLocale,
-): string[] {
-  const zh = locale === 'zh'
-  const lines: string[] = []
-  const keys = Object.keys(notes).map(Number).sort((left, right) => left - right)
-  for (const key of keys) {
-    const text = notes[key]
-    if (text === undefined || text.trim() === '') continue
-    const hunk = diff.hunks.find(candidate => candidate.oldStart === key)
-    const where = hunk === undefined ? '' : `（${formatHunkHeader(hunk)}）`
-    lines.push(zh
-      ? `${lines.length + 1}. 第 ${key} 行${where}：${text.trim()}`
-      : `${lines.length + 1}. line ${key}${hunk === undefined ? '' : ` (${formatHunkHeader(hunk)})`}: ${text.trim()}`)
-  }
-  return lines
-}
-
-/**
- * Compose the user message that carries one edit proposal.
- * @param input - the document, its difference, and what the message could not carry.
- * @returns the message text.
- */
-export function buildEditMessage(input: EditMessageInput): string {
-  const zh = input.locale === 'zh'
-  const { diff, fitted } = input
-  const readerNotes = describeNotes(diff, input.notes, input.locale)
-  const counted = readerNotes.length === 0 ? '' : (zh ? `，说明 ${readerNotes.length} 条` : `, ${readerNotes.length} notes`)
-  const header = zh
-    ? `【文档修改建议】${input.documentPath}（Markdown，改动 ${diff.hunks.length} 处，+${diff.added} −${diff.removed} 行${counted}）`
-    : `[document edits] ${input.documentPath} (Markdown, ${diff.hunks.length} hunks, +${diff.added} -${diff.removed} lines${counted})`
-  const warnings: string[] = []
-  if (input.stale) {
-    warnings.push(zh
-      ? '注意：文件在编辑期间被改动过，这份 diff 基于较早的版本，可能无法直接应用。'
-      : 'Note: the file changed while it was being edited, so this diff is against an earlier version and may not apply cleanly.')
-  }
-  if (diff.coarse) {
-    warnings.push(zh ? '改动较大，diff 以整块替换呈现。' : 'The change is large, so the diff reads as one replacement block.')
-  }
-  if (fitted.hidden > 0) {
-    const name = `${baseNameOf(input.documentPath)}.edited.md`
-    warnings.push(zh
-      ? `另有 ${fitted.hidden} 处改动未在本消息里展开，完整结果见随本消息发送的 ${name}。`
-      : `${fitted.hidden} more hunks are not expanded here; the complete result is attached as ${name}.`)
-  }
-  const closing = zh
-    ? '我已在文档预览里改好，但**没有落盘**：请把这段 diff 应用到源文件，或据此复核我的改动；diff 之外的部分不要动，改完逐处回应。'
-    : 'I made these edits in the document preview and did **not** write them to disk: apply this diff to the source, or review my change against it; leave everything outside the diff untouched and answer hunk by hunk.'
-  return [
-    header,
-    '',
-    '```diff',
-    fitted.text,
-    '```',
-    ...(readerNotes.length === 0 ? [] : ['', zh ? '我的说明：' : 'My notes:', ...readerNotes]),
-    ...(warnings.length === 0 ? [] : ['', ...warnings]),
-    '',
-    closing,
-  ].join('\n')
-}
 
 /** Everything one edit proposal delivery needs. */
 export interface EditDeliveryInput {

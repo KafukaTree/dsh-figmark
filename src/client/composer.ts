@@ -12,7 +12,7 @@
  * @module dsh-figmark/client/composer
  */
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
-import { buildAnnotationMessage, type DeliveredPaths } from './session'
+import { buildAnnotationMessage, type DeliveredPaths } from './annotation-message'
 
 /** One attachment staged in the composer's draft registry. */
 export interface ComposerDraftLike {

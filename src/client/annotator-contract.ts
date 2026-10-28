@@ -12,6 +12,13 @@ import type { ComposerLike } from './composer'
 import type { RemoteLike } from './host-actions'
 import { fallbackTranslate } from './locales'
 import type { SessionsLike } from './session'
+import type { Translate, TranslateVars } from './translate'
+
+/**
+ * The translator vocabulary, re-exported here because this module is where the
+ * contract lives and every consumer already reaches for it through this name.
+ */
+export type { Translate, TranslateVars } from './translate'
 
 /** Bytes-or-nothing content the document owner delivers. */
 export interface BodyContent {
@@ -20,12 +27,6 @@ export interface BodyContent {
   /** Complete file bytes, for a `bytes-complete` renderer. */
   readonly data?: Uint8Array<ArrayBuffer>
 }
-
-/** Values interpolated into one copy string. */
-export type TranslateVars = Record<string, number | string>
-
-/** The translator seat: a copy key and its interpolation values. */
-export type Translate = (key: string, vars?: TranslateVars) => string
 
 /** The props any annotator body receives from its slot's inject factory. */
 export interface AnnotatorInjected {

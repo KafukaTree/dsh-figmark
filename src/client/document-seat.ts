@@ -12,21 +12,20 @@
  * @module dsh-figmark/client/document-seat
  */
 import { ANNOTATION_VERSION, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
+import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { deliverToComposer, type ComposerLike } from './composer'
-import { deleteAnnotation, loadAnnotation, saveAnnotation } from './host-api'
+import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
 
-/** Facts one whole-document annotation is persisted against. */
-export interface PagedFigureFacts {
-  /** The `dsh-resource://file/…` address the annotator opened. */
-  readonly address: string
-  /** Absolute path on the Host. */
-  readonly path: string
-  /** Media type of the document. */
-  readonly mediaType: string
-  /** Content hash of the document at annotation time. */
-  readonly sha256: string
+/**
+ * Facts one whole-document annotation is persisted against.
+ *
+ * The Host's own figure facts with the page count added. The workspace directory
+ * is left out on purpose: a whole-document annotation is always written beside the
+ * document, so this half never needs to name the Session's directory.
+ */
+export type PagedFigureFacts = Omit<FigureFacts, 'workspace'> & {
   /** Pages in the document. */
   readonly pageCount: number
 }
@@ -55,13 +54,13 @@ export interface PageImage {
   readonly height: number
 }
 
-/** Where one save wrote its two files. */
-export interface SavedPaths {
-  /** Absolute path of the marks file. */
-  readonly annotationPath: string
-  /** Absolute path of the flattened review artifact, when one was written. */
-  readonly reviewPath: string | null
-}
+/**
+ * Where one save wrote its two files.
+ *
+ * The same shape the Host answers with and the message reads; the seat only passes
+ * it through, so re-declaring it here would be a third place to rename.
+ */
+export type SavedPaths = SidecarWriteResult
 
 /** What the entry half does for one paged-document body. */
 export interface DocumentSeat {
@@ -71,16 +70,7 @@ export interface DocumentSeat {
    * @param signal - cancels the request when the tab closes.
    * @returns the Host's answer.
    */
-  load(address: string, signal: AbortSignal): Promise<{
-    /** Absolute path of the document on the Host. */
-    readonly path: string
-    /** Media type implied by the document's suffix. */
-    readonly mediaType: string
-    /** Content hash of the document at read time. */
-    readonly sha256: string
-    /** The saved document, or null when it was never annotated. */
-    readonly annotation: AnnotationDocument | null
-  }>
+  load(address: string, signal: AbortSignal): Promise<Omit<LoadedAnnotation, 'workspace'>>
   /**
    * Write the whole document's annotation and the annotated document beside it.
    * @param address - the preview tab's file address.

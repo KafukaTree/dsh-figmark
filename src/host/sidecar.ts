@@ -16,8 +16,9 @@
  */
 import { basename, dirname, extname, join } from 'node:path'
 import type { AnnotationDocument } from '../shared/annotation'
+import { isPagedFigurePath } from '../shared/figure-kind'
 
-export { FIGURE_EXTENSIONS, figureMediaType, isFigurePath } from '../shared/figure-kind'
+export { FIGURE_EXTENSIONS, figureMediaType, isFigurePath, isPagedFigurePath } from '../shared/figure-kind'
 
 /** Suffix appended to a figure's name for the marks file. */
 export const ANNOTATION_SUFFIX = '.annot.json'
@@ -58,7 +59,7 @@ export function sidecarPaths(figurePath: string): SidecarPaths {
  * @returns the file extension, dot included.
  */
 export function reviewFileExtension(figurePath: string): '.pdf' | '.png' {
-  return extname(figurePath).toLowerCase() === '.pdf' ? '.pdf' : '.png'
+  return isPagedFigurePath(figurePath) ? '.pdf' : '.png'
 }
 
 /**

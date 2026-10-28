@@ -3,17 +3,19 @@ import { describe, expect, it } from 'vitest'
 import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
 import {
-  MAX_DIFF_LINES,
   MAX_PAGE_IMAGES,
-  buildAnnotationMessage,
-  buildEditMessage,
   deliverAnnotation,
   deliverEdit,
-  describeNotes,
-  fitDiff,
   type FileUploadLike,
   type SessionsLike,
 } from '../src/client/session'
+import { buildAnnotationMessage } from '../src/client/annotation-message'
+import {
+  MAX_DIFF_LINES,
+  buildEditMessage,
+  describeNotes,
+  fitDiff,
+} from '../src/client/edit-message'
 import { EMPTY_DIFF, diffLines } from '../src/shared/text-diff'
 
 const document_: AnnotationDocument = {
