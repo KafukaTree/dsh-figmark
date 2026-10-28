@@ -114,3 +114,25 @@ The one class worth reading first: of the high-severity findings, three are the
 same mistake in three places — **switching documents does not reset the state
 that belonged to the old one** — and the worst of them writes one document's
 marks into another document's sidecar.
+
+## What was checked on a real process, not just in vitest
+
+The suite runs in jsdom with stubbed fetch, so "the tests pass" says nothing
+about whether the plugin composes into a running Harness. After the splits the
+real boot was checked by copying the desktop profile to a throwaway `DSH_HOME`,
+renaming the profile (the CLI refuses to boot a profile still called `desktop`),
+pointing its `plugins` at the real plugin directory, and starting it on a spare
+port. Two things were then asked of the running process:
+
+- `GET /dsh-figmark/annotation?address=…` answered `403` without the guard
+  header and `200` with it, returning the figure's digest and the stored
+  annotation. So the route registered, the guard held, and the sidecar was read
+  back through the same path the browser uses.
+- The client bundle is served by the web server rather than by a path this repo
+  controls, so a `404` on `/plugins/dsh-figmark/client.js` is expected and is not
+  evidence of a load failure; the module is loaded by the composition, not by URL.
+
+Worth writing down because the first attempt reported `404` for the route and
+looked like a broken registration: it was a request for `/tmp/t.svg`, a figure
+that does not exist, and the plugin answered `no such figure` with a status the
+shell tooling collapsed. A 404 is also what a wrong address shape produces.
