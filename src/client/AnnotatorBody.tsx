@@ -6,6 +6,7 @@
  * half for storage before delivering them to the agent as a user message.
  * @module dsh-figmark/client/AnnotatorBody
  */
+import { createPortal } from 'react-dom'
 import {
   useCallback,
   useEffect,
@@ -14,10 +15,11 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
-import { resolveTranslate, type AnnotatorBodyProps } from './annotator-contract'
+import { resolveTranslate, type AnnotatorBodyProps, type TranslateVars } from './annotator-contract'
 import { parseFileAddress } from '../shared/address'
 import type { AnnotationDocument, AnnotationMark, FigurePoint, MarkAnchor } from '../shared/annotation'
 import {
@@ -31,6 +33,12 @@ import { figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '.
 import { RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
+import {
+  clampMenu, copiedText, figureMenuItems, pressedInsideMenu, relativeTo, type FigureMenuAction,
+} from './figure-menu'
+import {
+  copyImageToClipboard, desktopAvailable, openOnDesktop, revealOnDesktop,
+} from './host-actions'
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
 import { draggedMarks } from './mark-geometry'
@@ -205,27 +213,38 @@ function PointerIcon(): ReactNode {
 /**
  * The stroke each marking tool draws, so the row says it in pictures as well as words.
  *
+ * Every icon in the row is drawn on the same 24-unit grid as {@link PointerIcon}. That
+ * is not cosmetic: `stroke-width` in an inline SVG is measured in the icon's own units,
+ * so a 16-unit icon and a 24-unit icon given the same number draw at different
+ * thicknesses. On one grid they cannot drift, and the six read as one set.
+ *
  * `select` is not a marking tool and never comes here: it draws nothing, so it
- * wears the pointer instead (see {@link PointerIcon}).
+ * wears the pointer instead.
  */
 function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
   const shape = tool === 'arrow'
-    ? <><path d="M 3 13 L 13 3" /><path d="M 7 3 h 6 v 6" /></>
+    ? <><path d="M 4.5 19.5 L 19 5" /><path d="M 10 5 h 9 v 9" /></>
     : tool === 'rect'
-      ? <rect x="2.5" y="3.5" width="11" height="9" rx="1.5" />
+      ? <rect x="4" y="6" width="16" height="12" rx="2" />
       : tool === 'ellipse'
-        ? <circle cx="8" cy="8" r="5.5" />
+        ? <circle cx="12" cy="12" r="8.2" />
         : tool === 'pen'
-          ? <path d="M 2.5 13 C 5 4 9 13 13.5 3" />
+          ? <path d="M 4 18 C 7 6 12 20 20 5" />
           // The point tool wears the mark it places: a filled drop with a hole where
-          // the number goes. The hole is a second subpath cut out with evenodd, so the
-          // bar shows through it rather than a white disc sitting on the icon.
-          : <path fillRule="evenodd"
-            d="M 8 14.6 C 8 14.6 2.9 9.5 2.9 6.4 A 5.1 5.1 0 1 1 13.1 6.4 C 13.1 9.5 8 14.6 8 14.6 Z
-               M 8 8.7 A 2.1 2.1 0 1 0 8 4.5 A 2.1 2.1 0 1 0 8 8.7 Z"
-            fill="currentColor" stroke="none" />
+          // the number goes, and a dot inside it. The hole is a second subpath cut out
+          // with evenodd; the dot is a separate circle rather than a third subpath,
+          // because evenodd would cut that hole back open.
+          : (
+            <>
+              <path fillRule="evenodd"
+                d="M 12 22.4 Q 4.9 15.1 4.1 10.16 A 7.9 7.9 0 1 1 19.9 10.16 Q 19.1 15.1 12 22.4 Z
+                   M 12 16.02 A 5.62 5.62 0 1 0 12 4.78 A 5.62 5.62 0 1 0 12 16.02 Z"
+                fill="currentColor" stroke="none" />
+              <circle cx="12" cy="10.4" r="2" fill="currentColor" stroke="none" />
+            </>
+          )
   return (
-    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">{shape}</svg>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{shape}</svg>
   )
 }
 
@@ -239,11 +258,11 @@ function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
  */
 function GoalIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <circle cx="7" cy="9" r="5.2" />
-      <circle cx="7" cy="9" r="2.3" />
-      <path d="M 13.8 2.2 L 8.2 7.8" />
-      <path d="M 9.6 2.6 L 13.8 2.2 L 13.4 6.4" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="10.5" cy="13.5" r="7.8" />
+      <circle cx="10.5" cy="13.5" r="3.45" />
+      <path d="M 20.7 3.3 L 12.3 11.7" />
+      <path d="M 14.4 3.9 L 20.7 3.3 L 20.1 9.6" />
     </svg>
   )
 }
@@ -251,11 +270,11 @@ function GoalIcon(): ReactNode {
 /** The list card's mark: three stacked rows, the shape of the card itself. */
 function ListIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M 6 4.5 h 7 M 6 8 h 7 M 6 11.5 h 7" />
-      <circle cx="3.2" cy="4.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="3.2" cy="8" r="1" fill="currentColor" stroke="none" />
-      <circle cx="3.2" cy="11.5" r="1" fill="currentColor" stroke="none" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 9 6.75 h 10.5 M 9 12 h 10.5 M 9 17.25 h 10.5" />
+      <circle cx="4.8" cy="6.75" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="4.8" cy="12" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="4.8" cy="17.25" r="1.5" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -275,9 +294,9 @@ function BoxIcon(): ReactNode {
 /** A step back, as the usual curved arrow. */
 function UndoIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M 3.2 7.5 H 9.5 a 3.4 3.4 0 0 1 0 6.8 H 6" />
-      <path d="M 5.8 4.4 L 2.7 7.5 L 5.8 10.6" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 4.8 11.25 H 14.25 a 5.1 5.1 0 0 1 0 10.2 H 9" />
+      <path d="M 8.7 6.6 L 4.05 11.25 L 8.7 15.9" />
     </svg>
   )
 }
@@ -285,9 +304,9 @@ function UndoIcon(): ReactNode {
 /** The same arrow the other way. */
 function RedoIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M 12.8 7.5 H 6.5 a 3.4 3.4 0 0 0 0 6.8 H 10" />
-      <path d="M 10.2 4.4 L 13.3 7.5 L 10.2 10.6" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 19.2 11.25 H 9.75 a 5.1 5.1 0 0 0 0 10.2 H 15" />
+      <path d="M 15.3 6.6 L 19.95 11.25 L 15.3 15.9" />
     </svg>
   )
 }
@@ -295,9 +314,9 @@ function RedoIcon(): ReactNode {
 /** The primary action's mark: a paper plane, the usual "this leaves here". */
 function SendIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M 2 8 L 14 2.6 L 10.6 14 L 8 9.4 Z" />
-      <path d="M 8 9.4 L 14 2.6" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 3 12 L 21 3.9 L 15.9 21 L 12 14.1 Z" />
+      <path d="M 12 14.1 L 21 3.9" />
     </svg>
   )
 }
@@ -305,8 +324,8 @@ function SendIcon(): ReactNode {
 /** The secondary action's mark: a speech bubble, "this goes to the chat box". */
 function ChatIcon(): ReactNode {
   return (
-    <svg className="da-ico" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M 2.5 6.5 a 2 2 0 0 1 2 -2 h 7 a 2 2 0 0 1 2 2 v 3 a 2 2 0 0 1 -2 2 h -4 l -3 2.2 v -2.2 a 2 2 0 0 1 -2 -2 z" />
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 3.75 9.75 a 3 3 0 0 1 3 -3 h 10.5 a 3 3 0 0 1 3 3 v 4.5 a 3 3 0 0 1 -3 3 h -6 l -4.5 3.3 v -3.3 a 3 3 0 0 1 -3 -3 z" />
     </svg>
   )
 }
@@ -338,7 +357,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const mediaType = figureMediaType(parsedAddress?.path ?? '')
   const isVector = mediaType === 'image/svg+xml'
   const t = useCallback(
-    (key: string): string => resolveTranslate(props, key),
+    (key: string, vars?: TranslateVars): string => resolveTranslate(props, key, vars),
     [props.t, props.localeId],
   )
   const sessionId = props.sessionId ?? parsedAddress?.sessionId
@@ -419,6 +438,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const surface = props.page
   /** Whether this body annotates one page of a document its owner persists. */
   const isPage = surface !== undefined
+  // Every page a column renders is a body of its own, but only the one being read
+  // carries the chrome: the others are the pages they are, and nothing more.
+  const chrome = props.chrome !== false
   const figure: LoadedFigure | null = surface === undefined
     ? fileFigure
     : { kind: 'raster', objectUrl: surface.dataUrl, dataUrl: surface.dataUrl }
@@ -456,11 +478,45 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [color, setColor] = useState<string>(remembered.color ?? COLORS[0])
   const [weight, setWeight] = useState<number>(remembered.weight ?? WEIGHT_DEFAULT)
   const [marks, setMarks] = useState<AnnotationMark[]>(() => [...(props.draft?.marks ?? [])])
+  /**
+   * What the list shows.
+   *
+   * One page of a paged document is handed the whole file's marks, because the list
+   * is the map of what is about to be sent and what is sent is the file. A body
+   * mounted on its own has only its own marks to show, which is the same thing said
+   * with nothing extra.
+   */
+  const listedMarks = props.documentMarks ?? marks
   const [past, setPast] = useState<AnnotationMark[][]>([])
   const [future, setFuture] = useState<AnnotationMark[][]>([])
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null)
+  /**
+   * The selection, kept by the owner when there is one.
+   *
+   * A column mounts one body per page and moves the chrome between them as the
+   * reader scrolls; a selection held here would be dropped at every page boundary,
+   * and the comment pill would vanish under the sentence it belongs to.
+   */
+  const selectedId = props.selectedId === undefined ? ownSelectedId : props.selectedId
+  const setSelectedId = useCallback((next: string | null | ((current: string | null) => string | null)): void => {
+    const value = typeof next === 'function' ? next(selectedId) : next
+    if (props.onSelectedIdChange === undefined) setOwnSelectedId(value)
+    else props.onSelectedIdChange(value)
+  }, [props.onSelectedIdChange, selectedId])
   /** The mark whose detail box should take the caret once it is on screen. */
   const [focusId, setFocusId] = useState<string | null>(null)
+  /**
+   * Ask the owner to turn to a mark's page, when this body is one page of a document.
+   *
+   * The list is the document's, so a row can name a mark that is not on the page in
+   * view. The owner keeps the page number, so it is the owner that has to turn —
+   * and it must happen before the selection lands, or the pill would be measured
+   * against a page the mark is not on.
+   */
+  const revealOnPage = useCallback((mark: AnnotationMark): void => {
+    if (props.onRevealMark === undefined || mark.page === undefined) return
+    props.onRevealMark(mark)
+  }, [props.onRevealMark])
   /**
    * What the figure shows, as context for the marks below it.
    *
@@ -490,7 +546,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * second one's own close button. Opening any popover closes whatever was open;
    * opening the one already showing closes it, so the button toggles.
    */
-  const [openPanel, setOpenPanel] = useState<'style' | 'goal' | 'list' | null>(null)
+  const [ownPanel, setOwnPanel] = useState<'style' | 'goal' | 'list' | null>(null)
+  /** The open card, kept by the owner when there is one, for the reason above. */
+  const openPanel = props.openPanel === undefined ? ownPanel : props.openPanel
+  const setOpenPanel = useCallback((next: 'style' | 'goal' | 'list' | null | ((current: 'style' | 'goal' | 'list' | null) => 'style' | 'goal' | 'list' | null)): void => {
+    const value = typeof next === 'function' ? next(openPanel) : next
+    if (props.onOpenPanelChange === undefined) setOwnPanel(value)
+    else props.onOpenPanelChange(value)
+  }, [openPanel, props.onOpenPanelChange])
   const styleOpen = openPanel === 'style'
   const goalOpen = openPanel === 'goal'
   const listOpen = openPanel === 'list'
@@ -529,7 +592,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * the reader picks a colour is the moment it has to be safe. Storage failures are
    * swallowed inside `rememberPreferences` — losing a colour is not worth an error.
    */
-  const [zoom, setZoom] = useState<number | 'fit'>('fit')
+  /**
+   * The factor this figure is drawn at.
+   *
+   * An owner that magnifies the whole document hands the factor in and takes every
+   * gesture back, so the size follows the reader from page to page instead of
+   * restarting at fit on each sheet. A body mounted alone keeps its own.
+   */
+  const [ownZoom, setOwnZoom] = useState<number | 'fit'>('fit')
+  const zoom = props.zoom ?? ownZoom
+  const setZoom = useCallback((next: number | 'fit'): void => {
+    if (props.onZoom === undefined) setOwnZoom(next)
+    else props.onZoom(next)
+  }, [props.onZoom])
   /**
    * Whether a drag is currently moving the view.
    *
@@ -541,6 +616,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [fitWidth, setFitWidth] = useState(0)
   const [busy, setBusy] = useState<'sending' | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null)
+  /** Where the figure's context menu was asked for, or null when it is closed. */
+  const [menuAt, setMenuAt] = useState<{
+    left: number
+    top: number
+    path: string
+    workspace: string | null
+  } | null>(null)
+  /** Whether this Host can open and reveal paths; read once per mount. */
+  const [canOpen, setCanOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   /** The panel's own box, for placing the cards that float over it. */
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -555,6 +640,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * off the edge when it narrows.
    */
   const [palette, setPalette] = useState<PaletteSpot | undefined>(remembered.palette)
+  const paletteRef = useRef<HTMLDivElement | null>(null)
   const [dragging, setDragging] = useState(false)
   const dragFrom = useRef<{ pointerId: number; origin: PaletteSpot; box: DOMRect } | null>(null)
   /**
@@ -602,22 +688,39 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     event: ReactPointerEvent<HTMLDivElement>,
     from: { current: { pointerId: number; origin: PaletteSpot; box: DOMRect } | null },
     write: (spot: PaletteSpot | undefined) => void,
+    strip: HTMLElement | null,
   ): void => {
     const held = from.current
-    const root = rootRef.current
+    // Measured against the box the strip is actually placed in, which is not always
+    // this body's own: a paged document portals the chrome into the pane, and a
+    // fraction of the page applied inside the pane walks the strip off its edge.
+    const root = strip?.offsetParent ?? rootRef.current
     // A move without a press on the handle is not a drag of ours.
     /* v8 ignore next */
-    if (held === null || root === null) return
+    if (held === null || root === null || !(root instanceof Element)) return
     const bounds = root.getBoundingClientRect()
     const x = held.origin.x + (event.clientX - held.box.left) / Math.max(1, bounds.width)
     const y = held.origin.y + (event.clientY - held.box.top) / Math.max(1, bounds.height)
-    write({ x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) })
+    // The strip is placed from a corner and hangs from it, so a fraction of 1 puts
+    // its *near* edge on the far edge of the pane — its body entirely outside. The
+    // usable range is what is left of the pane once the strip's own width or height
+    // is taken out of it.
+    /* v8 ignore start -- both call sites hold a live ref for the whole drag. */
+    const width = strip?.offsetWidth ?? 0
+    const height = strip?.offsetHeight ?? 0
+    /* v8 ignore stop */
+    const roomX = Math.max(0, bounds.width - width) / Math.max(1, bounds.width)
+    const roomY = Math.max(0, bounds.height - height) / Math.max(1, bounds.height)
+    write({
+      x: Math.min(roomX, Math.max(0, x)),
+      y: Math.min(roomY, Math.max(0, y)),
+    })
   }, [])
   const dragPalette = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    followPointer(event, dragFrom, setPalette)
+    followPointer(event, dragFrom, setPalette, paletteRef.current)
   }, [followPointer])
   const dragBar = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    followPointer(event, barFrom, setBarSpot)
+    followPointer(event, barFrom, setBarSpot, barRef.current)
   }, [followPointer])
 
   useEffect(() => {
@@ -849,9 +952,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const scale = useMemo(() => {
     if (size === null) return 1
     if (zoom !== 'fit') return zoom
-    if (fitWidth <= 0) return 1
-    return Math.min(1.5, Math.max(0.05, fitWidth / size.width))
-  }, [zoom, fitWidth, size])
+    // The owner's width wins over this body's own measurement: in a column every
+    // page measures its box at a different moment, and one that measured nothing
+    // would draw at its own pixel size — a document of mismatched sheets.
+    const target = props.fitWidth ?? fitWidth
+    if (target <= 0) return 1
+    return Math.min(1.5, Math.max(0.05, target / size.width))
+  }, [zoom, fitWidth, size, props.fitWidth])
 
   /**
    * Where the records hang: above the bar, centred on it.
@@ -1057,13 +1164,20 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const stage = stageRef.current
     if (stage === null) return
     /**
-     * A trackpad pinch arrives as a ctrl-modified wheel. The browser would zoom
-     * the whole app for it, and the plugin's own stage is the surface the user is
-     * pointing at, so the event is taken here. A plain two-finger scroll is left
-     * alone: that one pans the scrollport, which is what it means.
+     * The wheel is the magnification, whatever modifier it carries.
+     *
+     * It used to be two gestures in one: a plain wheel panned the scrollport, and
+     * only a ctrl-modified one — which is how a trackpad reports a pinch — zoomed.
+     * That split is what made the gesture ambiguous: over a page that fits the pane
+     * there is nothing to scroll, so a plain wheel looks like a request for another
+     * page, while the reader who wants a closer look makes exactly the same motion.
+     * One motion, one meaning: up magnifies, down shrinks, and a pinch arrives as the
+     * same thing with a modifier on it.
+     *
+     * Panning is still there — a drag with the select tool moves the view — so
+     * nothing is lost by taking the wheel's second job away from it.
      */
     const onWheel = (event: WheelEvent): void => {
-      if (!event.ctrlKey) return
       event.preventDefault()
       zoomAt(
         liveScale.current * wheelZoomFactor(event.deltaY, event.deltaMode, stage.clientHeight),
@@ -1089,9 +1203,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const addMark = useCallback((mark: AnnotationMark): void => { commit([...marks, mark]) }, [commit, marks])
 
   const removeMark = useCallback((id: string): void => {
+    // A mark on another page of the document cannot be removed from this page's own
+    // draft: the owner holds the other pages, so the owner is the one that drops it.
+    if (props.onDocumentRemove !== undefined && !marks.some(mark => mark.id === id)) {
+      props.onDocumentRemove(id)
+      return
+    }
     commit(marks.filter(mark => mark.id !== id))
     setSelectedId(current => (current === id ? null : current))
-  }, [commit, marks])
+  }, [commit, marks, props.onDocumentRemove])
 
   /**
    * Write one mark's detail.
@@ -1501,6 +1621,128 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }
   }, [address, buildDocument, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, size, t])
 
+  /**
+   * Probe the Host once, so the menu can offer the gestures it can perform.
+   *
+   * `canOpenWorkspacePath` answers for the whole page, and a probe that fails is
+   * the same answer as "no desktop": rows that would fail every time are left out
+   * rather than shown and refused.
+   */
+  useEffect(() => {
+    let live = true
+    void desktopAvailable(props.remote).then(available => {
+      if (live) setCanOpen(available)
+    })
+    return () => { live = false }
+  }, [props.remote])
+
+  /**
+   * The rows this figure's menu offers, decided once per figure and Host.
+   *
+   * Empty until a figure has loaded: the rows all name its path, so there is
+   * nothing to offer before there is one.
+   */
+  const menuItems = useMemo(() => {
+    if (loaded === null) return []
+    return figureMenuItems({
+      canOpen,
+      canSend: !isPage && marks.length > 0 && busy === null,
+      hasRelative: relativeTo(loaded.path, loaded.workspace) !== null,
+      hasImage: layer !== null,
+    }, {
+      sendToAgent: t('menuSendToAgent'),
+      sendToComposer: t('menuSendToComposer'),
+      open: t('menuOpen'),
+      reveal: t('menuReveal'),
+      copyImage: t('menuCopyImage'),
+      copyRelative: t('menuCopyRelative'),
+      copyAbsolute: t('menuCopyAbsolute'),
+    })
+  }, [busy, canOpen, isPage, layer, loaded, marks.length, t])
+
+  /**
+   * Open the menu at the pointer, kept inside the window.
+   * @param event - the right-click on the figure.
+   */
+  const openMenu = useCallback((event: ReactMouseEvent): void => {
+    /* v8 ignore next -- nothing to act on until a figure loaded. */
+    if (loaded === null) return
+    event.preventDefault()
+    const height = menuItems.length * 27
+    const placed = clampMenu(
+      { x: event.clientX, y: event.clientY },
+      { width: window.innerWidth, height: window.innerHeight },
+      { width: 208, height },
+    )
+    setMenuAt({ ...placed, path: loaded.path, workspace: loaded.workspace })
+  }, [loaded, menuItems])
+
+  // A menu is a thing the reader has to dismiss: a press anywhere else, or Escape,
+  // closes it. The press inside is ignored because a row is chosen with a press, and
+  // a menu that closed itself on the way to its own row could never be used.
+  useEffect(() => {
+    if (menuAt === null) return
+    const onDown = (event: Event): void => {
+      if (pressedInsideMenu(event, menuRef.current)) return
+      setMenuAt(null)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenuAt(null)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuAt])
+
+  /**
+   * Carry out one menu row.
+   *
+   * The two copies are the only rows that touch the clipboard, and they say so in
+   * the status line: a copy with no feedback reads as a menu that did nothing.
+   * @param id - the row the reader picked.
+   * @param path - the figure's own path, as the Host named it.
+   * @param workspace - the session's working directory, when there is one.
+   */
+  const runMenu = useCallback((id: FigureMenuAction, path: string, workspace: string | null): void => {
+    setMenuAt(null)
+    if (id === 'sendToAgent') { void run('agent'); return }
+    if (id === 'sendToComposer') { void run('composer'); return }
+    if (id === 'open') {
+      void openOnDesktop(props.remote, path).then(ok => {
+        setStatus(ok ? { tone: 'ok', text: t('menuOpened') } : { tone: 'error', text: t('menuOpenFailed') })
+      })
+      return
+    }
+    if (id === 'reveal') {
+      void revealOnDesktop(props.remote, path).then(ok => {
+        setStatus(ok ? { tone: 'ok', text: t('menuRevealed') } : { tone: 'error', text: t('menuRevealFailed') })
+      })
+      return
+    }
+    if (id === 'copyImage') {
+      /* v8 ignore next -- the row is only offered for a figure that has a layer. */
+      if (layer === null) return
+      void exportPng(layer).then(async image => {
+        const copied = await copyImageToClipboard(image)
+        setStatus(copied ? { tone: 'ok', text: t('menuCopied') } : { tone: 'error', text: t('menuCopyFailed') })
+      }, () => {
+        setStatus({ tone: 'error', text: t('menuCopyFailed') })
+      })
+      return
+    }
+    const text = copiedText(id, path, workspace)
+    /* v8 ignore next */
+    if (text === null) return
+    void navigator.clipboard.writeText(text).then(() => {
+      setStatus({ tone: 'ok', text: t('menuCopied') })
+    }, () => {
+      setStatus({ tone: 'error', text: t('menuCopyFailed') })
+    })
+  }, [exportPng, layer, props.remote, run, t])
+
   // --- render ---------------------------------------------------------------
 
   /** Whether this body holds a rendered document rather than a figure file. */
@@ -1514,6 +1756,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
   if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
   if (figureError !== null) return <p className="da-hint" role="alert">{figureError}</p>
+
+  /**
+   * Press a row of the list: show that mark and put the pill beside it.
+   *
+   * The selection goes first and the page turn second, because a turn remounts this
+   * body for another page and the mark has to already be the one selected when the
+   * new page's pill is measured — otherwise the row would turn the page and leave
+   * the reader with nothing to read on it.
+   */
+  const reveal = (mark: AnnotationMark): void => {
+    setSelectedId(mark.id)
+    revealOnPage(mark)
+  }
 
   const selected = marks.find(mark => mark.id === selectedId) ?? null
   /**
@@ -1595,250 +1850,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     ? {}
     : { position: 'absolute', left: -paper.x, top: -paper.y, width: size?.width, height: size?.height }
 
-  return (
-    <div className="da-root" ref={rootRef}>
-      {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
-      {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
-      {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
-
-      {/* `data-hand` asks for the grab cursor only under `select`, because that is
-          the one tool whose drag has no other job; `data-panning` is the hand closed. */}
-      <div className="da-stage" ref={attachStage}
-        data-hand={tool === 'select' ? 'true' : undefined}
-        data-panning={panning ? 'true' : undefined}>
-        <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
-          <div className="da-paper" ref={paperRef} style={paperStyle}>
-          <div className="da-figure-frame" ref={figureRef} style={figureStyle}>
-            {figure?.kind === 'svg' ? (
-              <div ref={figureHostRef} dangerouslySetInnerHTML={{ __html: figure.markup }} />
-            ) : figure?.kind === 'raster' ? (
-              <img
-                className="da-figure"
-                src={figure.objectUrl}
-                width={size?.width}
-                height={size?.height}
-                alt=""
-                onLoad={(event) => {
-                  const image = event.currentTarget
-                  setFileRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
-                }}
-              />
-            ) : figure?.kind === 'html' ? (
-              // Same origin, scripts off: the body may read the frame's markup and
-              // nothing inside it can run or reach anywhere. The overlay above
-              // takes every pointer event, so the document is never navigated.
-              <iframe
-                ref={frameRef}
-                className="da-html"
-                title={t('htmlFrame')}
-                sandbox="allow-same-origin"
-                // The height the frame reported for its own content: until it
-                // reports one, the surface is not there to draw on.
-                style={{ width: figure.width, height: htmlHeight }}
-              />
-            ) : null}
-          </div>
-            {paper === null || size === null ? null : (
-              <Canvas
-                // The paper, not the figure: a mark in the margin has to have
-                // somewhere to be drawn and somewhere to be pressed.
-                width={paper.width}
-                height={paper.height}
-                origin={[-paper.x, -paper.y]}
-                marks={marks}
-                tool={tool}
-                color={color}
-                weight={weight}
-                scale={scale}
-                containerRef={figureHostRef}
-                anchoring={isVector}
-                anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                onAdd={addMark}
-                onMove={moveMark}
-                onUpdate={updateMark}
-                onRemove={removeMark}
-                onPan={panBy}
-                onPanStart={() => { setPanning(true) }}
-                onPanEnd={() => { setPanning(false) }}
-                onEdit={editMark}
-                onDrawn={finishDrawing}
-                onLiveEdit={setLiveMark}
-                numbering={props.numbering}
-              />
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* The figure keeps the whole panel; the words about it float over it. Each
-          is opened from the actions row and closes on its own button, so nothing
-          about a record sits on screen while the reader is drawing. */}
-      {/* What the figure as a whole should become. One per figure, so it is a
-          fold of its own rather than a field beside one mark. */}
-          {goalOpen ? (
-            <div className="da-float da-float-record da-float-goal" role="group" aria-label={t('summary')}
-              style={recordStyle(floatsAt)}>
-              <div className="da-float-head">
-                <span className="da-card-title">
-                  <GoalIcon />{t('summary')}
-                  <span className="da-hintdot" title={t('overallHint')}>?</span>
-                </span>
-                <button type="button" className="da-btn da-btn-quiet"
-                  aria-label={t('close')} title={t('close')}
-                  onClick={() => { setOpenPanel(null) }}>✕</button>
-              </div>
-              <label className="da-field">
-                <textarea
-                  value={summary}
-                  placeholder={t('summaryPlaceholder')}
-                  onChange={(event) => { writeSummary(event.target.value) }}
-                />
-                <span className="da-count">{summary.length}/300</span>
-              </label>
-            </div>
-          ) : null}
-
-          {/* The map of the figure: every mark, numbered as the figure numbers it. */}
-          {listOpen ? (
-            <div className="da-float da-float-record da-float-list" role="group" aria-label={t('marks')}
-              style={recordStyle(floatsAt)}>
-              <div className="da-float-head">
-                <span className="da-card-title">
-                  <ListIcon />{t('marks')}
-                  <span className="da-card-count">{marks.length}</span>
-                </span>
-                <button type="button" className="da-btn da-btn-quiet" disabled={marks.length === 0}
-                  onClick={() => { void discard() }}>{t('clear')}</button>
-                <button type="button" className="da-btn da-btn-quiet"
-                  aria-label={t('close')} title={t('close')}
-                  onClick={() => { setOpenPanel(null) }}>✕</button>
-              </div>
-              <div className="da-marks">
-                {marks.length === 0 ? (
-                  <div className="da-empty">
-                    <BoxIcon />
-                    <div className="da-empty-title">{t('noMarks')}</div>
-                    <div className="da-empty-hint">{t('noMarksHint')}</div>
-                  </div>
-                ) : marks.map((mark, index) => (
-                  <div className="da-mark" key={mark.id} data-selected={mark.id === selectedId}
-                    onClick={() => { setSelectedId(mark.id) }}>
-                    {/* The number wears the mark's own colour, so a row and the thing it
-                        names are matched by one glance rather than by reading. */}
-                    <span className="da-mark-index" style={{ background: mark.color }}>{index + 1}</span>
-                    <button type="button" className="da-mark-text"
-                      onClick={(event) => { event.stopPropagation(); setSelectedId(mark.id) }}>
-                      <span className="da-mark-title">
-                        {mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail : t('emptyDetail')}
-                      </span>
-                      <span className="da-mark-meta">
-                        {[t(TOOL_COPY[mark.kind]), anchorName(mark)].filter(part => part !== '').join(' · ')}
-                      </span>
-                    </button>
-                    <button type="button" className="da-mark-del"
-                      onClick={(event) => { event.stopPropagation(); removeMark(mark.id) }}>{t('delete')}</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {/* The selected mark's words, beside the mark rather than under the figure.
-              Selecting a mark is the gesture that asks for this card, so it needs no
-              button of its own; a reader who has picked something out means to say
-              what is wrong with it. */}
-          {selected === null || detailAt === null ? null : (
-            /* One pill, not a card: a single rounded field that opens on the spot
-               the reader just marked. It has no title, no badge and no close button —
-               the sentence itself says which mark it belongs to, because it appeared
-               next to it, and clicking anywhere else puts it away. The hand-off
-               buttons only exist once there is something to hand off. */
-            <div className="da-float da-float-detail" role="group" aria-label={t('detail')}
-              ref={pillRef}
-              style={{ left: detailAt.left, top: detailAt.top }}>
-              <textarea
-                ref={detailRef}
-                className="da-comment"
-                value={selected.detail ?? ''}
-                placeholder={selected.detail === undefined || selected.detail.trim() === '' ? t('addComment') : t('detailPlaceholder')}
-                rows={1}
-                onChange={(event) => { setMarkDetail(selected.id, event.target.value) }}
-              />
-              {selected.detail === undefined || selected.detail.trim() === '' ? null : (
-                <div className="da-comment-send">
-                  <button type="button" className="da-comment-send-btn da-comment-send-primary"
-                    disabled={busy !== null}
-                    aria-label={t('sendToAgent')} title={t('sendToAgent')}
-                    onClick={() => { void run('agent', selected) }}>
-                    <SendIcon />
-                  </button>
-                  <button type="button" className="da-comment-send-btn"
-                    disabled={busy !== null}
-                    aria-label={t('sendToComposer')} title={t('sendToComposer')}
-                    onClick={() => { void run('composer', selected) }}>
-                    <ChatIcon />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-      {/* How heavy the pen is — or how big a point mark's pin is — on a rail of its
-          own down the left edge, which is where a drawing tool puts its weight and
-          where the reader's eye already looks for one. Idle it is a hairline, so it
-          costs the figure nothing; crossing it opens it out into a tapered track.
-          It only appears once there is something to size: a mark to change, or a
-          tool armed to draw the next one. Sitting on the rail when nothing is
-          selected and no pen is out is a control for a decision not being made. */}
-      {shownWeight === null ? null : (
-        <label className="da-weight" title={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}>
-          <input type="range" className="da-weight-input"
-            aria-label={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}
-            min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
-            value={shownWeight}
-            onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
-          {/* The track is drawn, not styled: one path, filled twice. The second fill is
-              the same outline clipped to the height already chosen, so the blue follows
-              the wedge instead of sliding a bar next to it. An svg keeps the ends round,
-              which a clip-path polygon cannot. */}
-          {/* The groove is drawn, not styled: one path, so its ends stay round at any
-              length, which a background on a plain div cannot promise. It carries the
-              shadow and nothing else — the blue is a separate element, because the blue
-              has to stop where the knob is and that is a length in the rail, not in the
-              track's own coordinates. */}
-          <svg className="da-weight-svg" viewBox="0 0 18 100" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              {/* A shadow, not a fill: the track reads as a groove pressed into the panel
-                  rather than a black bar laid on top of it. */}
-              <linearGradient id={`${trackId}-shade`} x1="0" y1="1" x2="0" y2="0">
-                <stop offset="0" stopColor="rgba(20,40,80,.06)" />
-                <stop offset=".55" stopColor="rgba(20,40,80,.13)" />
-                <stop offset="1" stopColor="rgba(20,40,80,.24)" />
-              </linearGradient>
-            </defs>
-            <path d={WEIGHT_TRACK} fill={`url(#${trackId}-shade)`} />
-          </svg>
-          <span className="da-weight-fill" aria-hidden
-            style={{ height: travelHeight(weightFraction) }} />
-          {/* The knob's *centre* is the fill's top edge, so both are computed from one
-              number and cannot drift apart. Two things follow, and both are wanted:
-              the knob's box straddles the track's ends rather than being clamped inside
-              it (a knob that stops short of the end it is at looks like the slider has
-              further to go), and the travel is measured on the track — inset 12px from
-              the rail — rather than on the rail, which is what carried the knob's box
-              past the rail's rounded cap at the heaviest weight. */}
-          <span className="da-weight-knob" aria-hidden
-            style={{ bottom: `calc(${travelHeight(weightFraction)} - var(--da-knob-size) / 2)` }} />
-        </label>
-      )}
-
-      {/* The tools float, so they can be parked off whichever corner of the figure
-          the reader is working on. The handle above the tiles is what drags it; the
-          tiles themselves stay buttons, because a drag that starts on a tool should
-          still arm that tool. */}
-      <div className="da-palette"
+  /**
+   * The floating chrome: the weight rail, the tool palette and the bar.
+   *
+   * Assembled as a value rather than drawn in place because it may be rendered
+   * somewhere else: a paged document hands this body a node of the pane, and a bar
+   * drawn inside a page is a bar that scrolls with that page.
+   */
+  const chromeStrips = (
+    <>
+      <div className="da-palette" ref={paletteRef}
         data-dragging={dragging ? 'true' : undefined}
         style={paletteStyle}
         role="toolbar" aria-label={t('tools')}>
@@ -1916,6 +1937,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           onPointerCancel={() => { barFrom.current = null; setBarDragging(false) }}>
           <GripDots wide={false} />
         </div>
+        {/* Where the document is, and how to move through it, before the pen: paging
+            is what the reader decides first, and the colour belongs to the stroke
+            that comes after. Drawn by the paged owner and only placed here, because
+            the page number is that owner's to keep. */}
+        {props.pagingSlot === undefined ? null : (
+          <>
+            {props.pagingSlot}
+            <span className="da-sep" aria-hidden />
+          </>
+        )}
         {/* The fold that steers the next stroke: the colour it is drawn in. It opens
             upwards, clear of the bar itself. */}
         <div className="da-bar-tools">
@@ -1954,7 +1985,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           aria-label={t('marks')} title={t('marks')}
           onClick={() => { setOpenPanel(open => (open === 'list' ? null : 'list')) }}>
           <ListIcon />
-          {marks.length === 0 ? null : <span className="da-dock-count">{marks.length}</span>}
+          {/* The badge counts the document, not this sheet: the column moves the
+              chrome from page to page, and a count that changed as the reader
+              scrolled would be describing a different document every second. */}
+          {listedMarks.length === 0 ? null : <span className="da-dock-count">{listedMarks.length}</span>}
         </button>
         <span className="da-dock-sep" aria-hidden />
         {/* The keyboard reaches undo and redo whatever the buttons show, so the
@@ -1968,24 +2002,320 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           disabled={future.length === 0} onClick={redo}>
           <RedoIcon />
         </button>
-        {/* A page body has no hand-off of its own — the document's owner keeps every
-            page's marks and is the one that sends. */}
-        {isPage ? null : (
+        {/* The hand-off is the last thing on the bar, past everything that edits,
+            because it ends the session rather than continuing it. A page body has no
+            seat of its own, so its owner's callback stands in — the marks still go
+            out from one place, whichever page the reader happened to be on. */}
+        {isPage && props.onSend === undefined ? null : (
           <>
             <span className="da-dock-sep" aria-hidden />
-            <button type="button" className="da-dock-btn da-dock-btn-primary" disabled={busy !== null}
+            <button type="button" className="da-dock-btn" disabled={busy !== null}
               aria-label={t('sendToAgent')} title={t('sendToAgent')}
-              onClick={() => { void run('agent') }}>
+              onClick={() => { if (props.onSend === undefined) void run('agent'); else props.onSend('agent') }}>
               <SendIcon />
             </button>
             <button type="button" className="da-dock-btn" disabled={busy !== null}
               aria-label={t('sendToComposer')} title={t('sendToComposer')}
-              onClick={() => { void run('composer') }}>
+              onClick={() => { if (props.onSend === undefined) void run('composer'); else props.onSend('composer') }}>
               <ChatIcon />
             </button>
           </>
         )}
       </div>
+    </>
+  )
+
+  return (
+    <div className="da-root" ref={rootRef}>
+      {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
+      {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
+      {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
+
+      {/* `data-hand` asks for the grab cursor only under `select`, because that is
+          the one tool whose drag has no other job; `data-panning` is the hand closed. */}
+      <div className="da-stage" ref={attachStage}
+        onContextMenu={openMenu}
+        data-hand={tool === 'select' ? 'true' : undefined}
+        data-panning={panning ? 'true' : undefined}>
+        <div className="da-surface" ref={surfaceRef} style={surfaceStyle}>
+          <div className="da-paper" ref={paperRef} style={paperStyle}>
+          <div className="da-figure-frame" ref={figureRef} style={figureStyle}>
+            {figure?.kind === 'svg' ? (
+              <div ref={figureHostRef} dangerouslySetInnerHTML={{ __html: figure.markup }} />
+            ) : figure?.kind === 'raster' ? (
+              <img
+                className="da-figure"
+                src={figure.objectUrl}
+                width={size?.width}
+                height={size?.height}
+                alt=""
+                onLoad={(event) => {
+                  const image = event.currentTarget
+                  setFileRasterSize({ width: image.naturalWidth, height: image.naturalHeight })
+                }}
+              />
+            ) : figure?.kind === 'html' ? (
+              // Same origin, scripts off: the body may read the frame's markup and
+              // nothing inside it can run or reach anywhere. The overlay above
+              // takes every pointer event, so the document is never navigated.
+              <iframe
+                ref={frameRef}
+                className="da-html"
+                title={t('htmlFrame')}
+                sandbox="allow-same-origin"
+                // The height the frame reported for its own content: until it
+                // reports one, the surface is not there to draw on.
+                style={{ width: figure.width, height: htmlHeight }}
+              />
+            ) : null}
+          </div>
+            {paper === null || size === null ? null : (
+              <Canvas
+                // The paper, not the figure: a mark in the margin has to have
+                // somewhere to be drawn and somewhere to be pressed.
+                width={paper.width}
+                height={paper.height}
+                origin={[-paper.x, -paper.y]}
+                marks={marks}
+                tool={tool}
+                color={color}
+                weight={weight}
+                scale={scale}
+                containerRef={figureHostRef}
+                anchoring={isVector}
+                anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onAdd={addMark}
+                onMove={moveMark}
+                onUpdate={updateMark}
+                onRemove={removeMark}
+                onPan={panBy}
+                onPanStart={() => { setPanning(true) }}
+                onPanEnd={() => { setPanning(false) }}
+                onEdit={editMark}
+                onDrawn={finishDrawing}
+                onLiveEdit={setLiveMark}
+                numbering={props.numbering}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* The figure's own menu: the file behind it, and the way out to someone who
+          can act on it. Drawn at the pointer and closed by anything else, the way a
+          context menu is everywhere. */}
+      {menuAt === null ? null : (
+        <div className="da-menu" ref={menuRef} role="menu" aria-label={t('menuLabel')}
+          style={{ left: menuAt.left, top: menuAt.top }}>
+          {menuItems.map(item => (
+            <button key={item.id} type="button" className="da-menu-item" role="menuitem"
+              onClick={() => { runMenu(item.id, menuAt.path, menuAt.workspace) }}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* The figure keeps the whole panel; the words about it float over it. Each
+          is opened from the actions row and closes on its own button, so nothing
+          about a record sits on screen while the reader is drawing. */}
+      {/* What the figure as a whole should become. One per figure, so it is a
+          fold of its own rather than a field beside one mark. */}
+          {goalOpen ? (
+            <div className="da-float da-float-record da-float-goal" role="group" aria-label={t('summary')}
+              style={recordStyle(floatsAt)}>
+              <div className="da-float-head">
+                <span className="da-card-title">
+                  <GoalIcon />{t('summary')}
+                  <span className="da-hintdot" title={t('overallHint')}>?</span>
+                </span>
+                <button type="button" className="da-btn da-btn-quiet"
+                  aria-label={t('close')} title={t('close')}
+                  onClick={() => { setOpenPanel(null) }}>✕</button>
+              </div>
+              <label className="da-field">
+                <textarea
+                  value={summary}
+                  placeholder={t('summaryPlaceholder')}
+                  onChange={(event) => { writeSummary(event.target.value) }}
+                />
+                <span className="da-count">{summary.length}/300</span>
+              </label>
+            </div>
+          ) : null}
+
+          {/* The map of the document: every mark it holds, numbered as the document
+              numbers it. A page body lists the whole file, not its own sheet, because
+              the list is what the reader checks before sending — and what is sent is
+              the file. */}
+          {listOpen ? (
+            <div className="da-float da-float-record da-float-list" role="group" aria-label={t('marks')}
+              style={recordStyle(floatsAt)}>
+              <div className="da-float-head">
+                <span className="da-card-title">
+                  <ListIcon />{t('marks')}
+                  <span className="da-card-count">{listedMarks.length}</span>
+                </span>
+                <button type="button" className="da-btn da-btn-quiet" disabled={listedMarks.length === 0}
+                  onClick={() => { void discard() }}>{t('clear')}</button>
+                <button type="button" className="da-btn da-btn-quiet"
+                  aria-label={t('close')} title={t('close')}
+                  onClick={() => { setOpenPanel(null) }}>✕</button>
+              </div>
+              <div className="da-marks">
+                {listedMarks.length === 0 ? (
+                  <div className="da-empty">
+                    <BoxIcon />
+                    <div className="da-empty-title">{t('noMarks')}</div>
+                    <div className="da-empty-hint">{t('noMarksHint')}</div>
+                  </div>
+                ) : listedMarks.map((mark, index) => (
+                  <div className="da-mark" key={mark.id} data-selected={mark.id === selectedId}
+                    onClick={() => { reveal(mark) }}>
+                    {/* Two light strokes, one colour: the number and the shape are
+                        both facts about this mark, so they are drawn the way the mark
+                        itself is drawn — as a thin line in its colour, not as a slab
+                        of fill. The list is a list; a block of colour on every row is
+                        a wall of colour that competes with the figure the reader came
+                        here to look at. */}
+                    {/* The number is not a legend: the row already says which mark
+                        it is by being the nth row, and a differently coloured numeral
+                        per row turns an index into something the reader has to
+                        decode. It is neutral; the shape beside it keeps the mark's
+                        colour, which is the one thing colour is actually carrying
+                        here — which of the four tools drew this. */}
+                    <span className="da-mark-n">{index + 1}</span>
+                    <span className="da-mark-glyph" style={{ color: mark.color }}
+                      title={t('markKindLabel', { kind: t(TOOL_COPY[mark.kind]) })}>
+                      {ToolIcon(mark.kind)}
+                    </span>
+                    <button type="button" className="da-mark-text"
+                      onClick={(event) => { event.stopPropagation(); reveal(mark) }}>
+                      <span className="da-mark-title">
+                        {mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail : t('emptyDetail')}
+                      </span>
+                      {anchorName(mark) === '' ? null : (
+                        <span className="da-mark-meta">{anchorName(mark)}</span>
+                      )}
+                    </button>
+                    {/* The page at the end of the row, where a list puts the number that
+                        is not part of the sentence. It used to share the second line
+                        with the anchor, which stacked two short facts into a column of
+                        ragged text under every row. */}
+                    {mark.page === undefined ? null : (
+                      <span className="da-mark-page">{t('markPage', { page: mark.page })}</span>
+                    )}
+                    <button type="button" className="da-mark-del" aria-label={t('delete')}
+                      title={t('delete')}
+                      onClick={(event) => { event.stopPropagation(); removeMark(mark.id) }}>
+                      <span className="da-mark-del-x" aria-hidden="true">✕</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {/* The selected mark's words, beside the mark rather than under the figure.
+              Selecting a mark is the gesture that asks for this card, so it needs no
+              button of its own; a reader who has picked something out means to say
+              what is wrong with it. */}
+          {selected === null || detailAt === null ? null : (
+            /* One pill, not a card: a single rounded field that opens on the spot
+               the reader just marked. It has no title, no badge and no close button —
+               the sentence itself says which mark it belongs to, because it appeared
+               next to it, and clicking anywhere else puts it away. The hand-off
+               buttons only exist once there is something to hand off. */
+            <div className="da-float da-float-detail" role="group" aria-label={t('detail')}
+              ref={pillRef}
+              style={{ left: detailAt.left, top: detailAt.top }}>
+              <textarea
+                ref={detailRef}
+                className="da-comment"
+                value={selected.detail ?? ''}
+                placeholder={selected.detail === undefined || selected.detail.trim() === '' ? t('addComment') : t('detailPlaceholder')}
+                rows={1}
+                onChange={(event) => { setMarkDetail(selected.id, event.target.value) }}
+              />
+              {selected.detail === undefined || selected.detail.trim() === '' ? null : (
+                <div className="da-comment-send">
+                  <button type="button" className="da-comment-send-btn da-comment-send-primary"
+                    disabled={busy !== null}
+                    aria-label={t('sendToAgent')} title={t('sendToAgent')}
+                    onClick={() => { void run('agent', selected) }}>
+                    <SendIcon />
+                  </button>
+                  <button type="button" className="da-comment-send-btn"
+                    disabled={busy !== null}
+                    aria-label={t('sendToComposer')} title={t('sendToComposer')}
+                    onClick={() => { void run('composer', selected) }}>
+                    <ChatIcon />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+      {/* How heavy the pen is — or how big a point mark's pin is — on a rail of its
+          own down the left edge, which is where a drawing tool puts its weight and
+          where the reader's eye already looks for one. Idle it is a hairline, so it
+          costs the figure nothing; crossing it opens it out into a tapered track.
+          It only appears once there is something to size: a mark to change, or a
+          tool armed to draw the next one. Sitting on the rail when nothing is
+          selected and no pen is out is a control for a decision not being made. */}
+      {!chrome || shownWeight === null ? null : (
+        <label className="da-weight" title={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}>
+          <input type="range" className="da-weight-input"
+            aria-label={t(selected?.kind === 'point' || tool === 'point' ? 'pinSize' : 'weight')}
+            min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.1}
+            value={shownWeight}
+            onChange={(event) => { chooseWeight(Number(event.target.value)) }} />
+          {/* The track is drawn, not styled: one path, filled twice. The second fill is
+              the same outline clipped to the height already chosen, so the blue follows
+              the wedge instead of sliding a bar next to it. An svg keeps the ends round,
+              which a clip-path polygon cannot. */}
+          {/* The groove is drawn, not styled: one path, so its ends stay round at any
+              length, which a background on a plain div cannot promise. It carries the
+              shadow and nothing else — the blue is a separate element, because the blue
+              has to stop where the knob is and that is a length in the rail, not in the
+              track's own coordinates. */}
+          <svg className="da-weight-svg" viewBox="0 0 18 100" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              {/* A shadow, not a fill: the track reads as a groove pressed into the panel
+                  rather than a black bar laid on top of it. */}
+              <linearGradient id={`${trackId}-shade`} x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0" stopColor="rgba(20,40,80,.06)" />
+                <stop offset=".55" stopColor="rgba(20,40,80,.13)" />
+                <stop offset="1" stopColor="rgba(20,40,80,.24)" />
+              </linearGradient>
+            </defs>
+            <path d={WEIGHT_TRACK} fill={`url(#${trackId}-shade)`} />
+          </svg>
+          <span className="da-weight-fill" aria-hidden
+            style={{ height: travelHeight(weightFraction) }} />
+          {/* The knob's *centre* is the fill's top edge, so both are computed from one
+              number and cannot drift apart. Two things follow, and both are wanted:
+              the knob's box straddles the track's ends rather than being clamped inside
+              it (a knob that stops short of the end it is at looks like the slider has
+              further to go), and the travel is measured on the track — inset 12px from
+              the rail — rather than on the rail, which is what carried the knob's box
+              past the rail's rounded cap at the heaviest weight. */}
+          <span className="da-weight-knob" aria-hidden
+            style={{ bottom: `calc(${travelHeight(weightFraction)} - var(--da-knob-size) / 2)` }} />
+        </label>
+      )}
+
+      {/* The tools float, so they can be parked off whichever corner of the figure
+          the reader is working on. The handle above the tiles is what drags it; the
+          tiles themselves stay buttons, because a drag that starts on a tool should
+          still arm that tool. */}
+      {/* Drawn into the owner's pane when there is one, so scrolling the document
+          does not carry the tools off the screen with it. */}
+      {!chrome ? null : props.chromeHost === undefined || props.chromeHost === null
+        ? chromeStrips
+        : createPortal(chromeStrips, props.chromeHost)}
     </div>
   )
 }

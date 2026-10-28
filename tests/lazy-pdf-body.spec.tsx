@@ -64,6 +64,10 @@ function renderSync(props: Partial<LazyPdfBodyProps> = {}): { readonly host: HTM
     annotationSignature,
     autosaveDelayMs: 600,
     figureUnit,
+    // The chunk's two ways of touching the reader's own preferences: neither has a
+    // fallback the chunk could invent, so both have to be handed to it.
+    readPageFlow: () => undefined,
+    writePageFlow: () => {},
     ...props,
   } as LazyPdfBodyProps
   act(() => {

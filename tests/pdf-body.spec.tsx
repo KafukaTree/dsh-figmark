@@ -144,7 +144,20 @@ function StubBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     props.onDraftChange?.({ marks: props.draft?.marks ?? [] })
   }, [props.onDraftChange])
-  return <span>{`page ${String(props.page?.width ?? 0)} marks ${String(props.draft?.marks.length ?? 0)}`}</span>
+  // The real body places the document's paging on its own bar, so the stub draws it
+  // too: the controls belong to the document and are only positioned by the body.
+  return (
+    <>
+      {props.pagingSlot}
+      {/* The hand-off rides on the same bar, and a page body reaches it through the
+          callback its owner handed down — the marks still go out from one place. */}
+      <button type="button" aria-label={copy('sendToAgent')}
+        onClick={() => { props.onSend?.('agent') }}>agent</button>
+      <button type="button" aria-label={copy('sendToComposer')}
+        onClick={() => { props.onSend?.('composer') }}>composer</button>
+      <span>{`page ${String(props.page?.width ?? 0)} marks ${String(props.draft?.marks.length ?? 0)}`}</span>
+    </>
+  )
 }
 
 /** The props the annotator body is currently rendered with. */
@@ -216,11 +229,36 @@ async function settle(): Promise<void> {
   })
 }
 
-/** One toolbar button by its own label. */
+/**
+ * One toolbar button, by the name it answers to.
+ *
+ * The document's strip draws its paging and its hand-off as glyphs on a dark card,
+ * so a button's accessible name is its `aria-label` — the visible text is only ever
+ * the page number and the flow's own word.
+ */
 function button(host: HTMLElement, label: string): HTMLButtonElement {
-  const found = [...host.querySelectorAll('button')].find(element => element.textContent === label)
+  const found = [...host.querySelectorAll('button')].find(element =>
+    element.getAttribute('aria-label') === label || element.textContent === label)
   if (found === undefined) throw new Error(`no button labelled ${label}`)
   return found as HTMLButtonElement
+}
+
+/** Type into a field the way a reader would, so React's own onChange sees it. */
+function typeInto(box: HTMLInputElement, text: string): void {
+  // React tracks the value it last wrote, so assigning `value` directly is invisible
+  // to it: the value has to be set through the prototype's own setter and followed
+  // by an input event, which is exactly what a keystroke does.
+  // eslint-disable-next-line typescript/unbound-method -- the setter is applied with Reflect.apply, so its receiver is explicit.
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  if (setter === undefined) throw new Error('no value setter')
+  Reflect.apply(setter, box, [text])
+  box.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** One element that must be there, or the spec is wrong rather than the code. */
+function required<T>(found: T | null): T {
+  if (found === null) throw new Error('missing element')
+  return found
 }
 
 /** Click one button, letting the handler's promises settle. */
@@ -253,6 +291,9 @@ function mark(id: string, page: number): AnnotationMark {
 }
 
 beforeEach(() => {
+  // The reader's own choices outlive a document, which is the point — so each spec
+  // starts from none of them rather than from whatever the last one chose.
+  window.localStorage.clear()
   surfaces.length = 0
   callbacks.length = 0
   renders = 0
@@ -321,12 +362,15 @@ describe('opening a PDF', () => {
     expect(seatState.loads).toEqual(['dsh-resource://file/session/s1/report.pdf'])
   })
 
-  it('shows the document toolbar with the page it is on and how much is marked', async () => {
+  it('shows the document toolbar with the page it is on', async () => {
+    // The page fraction already says how long the document is, and the bar's own
+    // marks button carries the count: a separate sentence was saying it twice, in
+    // words, on a card that has room for neither.
     const { host } = await mount()
     expect(host.textContent).toContain('1 / 3')
-    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 0 }))
+    expect(host.textContent).not.toContain(copy('documentScope', { pages: 3, marks: 0 }))
     await edit([mark('m1', 1), mark('m2', 1)])
-    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+    expect(host.textContent).toContain('marks 2')
   })
 
   it('shows a hint while the page is not ready', async () => {
@@ -337,7 +381,6 @@ describe('opening a PDF', () => {
     expect(host.querySelector('.da-placeholder')).not.toBeNull()
     // …and it states nothing the document has not said yet.
     expect(host.textContent).not.toContain('1 / 0')
-    expect(host.textContent).not.toContain(copy('documentScope', { pages: 0, marks: 0 }))
     expect(surfaces).toHaveLength(0)
     runtime.settleOpen?.()
     await settle()
@@ -394,22 +437,42 @@ describe('opening a PDF', () => {
     expect(host.textContent).toContain('page 600')
   })
 
-  it('asks the parser for device pixels at the fit scale, within what the display can show', async () => {
-    // 800px pane, 24px inset, 600pt page, at the width one raster step serves.
+  it('asks the parser for the device pixels the page covers, with a whole spare', async () => {
+    // 800px pane, 24px inset, 600pt page, at the width one raster step serves. The
+    // page is drawn at that width, so the raster is that width in device pixels,
+    // times the spare that keeps the fractional fit from softening it.
     await mount()
-    expect(defined(runtime.rendered[0]).scale).toBeCloseTo((stepped(800) - 24) / 600, 3)
+    expect(defined(runtime.rendered[0]).scale).toBeCloseTo(((stepped(800) - 24) * 1 * 1.5) / 600, 3)
     vi.stubGlobal('devicePixelRatio', 3)
     paneWidth = 1000
     await act(async () => { notifyResize?.() })
     await settle()
-    // Denser than 2 is not worth the pixels.
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo(((stepped(1000) - 24) / 600) * 2, 3)
+    // Denser than 2 is not worth the pixels, and the fit ceiling stops the page
+    // growing before the pane does — so the raster is sized for 900, not for 1000.
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale)
+      .toBeCloseTo((600 * 1.5 * 2 * 1.5) / 600, 3)
     vi.stubGlobal('devicePixelRatio', 0)
     paneWidth = 800
     await act(async () => { notifyResize?.() })
     await settle()
-    // A display that reports nothing still renders at 1:1.
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo((stepped(800) - 24) / 600, 3)
+    // A display that reports nothing still renders at 1:1, with the spare.
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale)
+      .toBeCloseTo(((stepped(800) - 24) * 1 * 1.5) / 600, 3)
+  })
+
+  it('stops paying for pixels past the width the page is actually drawn at', async () => {
+    // Fit width will not blow a small page up past its ceiling, so past that point a
+    // wider pane buys no more drawn pixels. A raster that kept growing would be
+    // megabytes of detail the pane never shows.
+    await mount()
+    paneWidth = 1400
+    await act(async () => { notifyResize?.() })
+    await settle()
+    paneWidth = 2000
+    await act(async () => { notifyResize?.() })
+    await settle()
+    const last = runtime.rendered[runtime.rendered.length - 1]
+    expect(defined(last).scale).toBeCloseTo((600 * 1.5 * 1 * 1.5) / 600, 3)
   })
 
   it('serves a whole width step, so a dragged pane does not rasterize every pixel', async () => {
@@ -425,7 +488,7 @@ describe('opening a PDF', () => {
     await act(async () => { notifyResize?.() })
     await settle()
     expect(runtime.rendered).toHaveLength(2)
-    expect(defined(runtime.rendered[1]).scale).toBeCloseTo((stepped(900) - 24) / 600, 3)
+    expect(defined(runtime.rendered[1]).scale).toBeCloseTo((600 * 1.5 * 1 * 1.5) / 600, 3)
   })
 
   it('leaves the page on screen while the raster for the new width is drawn', async () => {
@@ -441,7 +504,8 @@ describe('opening a PDF', () => {
     expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page1')
     runtime.settleRender?.()
     await settle()
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBeCloseTo((stepped(1200) - 24) / 600, 3)
+    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale)
+      .toBeCloseTo((600 * 1.5 * 1 * 1.5) / 600, 3)
   })
 })
 
@@ -562,7 +626,7 @@ describe('paging', () => {
     await click(button(host, zh.nextPage))
     await click(button(host, zh.nextPage))
     expect(host.textContent).toContain('marks 1')
-    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+    expect(host.textContent).toContain('3 / 3')
   })
 
   it('puts a saved mark that names no page on the first one', async () => {
@@ -656,10 +720,12 @@ describe('the shell around the document', () => {
     await edit([mark('m2', 2)])
     currentProps().onSummaryChange?.('两份附图一起改')
     await settle()
-    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+    // Both pages' marks survive, counted across the document rather than on the
+    // page in view: the numbering map is the document's own count.
+    expect(currentProps().numbering?.size).toBe(2)
     await rerender(root, {})
     expect(currentProps().summary).toBe('两份附图一起改')
-    expect(host.textContent).toContain(copy('documentScope', { pages: 3, marks: 2 }))
+    expect(currentProps().numbering?.size).toBe(2)
   })
 
   it('still reads the document again when the tab moves to another one', async () => {
@@ -814,6 +880,8 @@ describe('saving the document', () => {
     // Without the Host's own facts there is nothing to write an annotation against,
     // so the action reports rather than silently doing nothing.
     const { host } = await mount({ content: { kind: 'text' } })
+    // The strip's hand-off is pressable whatever the document holds: the guard in
+    // the handler is what decides, and it is the guard that has a reason to report.
     await click(button(host, zh.sendToAgent))
     expect(host.textContent).toContain(zh.notReady)
   })
@@ -920,7 +988,7 @@ describe('keeping a draft', () => {
     await waitForSave()
     // Opening a document is a read; the marks were already on disk before it opened.
     expect(seatState.drafts).toEqual([])
-    expect(host.textContent).toContain('1 处批注')
+    expect(host.textContent).toContain('marks 1')
   })
 
   it('writes once for a burst of edits rather than once per edit', async () => {
@@ -973,7 +1041,7 @@ describe('keeping a draft', () => {
     await edit([mark('m1', 1)])
     await waitForSave()
     expect(host.textContent).toContain(`${zh.saveError}the disk is full`)
-    expect(host.textContent).toContain('1 处批注')
+    expect(host.textContent).toContain('marks 1')
   })
 
   it('reports a failure that is not an Error as its own text', async () => {
@@ -994,5 +1062,277 @@ describe('keeping a draft', () => {
     // left for a write to keep, and one would put the sidecar back.
     expect(seatState.saves).toHaveLength(1)
     expect(seatState.drafts).toEqual([])
+  })
+})
+
+describe('paging by hand', () => {
+  /** Press one key on the window, the way a reader's keyboard does. */
+  async function press(key: string, target: EventTarget = window): Promise<void> {
+    await act(async () => {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    await settle()
+  }
+
+  /** The page-number control: a label until it is pressed, a box after. */
+  function pageControl(host: HTMLElement): HTMLButtonElement {
+    const found = host.querySelector<HTMLButtonElement>('.da-page-btn')
+    if (found === null) throw new Error('no page number')
+    return found
+  }
+
+  it('turns the page with the arrow keys, and stops at both ends', async () => {
+    const { host } = await mount()
+    await press('ArrowRight')
+    expect(host.textContent).toContain('2 / 3')
+    await press('PageDown')
+    expect(host.textContent).toContain('3 / 3')
+    await press('PageDown')
+    expect(host.textContent).toContain('3 / 3')
+    await press('ArrowLeft')
+    expect(host.textContent).toContain('2 / 3')
+  })
+
+  it('jumps to either end with Home and End', async () => {
+    const { host } = await mount()
+    await press('End')
+    expect(host.textContent).toContain('3 / 3')
+    await press('Home')
+    expect(host.textContent).toContain('1 / 3')
+  })
+
+  it('leaves the keys it does not own to the shell', async () => {
+    const { host } = await mount()
+    await press('a')
+    expect(host.textContent).toContain('1 / 3')
+  })
+
+  it('leaves the arrow keys alone while the reader is typing', async () => {
+    // The page box is a field: an arrow there moves the caret, not the document.
+    const { host } = await mount()
+    await click(pageControl(host))
+    const box = required(host.querySelector('input'))
+    await press('ArrowRight', box)
+    // The box is still open and still says the page it opened on: the arrow moved
+    // the caret, not the document.
+    expect(box?.getAttribute('value') ?? box?.value).toBe('1')
+  })
+
+  it('leaves the arrow keys alone in a note field and in an editable region', async () => {
+    // The two other kinds of field the panel has: the note boxes, which are text
+    // areas, and a rendered document, whose frame can edit. Neither should turn a
+    // page out from under the caret.
+    const { host } = await mount()
+    for (const field of ['textarea', 'contenteditable', 'select']) {
+      const element = document.createElement(field === 'contenteditable' ? 'div' : field)
+      if (field === 'contenteditable') element.setAttribute('contenteditable', 'true')
+      document.body.append(element)
+      await press('PageDown', element)
+      element.remove()
+      expect(host.textContent).toContain('1 / 3')
+    }
+  })
+
+  it('takes a page number from the box', async () => {
+    const { host } = await mount()
+    await click(pageControl(host))
+    const box = required(host.querySelector('input'))
+    await act(async () => { typeInto(box, '3') })
+    await press('Enter', box)
+    expect(host.textContent).toContain('3 / 3')
+    expect(currentProps().page?.dataUrl).toBe('data:image/png;base64,page3')
+  })
+
+  it('puts the box back when the reader leaves it without a page', async () => {
+    const { host } = await mount()
+    for (const text of ['nonsense', '']) {
+      await click(pageControl(host))
+      const box = required(host.querySelector('input'))
+      await act(async () => {
+        typeInto(box, text)
+        // React listens for the bubbling focusout, not for blur itself.
+        box.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+      await settle()
+      expect(host.textContent).toContain('1 / 3')
+    }
+  })
+
+  it('puts the box back on Escape', async () => {
+    const { host } = await mount()
+    await click(pageControl(host))
+    const box = required(host.querySelector('input'))
+    await act(async () => { typeInto(box, '2') })
+    await press('Escape', box)
+    // Escape put the box back to the page on screen, and the label is back.
+    expect(host.querySelector('.da-page-btn')?.textContent).toBe('1 / 3')
+  })
+})
+
+describe('the wheel over the page', () => {
+  /**
+   * One wheel gesture on the panel.
+   *
+   * The wheel is the magnification now, and it is the page body that owns the
+   * magnification — so what this document must not do is read the same motion as a
+   * page turn. The gesture used to mean "next page at the edge of one", which is
+   * exactly the ambiguity a reader felt: over a page that fits the pane there is
+   * nothing to scroll, so a wheel had no other reading available to it.
+   */
+  async function wheel(host: HTMLElement, deltaY: number): Promise<void> {
+    await act(async () => {
+      host.querySelector('.da-pdf')?.dispatchEvent(
+        new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }),
+      )
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+  }
+
+  it('never turns a page, whichever way it is pushed', async () => {
+    const { host } = await mount()
+    await wheel(host, 40)
+    await wheel(host, 400)
+    expect(host.textContent).toContain('1 / 3')
+    await click(button(host, copy('nextPage')))
+    await settle()
+    await wheel(host, -40)
+    await wheel(host, -400)
+    expect(host.textContent).toContain('2 / 3')
+  })
+
+  it('leaves the page turn to the keys', async () => {
+    // The keyboard is where paging lives now: both axes, so the hand that reaches
+    // for the arrow keys finds the same gesture whichever way it thinks of "next".
+    const { host } = await mount()
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    await settle()
+    expect(host.textContent).toContain('2 / 3')
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    await settle()
+    expect(host.textContent).toContain('1 / 3')
+  })
+})
+
+describe('the strip before the first page arrives', () => {
+  // The pane has no page body yet to carry its bar, so it stands one in: the page
+  // count and the hand-off answer before the first raster, and the reader who cannot
+  // draw yet can still be told why.
+  it('offers the hand-off from its own strip, and reports that it has nothing yet', async () => {
+    const { host } = await mount({ content: { kind: 'text' } })
+    const strip = required(host.querySelector<HTMLElement>('.da-bar'))
+    await click(button(strip, zh.sendToComposer))
+    expect(host.textContent).toContain(zh.notReady)
+  })
+})
+
+describe('one bar, on the pane', () => {
+  // The bar belongs to the pane, not to a page: a bar drawn inside a page would
+  // scroll away with it, and paging would carry the controls off screen.
+  it('hands the pane’s own node to the page body, not the page’s', async () => {
+    const { host } = await mount()
+    await settle()
+    const pane = required(host.querySelector<HTMLElement>('.da-pdf'))
+    const body = currentProps()
+    expect(body.chromeHost).toBe(pane)
+  })
+
+  it('carries the paging the document drew, and the hand-off with it', async () => {
+    await mount()
+    const body = currentProps()
+    expect(body.pagingSlot).toBeTruthy()
+  })
+})
+
+describe('the document’s own magnification', () => {
+  // A file's pages are one picture in several sheets, so the factor belongs to the
+  // document: a page that kept its own would restart at fit on every turn.
+  it('hands the factor to the page body, so every page is drawn at one size', async () => {
+    await mount()
+    expect(currentProps().onZoom).toBeTypeOf('function')
+    expect(currentProps().zoom).toBe('fit')
+  })
+})
+
+describe('the document magnified', () => {
+  it('scales every page together instead of one at a time', async () => {
+    await mount()
+    const body = currentProps()
+    // The body takes its factor from the document and reports every gesture back.
+    defined(body.onZoom)(2)
+    await settle()
+    expect(currentProps().zoom).toBe(2)
+  })
+})
+
+describe('marking across the whole document', () => {
+  it('drops a mark from whichever page it was drawn on', async () => {
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.nextPage))
+    await edit([mark('m9', 2)])
+    await click(button(host, zh.previousPage))
+    // The list is the file's, so its delete can name a mark on a page not in view.
+    const body = currentProps()
+    expect(body.documentMarks?.map(entry => entry.id)).toEqual(['m1', 'm9'])
+    defined(body.onDocumentRemove)('m9')
+    await settle()
+    expect(currentProps().documentMarks?.map(entry => entry.id)).toEqual(['m1'])
+  })
+})
+
+describe('a row of the list that names another page', () => {
+  // The list is the document's, so its rows name marks the reader is not looking at.
+  // Pressing one has to take them there and open its comment, or the list is a
+  // table of contents without the going.
+  it('turns to the page a mark is on, with that mark already selected', async () => {
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.nextPage))
+    await edit([mark('m9', 2)])
+    await settle()
+    expect(host.textContent).toContain('2 / 3')
+    // The row for the mark back on page 1, reached the way the list reaches it.
+    await act(async () => { defined(currentProps().onRevealMark)(mark('m1', 1)) })
+    await settle()
+    expect(host.textContent).toContain('1 / 3')
+    // Selected at the same moment as the turn, so the page that arrives carries the
+    // comment pill already: selecting after the remount would need a second render.
+    expect(currentProps().selectedId).toBe('m1')
+  })
+
+  it('stays put for a mark that names no page', async () => {
+    // A figure drawn on a page always carries one; a mark that somehow does not must
+    // not send the reader to page one, which is where an unclamped turn would land.
+    const { host } = await mount()
+    await click(button(host, zh.nextPage))
+    await settle()
+    // A mark with no page at all, which is what a plain figure's marks look like.
+    const bare: AnnotationMark = { id: 'm1', kind: 'rect', color: '#1971c2', points: [[10, 20], [60, 90]] }
+    await act(async () => { defined(currentProps().onRevealMark)(bare) })
+    await settle()
+    expect(host.textContent).toContain('2 / 3')
+    expect(currentProps().selectedId).toBe('m1')
+  })
+})
+
+describe('dropping a mark that is not there', () => {
+  // The list is the file's, so a delete can name a mark that is already gone — a
+  // second press, or a page the reader cleared meanwhile. Nothing changes, and the
+  // map that comes back is the same object so no page re-renders for nothing.
+  it('leaves the marks alone when the id matches nothing', async () => {
+    await mount()
+    await edit([mark('m1', 1)])
+    const before = currentProps().documentMarks
+    defined(currentProps().onDocumentRemove)('ghost')
+    await settle()
+    expect(currentProps().documentMarks).toEqual(before)
   })
 })

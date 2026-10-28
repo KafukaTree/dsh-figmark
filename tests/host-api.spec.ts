@@ -69,6 +69,9 @@ describe('reading a saved annotation', () => {
       mediaType: 'image/svg+xml',
       sha256: 'a'.repeat(64),
       annotation: document_,
+      // A Host that names no Session directory still loads the figure; the menu
+      // just has no workspace to name a relative path against.
+      workspace: null,
     })
     expect(calls[0]?.url).toContain('/dsh-figmark/annotation?address=')
     expect(calls[0]?.url).toContain('dsh-resource%3A%2F%2Ffile%2Fsession%2Fs1%2Ffig1.svg')

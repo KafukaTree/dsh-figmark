@@ -21,6 +21,7 @@ import { AnnotatorBody } from './AnnotatorBody'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from './autosave'
 import { figureUnit } from './scale'
 import type { AnnotatorInjected } from './AnnotatorBody'
+import type { RemoteLike } from './host-actions'
 import type { ComposerLike } from './composer'
 import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
@@ -126,6 +127,7 @@ export function apply(ctx: Context): void {
       conversation: ctx.get('conversation') as ComposerLike | undefined,
       sessionId: String(sessionId),
       localeId: locale.getLocale().locale ?? 'zh',
+      remote: ctx.get('remote') as RemoteLike | undefined,
     }),
   }, AnnotatorBody)), 'dsh-figmark: document body')
   ctx.effect(() => previews.register({
@@ -150,6 +152,8 @@ export function apply(ctx: Context): void {
       annotationSignature,
       autosaveDelayMs: AUTOSAVE_DELAY_MS,
       figureUnit,
+      // The chunk cannot import these, and the two of them are all it needs from
+      // the preferences: how a document was last read, and where to record it.
       seat: createDocumentSeat({
         sessions: ctx.get('sessions') as SessionsLike | undefined,
         conversation: ctx.get('conversation') as ComposerLike | undefined,
@@ -199,6 +203,7 @@ export function apply(ctx: Context): void {
       conversation: ctx.get('conversation') as ComposerLike | undefined,
       sessionId: String(sessionId),
       localeId: locale.getLocale().locale ?? 'zh',
+      remote: ctx.get('remote') as RemoteLike | undefined,
     }),
   }, AnnotatorBody)), 'dsh-figmark: html document body')
 }

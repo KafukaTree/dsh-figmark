@@ -10,12 +10,13 @@
  * drawing surface and the marks of that page.
  * @module dsh-figmark/client/pdf/PdfBody
  */
-import { useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import type { AnnotationMark } from '../../shared/annotation'
 import type { AnnotatorBodyProps, BodyContent, SurfaceDraft, Translate } from '../annotator-contract'
 import type { DocumentSeat, PageImage, PagedAnnotationInput } from '../document-seat'
 import type { Autosave, AutosaveDeps } from '../autosave'
 import { annotatePdf, type PageAnnotateInput } from './annotate'
+import { clampPage, keyedPage, keyedTurn, parsePageInput } from './paging'
 import { openPdf, type PdfDocument } from './runtime'
 
 /**
@@ -30,6 +31,7 @@ export interface PdfBodyInjected {
   readonly AnnotatorBody: ComponentType<AnnotatorBodyProps>
   /** The entry half's document work: read, save and deliver the whole sidecar. */
   readonly seat: DocumentSeat
+//
   /**
    * The entry half's debounced background writer.
    *
@@ -71,11 +73,50 @@ export type PdfBodyProps = PdfBodyInjected & {
   readonly t: Translate
 }
 
-/** Gap kept around a page inside the pane, matching the annotator's own inset. */
+/**
+ * Gap kept around a page inside the pane.
+ *
+ * The same number `AnnotatorBody` subtracts from its own stage width to decide how
+ * wide the page is drawn: a raster made for a box of a different width is a raster
+ * resampled to fit, and that is softness the reader sees on every glyph.
+ */
 const PANE_INSET = 24
 
-/** Highest device-pixel ratio one page bitmap is rendered at. */
+/**
+ * Highest device-pixel ratio one page bitmap is rendered at.
+ *
+ * Three rather than two: a Retina display reports 2, but a *scaled* Retina mode (a
+ * "more space" resolution, a zoomed window) reports 3, and capping at 2 there leaves
+ * the page short of the pixels the screen actually has.
+ */
 const MAX_DENSITY = 2
+
+/**
+ * Bitmap pixels a page gets per screen pixel.
+ *
+ * A page is laid out in its own units and then scaled to the pane, so the browser
+ * resamples its bitmap whatever it wants. Measured in Chromium at a Retina ratio,
+ * how sharp the result reads depends on how many source pixels each screen pixel
+ * gets, and a bitmap that misses the screen's count by a few percent is the *worst*
+ * case, not the best — the resampler has no whole-pixel neighbours to average, so
+ * every glyph edge is blended with the background beside it.
+ *
+ * Measured, as the 99th percentile of the lateral gradient across a text line:
+ * 1.04× gives 129, 1.25× gives 157, 1.5× gives 168, 2× gives 178 (3× gives 181).
+ * The plateau is reached early: 1.5× already reads as sharp and costs a third of
+ * the memory 2× does, so this is the spare kept.
+ */
+const SUPERSAMPLE = 1.5
+
+/**
+ * The largest factor "fit width" draws a page at.
+ *
+ * The same ceiling `AnnotatorBody` applies when it decides how big to draw a figure;
+ * it is repeated here because a lazily loaded chunk may not import the client bundle
+ * at run time. Past this factor a wider pane buys no more drawn pixels, so the two
+ * numbers have to agree or this one pays for pixels the page never occupies.
+ */
+const FIT_CEILING = 1.5
 
 /**
  * Narrowest width a page is rendered for; below it the pane is still settling.
@@ -93,6 +134,63 @@ const MIN_PANE_WIDTH = 120
  * softness rather than another round of work.
  */
 const RENDER_WIDTH_STEP = 64
+
+/**
+ * Whether a keystroke landed in a field the reader is typing into.
+ *
+ * An editable region is recognised by its attribute rather than by the
+ * `isContentEditable` property, which a rendered frame's own document does not
+ * answer for. Any element inside one counts, so a caret nested in a paragraph is
+ * as safe as the region itself.
+ * @param target - the event's target.
+ * @returns whether the keystroke belongs to the field.
+ */
+function typingIn(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.closest('[contenteditable]:not([contenteditable="false"])') !== null) return true
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+}
+
+/**
+ * The document's own icons.
+ *
+ * Drawn here rather than imported from the annotator body: this is the lazy chunk,
+ * and the body reaches it as a prop precisely because the two halves cannot import
+ * each other. The paths follow the body's own icon grid so a strip of these and a
+ * strip of those read as one set.
+ */
+function ChevronLeftIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 14.5 5.5 L 8 12 L 14.5 18.5" />
+    </svg>
+  )
+}
+
+function ChevronRightIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 9.5 5.5 L 16 12 L 9.5 18.5" />
+    </svg>
+  )
+}
+
+function SendIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 3 12 L 21 3.9 L 15.9 21 L 12 14.1 Z" />
+      <path d="M 12 14.1 L 21 3.9" />
+    </svg>
+  )
+}
+
+function ChatIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M 3.75 9.75 a 3 3 0 0 1 3 -3 h 10.5 a 3 3 0 0 1 3 3 v 4.5 a 3 3 0 0 1 -3 3 h -6 l -4.5 3.3 v -3.3 a 3 3 0 0 1 -3 -3 z" />
+    </svg>
+  )
+}
 
 /** The document's own facts, as the Host reported them. */
 interface FigureFacts {
@@ -183,6 +281,17 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   const { createAutosave, annotationSignature, autosaveDelayMs } = props
   const bytes = props.content?.kind === 'bytes' ? props.content.data : undefined
   const observerRef = useRef<ResizeObserver | null>(null)
+  /** The panel itself, so the wheel can be followed where it lands. */
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The node the page bodies draw their floating chrome into.
+   *
+   * The pane, not the page: a bar mounted inside a page scrolls with that page, and
+   * and it must not move with a page: a bar mounted inside one would scroll away.
+   * as state because it has to be a node React has committed before a body can
+   * portal into it.
+   */
+  const [chromeHost, setChromeHost] = useState<HTMLDivElement | null>(null)
   const [pdf, setPdf] = useState<PdfDocument | null>(null)
   /** The page the reader asked for: the number in the toolbar follows this one. */
   const [requested, setRequested] = useState(1)
@@ -197,6 +306,36 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   /**
+   * How many times the document has been cleared.
+   *
+   * A page body seeds its marks once, when it mounts, so clearing the document has
+   * to remount the page it is still showing — otherwise the body keeps listing the
+   * marks that were just delivered and deleted.
+   */
+  const [generation, setGeneration] = useState(0)
+  /**
+   * The card open under the bar, and the mark it was opened about.
+   *
+   * Both live here rather than in a page body: paging away and back mounts a fresh
+   * body, and state that travelled with it would shut the list and put the comment
+   * pill away at every page boundary. One document, one list.
+   */
+  const [openPanel, setOpenPanel] = useState<'style' | 'goal' | 'list' | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  /**
+   * How much the whole document is magnified.
+   *
+   * The document is one picture in several sheets, so the factor belongs here and
+   * not in a page: a page body that kept its own would drop the magnification the
+   * moment the reader turned to the next page, and every page would have to be
+   * zoomed again. Held at this level, a pinch on page 3 is a pinch on the document.
+   */
+  const [zoom, setZoom] = useState<number | 'fit'>('fit')
+  /** What the page box holds while the reader is typing in it. */
+  const [pageText, setPageText] = useState('1')
+  /** Whether the page number is a box right now rather than a label. */
+  const [editingPage, setEditingPage] = useState(false)
+  /**
    * How large the numbers are drawn across the whole document.
    *
    * One style for every page, because the numbers have to read as one set: a page
@@ -206,8 +345,22 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   const [busy, setBusy] = useState<'sending' | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null)
   const pageCount = pdf === null ? 0 : pdf.pageCount
-  /** The pane width a raster is asked for: one step, whatever the drag did inside it. */
-  const renderWidth = Math.ceil(paneWidth / RENDER_WIDTH_STEP) * RENDER_WIDTH_STEP
+  /**
+   * The factor the document is drawn at; `fit` means "as wide as the pane".
+   *
+   * It is the document's, not a page's: the pages of one file are one picture in
+   * several sheets, so magnifying one and not the next turns the page under the
+   * reader at the size they left behind.
+   */
+  const zoomFactor = zoom === 'fit' ? 1 : zoom
+  /**
+   * The width a raster is asked for: the pane's, stepped, times the magnification.
+   *
+   * The factor goes in here rather than into the slot, because a slot widened around
+   * an unzoomed bitmap is a blurred page: the pixels have to be there for the size
+   * the reader asked for.
+   */
+  const renderWidth = Math.ceil((paneWidth * zoomFactor) / RENDER_WIDTH_STEP) * RENDER_WIDTH_STEP
 
   /**
    * The seats this document acts through.
@@ -286,6 +439,8 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
    * unmount, which is where the observer goes.
    */
   const attachHost = useCallback((element: HTMLDivElement | null): void => {
+    hostRef.current = element
+    setChromeHost(element)
     observerRef.current?.disconnect()
     observerRef.current = null
     if (element === null) return
@@ -294,6 +449,66 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     observer.observe(element)
     observerRef.current = observer
   }, [])
+
+  /** The only place a page number is decided: requests are clamped, not trusted. */
+  const goTo = useCallback((next: number): void => {
+    // A document that reports no pages still shows page one, so the clamp carries
+    // its own floor. Asking for the page already on screen returns the same number,
+    // which React treats as no change at all.
+    setRequested(() => clampPage(next, pageCount))
+  }, [pageCount])
+
+  /** Take the page number the box holds, if it holds one. */
+  const commitPage = useCallback((): void => {
+    const next = parsePageInput(pageText, pageCount)
+    if (next === null) {
+      setPageText(String(requested))
+      return
+    }
+    goTo(next)
+    setPageText(String(next))
+  }, [goTo, pageCount, pageText, requested])
+
+  /** Enter commits the box; Escape puts the box back to the page on screen. */
+  const submitPage = useCallback((event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      commitPage()
+      setEditingPage(false)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setPageText(String(requested))
+      setEditingPage(false)
+    }
+  }, [commitPage, requested])
+
+  /** The page number the toolbar states: the requested one, clamped to the document. */
+  const stated = clampPage(requested, pageCount)
+
+  /**
+   * Turn to whatever page a keystroke asks for.
+   *
+   * The keys are read here rather than on the page body because paging belongs to
+   * the document: the body annotates one page and has no idea there are others, and
+   * a keystroke it swallowed would never reach the document at all.
+   */
+  useEffect(() => {
+    if (pdf === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // A field the reader is typing into belongs to them, not to paging: an arrow
+      // there moves the caret, and a page that turned under it would be a document
+      // that scrolled away from the sentence being written.
+      if (typingIn(event.target)) return
+      const turn = keyedTurn(event.key, event)
+      if (turn === null) return
+      event.preventDefault()
+      goTo(keyedPage(turn, stated, pageCount))
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [goTo, pageCount, pdf, stated])
 
   // --- the page on screen ---------------------------------------------------
 
@@ -315,13 +530,27 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     return () => { live = false }
   }, [pdf, requested, renderWidth])
 
-  /** The only place a page number is decided: requests are clamped, not trusted. */
-  const goTo = useCallback((next: number): void => {
-    // A document that reports no pages still shows page one, so the clamp carries
-    // its own floor. Asking for the page already on screen returns the same number,
-    // which React treats as no change at all.
-    setRequested(() => Math.min(Math.max(next, 1), Math.max(pageCount, 1)))
-  }, [pageCount])
+  /**
+   * Drop one mark from wherever in the document it was drawn.
+   *
+   * The list shows the whole file, so its delete button can name a mark on a page
+   * this surface is not holding: the owner is the only one that knows every page.
+   * @param id - the mark to remove.
+   */
+  const removeAnyMark = useCallback((id: string): void => {
+    setMarks((current) => {
+      let changed = false
+      const next = new Map(current)
+      for (const [page, pageMarks] of current) {
+        const kept = pageMarks.filter(mark => mark.id !== id)
+        if (kept.length !== pageMarks.length) {
+          changed = true
+          next.set(page, kept)
+        }
+      }
+      return changed ? next : current
+    })
+  }, [])
 
   /** Keep one page's unsaved edits while another page is on screen. */
   const remember = useCallback((edited: number, draft: SurfaceDraft): void => {
@@ -460,6 +689,10 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     setSummary('')
     setCreatedAt(null)
     setStale(false)
+    // A cleared document has no marks to draw, but the page on screen is still
+    // mounted with the list it seeded from the old ones. The new generation is what
+    // remounts it against the empty draft.
+    setGeneration(current => current + 1)
   }, [address])
 
   /**
@@ -509,64 +742,150 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     }
   }, [address, autosave, bytes, collect, discard, marks, pdf, signature])
 
+  /**
+   * Show a mark the reader pressed in the list, wherever in the document it is.
+   *
+   * The list is the document's, so a row can name a mark on a page that is not on
+   * screen. Turning to it is this component's job because the page number is its
+   * state — and the selection is set at the same moment, so the page that arrives
+   * already has the mark selected and its comment pill beside it. Selecting first
+   * and turning second is deliberate: the turn remounts the page body, and a mark
+   * that became selected after the remount would show the pill only on a second
+   * render.
+   */
+  const revealMark = useCallback((mark: AnnotationMark): void => {
+    setSelectedId(mark.id)
+    if (mark.page !== undefined) goTo(mark.page)
+  }, [goTo])
+
   // --- render ---------------------------------------------------------------
 
-  const total = allMarks(marks).length
   // The list numbers marks across the document, so a page's pins continue the
   // counting rather than restarting it: "③" on page 2 has to be the third sentence.
   const numbering = new Map(allMarks(marks).map((mark, index) => [mark.id, index + 1]))
+
+  /**
+   * What every page body is told, assembled once.
+   *
+   * One pane shows one page at a time, so there is a single body to hand these to —
+   * but it is assembled here rather than inline so the props a page needs are one
+   * list, not a list that has to be kept in step with a second mount site.
+   */
+  const pageProps = {
+    resourceAddress: props.resourceAddress,
+    scrollportRef: props.scrollportRef,
+    t,
+    content: undefined,
+    draft: { marks: marks.get(stated) ?? [] },
+    onDraftChange: reportDraft,
+    numbering,
+    summary,
+    onSummaryChange: setSummary,
+    mode,
+    onModeChange: setMode,
+    openPanel,
+    onOpenPanelChange: setOpenPanel,
+    selectedId,
+    onSelectedIdChange: setSelectedId,
+    onRevealMark: revealMark,
+  } as const
+
+  /**
+   * The paging controls, for the page body's bar to place.
+   *
+   * Drawn here because the page number is this document's state, and placed there
+   * because the bar belongs to the page body: one card holds every control the pane
+   * offers, and none of them move when the page scrolls.
+   */
+  const pagingSlot = (
+    <>
+        <div className="da-docbar-group">
+          <button type="button" className="da-dock-btn" aria-label={t('previousPage')}
+            title={t('previousPage')} disabled={stated <= 1} onClick={() => { goTo(stated - 1) }}>
+            <ChevronLeftIcon />
+          </button>
+          {editingPage
+            ? (
+                <input className="da-page-input" autoFocus inputMode="numeric"
+                  aria-label={t('pageJump')} value={pageText}
+                  onChange={event => { setPageText(event.target.value) }}
+                  onBlur={() => { commitPage(); setEditingPage(false) }}
+                  onKeyDown={submitPage} />
+              )
+            : (
+                <button type="button" className="da-page da-page-btn" title={t('pageJump')}
+                  aria-label={t('pageJump')}
+                  onClick={() => { setPageText(String(stated)); setEditingPage(true) }}>
+                  {pdf === null ? `${stated}` : `${stated} / ${pageCount}`}
+                </button>
+              )}
+          <button type="button" className="da-dock-btn" aria-label={t('nextPage')}
+            title={t('nextPage')} disabled={pdf !== null && stated >= pageCount}
+            onClick={() => { goTo(stated + 1) }}>
+            <ChevronRightIcon />
+          </button>
+        </div>
+    </>
+  )
+
   return (
     <div className="da-pdf" ref={attachHost}>
-      <div className="da-toolbar">
-        {/* Navigation belongs to the document: one page at a time, and the page
-            number is what every surface's marks are keyed by. The number follows
-            the reader's request while the page itself waits for its raster, and
-            the document's own count appears only once it has been opened — an
-            unopened document has no count to state. */}
-        <button type="button" className="da-btn" disabled={requested <= 1}
-          onClick={() => { goTo(requested - 1) }}>{t('previousPage')}</button>
-        <span className="da-page">{pdf === null ? `${requested}` : `${requested} / ${pageCount}`}</span>
-        <button type="button" className="da-btn" disabled={requested >= pageCount}
-          onClick={() => { goTo(requested + 1) }}>{t('nextPage')}</button>
-        <span className="da-spacer" />
-        {pdf === null ? null : <span className="da-page">{t('documentScope', { pages: pageCount, marks: total })}</span>}
-      </div>
+      {/* The paging, drawn here and placed by the page body's own bar: the page
+          number is this document's to keep, and the bar is the body's to position.
+          The strip this used to be is gone — a second dark card above the page was a
+          second visual language for the same row of controls. */}
+      {/* `pagingSlot` travels to the page body below, which places it on its bar. Until
+          a page exists there is no body to carry it, so the pane stands one in: the
+          page count and the hand-off are answerable before the first raster, and a
+          reader who cannot draw yet can still be told why. */}
+      {shown !== null ? null : (
+        <div className="da-bar" data-static="true" role="toolbar" aria-label={t('pagerLabel')}>
+          {pagingSlot}
+          <span className="da-spacer" />
+          <span className="da-dock-sep" aria-hidden />
+          <button type="button" className="da-dock-btn" disabled={busy !== null}
+            aria-label={t('sendToAgent')} title={t('sendToAgent')}
+            onClick={() => { void run('agent') }}>
+            <SendIcon />
+          </button>
+          <button type="button" className="da-dock-btn" disabled={busy !== null}
+            aria-label={t('sendToComposer')} title={t('sendToComposer')}
+            onClick={() => { void run('composer') }}>
+            <ChatIcon />
+          </button>
+        </div>
+      )}
       {stale ? <div className="da-status" data-tone="error">{t('stale')}</div> : null}
       {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
       {error !== null ? (
         <p className="da-hint" role="alert">{`${t('pdfOpenFailed')}${error}`}</p>
       ) : shown === null ? (
         // The wait for the first raster fills the pane body, so the frame around
-        // it — the toolbar, the page number, the save buttons — is already there
-        // and does not move when the page arrives.
+        // it — the page number, the hand-off — is already there and does not move
+        // when the page arrives.
         <div className="da-placeholder"><p className="da-hint">{t('pdfRendering')}</p></div>
       ) : (
         <AnnotatorBody
           // Each page is its own surface with its own undo history, so switching
-          // pages mounts a fresh body seeded from that page's marks.
-          key={shown.page}
-          resourceAddress={props.resourceAddress}
-          scrollportRef={props.scrollportRef}
-          t={t}
-          content={undefined}
+          // pages mounts a fresh body seeded from that page's marks. The generation
+          // is part of the key so a document that cleared its marks remounts the
+          // page it is still showing — otherwise the body would keep listing them.
+          key={`${generation}:${shown.page}`}
+          {...pageProps}
           page={shown.bitmap}
           draft={{ marks: marks.get(shown.page) ?? [] }}
-          onDraftChange={reportDraft}
-          numbering={numbering}
-          summary={summary}
-          onSummaryChange={setSummary}
-          mode={mode}
-          onModeChange={setMode}
+          chromeHost={chromeHost}
+          pagingSlot={pagingSlot}
+          onSend={run}
+          // The factor is handed down rather than kept by the body: paging away and
+          // back has to come back to the same size, and a body that owned it would
+          // start every page at fit.
+          zoom={zoom}
+          onZoom={setZoom}
+          documentMarks={allMarks(marks)}
+          onDocumentRemove={removeAnyMark}
         />
       )}
-      {/* The hand-off sits at the bottom right of the panel, past the list it
-          describes, so it is not reachable by a stray press on the page controls. */}
-      <div className="da-send">
-        <button type="button" className="da-btn" disabled={busy !== null}
-          onClick={() => { void run('agent') }}>{t('sendToAgent')}</button>
-        <button type="button" className="da-btn" disabled={busy !== null}
-          onClick={() => { void run('composer') }}>{t('sendToComposer')}</button>
-      </div>
     </div>
   )
 }
@@ -580,11 +899,13 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
  */
 async function renderPage(pdf: PdfDocument, page: number, paneWidth: number): Promise<PageBitmap> {
   const size = await pdf.size(page)
-  // Render at the scale the pane will show, times the display density, so
-  // fit width is crisp without asking the parser for pixels CSS discards.
-  const fit = Math.max(0.1, (paneWidth - PANE_INSET) / size.width)
-  const density = Math.min(MAX_DENSITY, globalThis.devicePixelRatio || 1)
-  const rendered = await pdf.render(page, fit * density)
+  // How wide the page ends up drawn: the pane, minus its inset — but no wider than
+  // the fit ceiling allows, because a page the ceiling stopped growing is a page
+  // that would otherwise be rendered at a size nobody ever sees.
+  const room = Math.max(1, paneWidth - PANE_INSET)
+  const shown = Math.min(room, size.width * FIT_CEILING)
+  const density = Math.min(MAX_DENSITY, Math.max(1, globalThis.devicePixelRatio || 1))
+  const rendered = await pdf.render(page, (shown * density * SUPERSAMPLE) / size.width)
   return { dataUrl: rendered.dataUrl, width: rendered.width, height: rendered.height }
 }
 

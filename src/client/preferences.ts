@@ -44,6 +44,13 @@ export interface DrawingPreferences {
   readonly palette?: PaletteSpot
   /** Where the reader last parked the records bar, when they moved it. */
   readonly bar?: PaletteSpot
+  /**
+   * How a paged document is read: one page filling the pane, or pages stacked.
+   *
+   * Remembered here rather than with the document because it describes the reader,
+   * not the file: the same deck is scrolled through on a laptop and stepped through
+   * when checking one slide, and neither should have to re-choose next time.
+   */
 }
 
 /** A colour this plugin would have written: six hex digits. */

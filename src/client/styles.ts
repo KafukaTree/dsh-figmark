@@ -40,8 +40,14 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 /* Every small picture in the panel is one stroke set, declared once: without this
    an svg with no fill of its own falls back to a solid black shape, which is what
    turned the dock and the cards into blobs of ink. */
+/* Every icon is drawn on one 24-unit grid, and every one of them is asked to
+   *render* at the same thickness — 1.2px — so the row reads as one set. On a single
+   grid that still means one stroke-width per drawn size, because the number is in
+   the icon's own units: 1.2 x 24 / size. The sizes differ only because the buttons
+   holding them do; the weight does not. */
 .da-ico{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;
-  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.da-tool-icon svg{fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
 
 /* --- the floating tool palette ------------------------------------------- */
 /* The tools float over the figure in a dark rounded pill so they can be parked
@@ -75,7 +81,7 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-palette .da-tool:hover{background:rgba(255,255,255,.14)}
 .da-palette .da-tool[aria-pressed="true"]{background:#176df2;color:#fff}
 .da-palette .da-tool .da-tool-icon{height:auto}
-.da-palette .da-tool .da-tool-icon svg{width:16px;height:16px;stroke-width:1.9}
+.da-palette .da-tool .da-tool-icon svg{width:17px;height:17px;stroke-width:1.7}
 
 /* --- the size rail ------------------------------------------------------- */
 /* A vertical rail along the left edge of the figure: how heavy the pen is, and how
@@ -143,6 +149,9 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 /* Parked: placed from the top by the reader's drag, so the bottom anchor that keeps
    it centred while untouched must not also apply — with both set it stretches. */
 .da-bar[data-parked="true"]{bottom:auto}
+/* A bar standing in for the page body's own: it is placed by the pane rather than
+   dragged, because there is no page yet to park it over. */
+.da-bar[data-static="true"]{bottom:8px}
 .da-bar[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
 .da-bar[data-dragging="true"] *{cursor:move !important}
 /* The bar's buttons are white glyphs on the dark strip. The one filled control is
@@ -151,8 +160,6 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-bar .da-dock-btn:hover{background:rgba(255,255,255,.14)}
 .da-bar .da-dock-btn[aria-pressed="true"]{background:#176df2;color:#fff}
 .da-bar .da-dock-sep{background:rgba(255,255,255,.22)}
-.da-bar .da-dock-btn-primary{background:#176df2;color:#fff;border-color:#176df2}
-.da-bar .da-dock-btn-primary:hover{background:#176df2;opacity:.92}
 .da-bar .da-dock-dot{background:#4c8dff}
 .da-bar .da-dock-count{background:#176df2;color:#fff}
 .da-bar .da-style{width:30px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:#fff}
@@ -171,7 +178,7 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.1))}
 .da-btn:disabled{opacity:.4;cursor:default}
 .da-btn:disabled:hover{background:var(--dsw-alias-bg-base,transparent)}
-.da-btn svg{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.da-btn svg{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 /* A quiet button has no frame at all until the pointer is on it: it is an action,
    not a thing, and the row it sits in is already framed. */
 .da-btn-quiet{border-color:transparent;background:transparent;height:24px;padding:0 7px;font-size:11px;color:var(--dsw-alias-label-secondary,inherit)}
@@ -181,13 +188,13 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
    picture is what a reader who has used the tool once recognizes without reading. */
 .da-tool{flex-direction:column;justify-content:center;gap:1px;width:40px;height:34px;padding:0;border-color:transparent;background:transparent;font-size:9px;border-radius:9px}
 .da-tool .da-tool-icon{display:flex;align-items:center;justify-content:center;height:14px}
-.da-tool .da-tool-icon svg{width:13px;height:13px;stroke-width:1.8}
+.da-tool .da-tool-icon svg{width:14px;height:14px;stroke-width:2.05}
 .da-tool .da-tool-label{font-size:10px;line-height:1;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit)}
 /* The armed tool is the one state in this row the reader must never hunt for: it is
    the only tile with a fill, and the only label in the brand colour. */
 .da-tool[aria-pressed="true"]{border-color:transparent;background:var(--da-accent-soft,rgba(23,109,242,.1));color:var(--da-accent,currentColor)}
 .da-tool[aria-pressed="true"] .da-tool-label{color:var(--da-accent,currentColor);font-weight:600}
-.da-tool[aria-pressed="true"] svg{stroke-width:2.1}
+.da-tool[aria-pressed="true"] svg{stroke-width:2.4}
 .da-tool:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .da-btn-icon{width:30px;padding:0}
 
@@ -250,13 +257,73 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-page{font-size:12px;min-width:44px;text-align:center;color:var(--dsw-alias-label-secondary,inherit)}
 /* The document's toolbar sits above the page body, so the pane is one column of
    definite height and the body takes what is left of it. */
-.da-pdf{display:flex;flex-direction:column;height:100%;min-height:0}
+.da-pdf{position:relative;display:flex;flex-direction:column;height:100%;min-height:0}
 .da-pdf>.da-root{flex:1 1 auto;height:auto;min-height:0}
+/* A document's toolbar is a row of decisions above the page: paging on the left,
+   what the document holds and the hand-off on the right. It is fixed height and
+   never scrolls with the page, so the controls keep where the hand left them. */
+.da-toolbar{display:flex;align-items:center;gap:6px;flex:0 0 auto;
+  padding:6px 10px;border-bottom:0.5px solid var(--dsw-alias-border-l3,currentColor)}
+
+/* The PDF's own strip. It is the same object as the figure's bottom bar — a dark
+   rounded card floating over the page — because a reader who has marked a figure
+   and then opens a document should not have to learn a second set of controls in
+   a second visual language. Everything the page is read with lives on it: where you
+   are, how you move, how it flows, and the way out. */
+/* Paging is one decision, so its three controls sit closer together than the bar's
+   own gap and read as a single reader rather than three buttons. It lives on the
+   page body's bar, which the pane owns — not in a strip of its own. */
+.da-docbar-group{display:flex;align-items:center;gap:1px;flex:0 0 auto}
+/* The page number is the one control the reader reads rather than presses, so it
+   gets a fixed slot: a number that shifts the buttons as it goes 9 to 100 is a
+   toolbar that moves under the pointer. Not a tinted pill — the inverted strip is
+   already the ground, and a second ground inside it reads as a button. */
+/* The page number reads as a caption on the dark card, not as a button: no ground of
+   its own, no frame, just the digits. It is still pressable — pressing is how the
+   reader jumps — but a chip inside a chip is two grounds for one control, and the
+   white box read as a hole punched in the bar. */
+.da-bar button.da-page{display:inline-flex;align-items:center;justify-content:center;
+  min-width:50px;height:28px;padding:0 4px;border:0;border-radius:8px;
+  appearance:none;-webkit-appearance:none;
+  background:transparent;box-shadow:none;color:#fff;cursor:pointer;
+  font:inherit;font-size:12.5px;font-variant-numeric:tabular-nums}
+.da-bar button.da-page:hover{background:rgba(255,255,255,.14)}
+.da-bar button.da-page:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
+
+.da-bar .da-dock-sep{background:rgba(255,255,255,.22)}
+.da-bar .da-ico{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+/* What the document holds, said quietly: the strip's subject is the page, and the
+   count is a caption on it rather than another control. */
+.da-bar .da-docbar-count{flex:0 0 auto;margin-left:6px;font-size:11.5px;
+  color:rgba(255,255,255,.62);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* The hand-off's note, only shown when there is nothing to hand over. */
+.da-bar .da-docbar-note{flex:0 0 auto;margin-right:2px;font-size:11.5px;color:rgba(255,255,255,.5)}
+/* The page number is the one control the reader reads rather than presses, so it
+   gets a fixed slot: a number that shifts the buttons as it goes 9 → 10 → 100 is a
+   toolbar that moves under the pointer. */
+.da-toolbar .da-page{min-width:52px;padding:0 2px;font-variant-numeric:tabular-nums}
+/* The hand-off sits under the page it describes, right-aligned and on its own
+   ground, so it is not reachable by a stray press on the page controls. */
+.da-send{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:0 0 auto;
+  padding:6px 10px;border-top:0.5px solid var(--dsw-alias-border-l3,currentColor)}
+/* The page a reader types into, to jump. Sized to the widest page count a document
+   can plausibly have, so the slot does not resize as the number grows. */
+.da-page-input{width:52px;height:28px;padding:0 6px;border:0.5px solid rgba(255,255,255,.35);
+  border-radius:8px;background:rgba(255,255,255,.12);color:#fff;
+  font:inherit;font-size:12.5px;line-height:1;text-align:center;font-variant-numeric:tabular-nums}
+.da-page-input:focus{outline:none;border-color:var(--da-accent,#176df2);background:rgba(255,255,255,.18)}
+/* The page number's own denominator: smaller and quieter than the number it follows. */
+.da-page-total{font-size:12px;color:var(--dsw-alias-label-tertiary,inherit);white-space:nowrap}
 /* The page slot before the first raster. It takes the column the body's stage
    takes, so the frame around it — the toolbar above all — is in place from the
    first paint and does not move when the page arrives. */
 .da-placeholder{flex:1 1 auto;min-height:0;background:var(--dsw-alias-bg-document-preview,transparent)}
-
+/* The page-number box and its denominator, held together so the box cannot drift
+   away from the count it is a fraction of. */
+.da-page-field{display:flex;align-items:center;gap:3px}
+/* The hand-off's own note, quiet enough to read as a state rather than a control. */
+.da-send-note{font-size:12px;color:var(--dsw-alias-label-tertiary,inherit);margin-right:2px}
 /* --- the two cards under the figure ------------------------------------- */
 /* --- the dock ------------------------------------------------------------ */
 /* The dock's buttons are quiet circles in the bar: they are the actions that are
@@ -270,8 +337,6 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-dock-btn:disabled{opacity:.4;cursor:default}
 .da-dock-btn:disabled:hover{background:transparent}
 /* The one filled control in the panel is the way out of it. */
-.da-dock-btn-primary{border-color:var(--da-accent,#176df2);background:var(--da-accent,#176df2);color:#fff;box-shadow:0 2px 8px rgba(23,109,242,.32)}
-.da-dock-btn-primary:hover{opacity:.92;background:var(--da-accent,#176df2)}
 /* A dot, not a count: "there is a goal written" is all the bar needs to say about
    a field it is not a list of. */
 .da-dock-dot{position:absolute;top:3px;right:4px;width:5px;height:5px;border-radius:50%;
@@ -358,14 +423,23 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
    sentence as the thing you press, and the sentence's own shape and anchor under it
    in smaller type. A borderless run of text would read as one paragraph of marks. */
 .da-marks{display:flex;flex-direction:column;gap:3px;min-height:0}
-.da-mark{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:8px;
+.da-mark{display:flex;align-items:center;gap:7px;padding:5px 4px;border-radius:7px;
   border:0.5px solid transparent;min-width:0}
 .da-mark:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .da-mark[data-selected="true"]{border-color:var(--da-accent,#176df2);
-  background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.08))}
-.da-mark-index{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
-  width:20px;height:20px;border-radius:6px;color:#fff;font-size:11px;font-weight:700;
-  font-variant-numeric:tabular-nums}
+  background:var(--dsw-alias-interactive-bg-hover,rgba(23,109,242,.06))}
+/* Two light strokes in the mark's colour, not a block of fill.
+   A filled chip on every row is a wall of colour beside a figure that is mostly
+   paper; the list should read as a list. The number keeps a fixed, right-aligned
+   box so a column of rows lines up whether it holds 1 or 12, and the glyph beside
+   it is drawn at the same 1.5px stroke the tools wear. */
+.da-mark-n{flex:0 0 auto;width:14px;text-align:right;font-size:11px;font-weight:600;
+  font-variant-numeric:tabular-nums;line-height:1.35;
+  color:var(--dsw-alias-label-secondary,currentColor)}
+.da-mark-glyph{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:14px;height:14px}
+.da-mark-glyph svg{width:12px;height:12px;fill:none;stroke:currentColor;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .da-mark-text{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;
   padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .da-mark-title{display:block;font-size:12px;line-height:1.35;overflow:hidden;
@@ -373,9 +447,25 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-mark-meta{display:block;font-size:10px;line-height:1.35;
   color:var(--dsw-alias-label-tertiary,currentColor);overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.da-mark-del{flex:0 0 auto;padding:2px 6px;border:0;border-radius:6px;background:transparent;
-  color:var(--dsw-alias-label-tertiary,currentColor);font:inherit;font-size:10px;cursor:pointer}
+/* The page number sits at the row's end rather than under its sentence: it is not
+   part of what the mark says, it is where the mark is, and a list puts that where a
+   table of contents puts it.
+   Its size is the number's, not a step below it. Two sizes in one row — 11px on the
+   left, 10px on the right — read as two different kinds of fact, and the page was
+   the one that looked like it had been shrunk to fit. Weight is what demotes a fact
+   here, not size: 500 against the number's 600, and the tertiary colour. */
+.da-mark-page{flex:0 0 auto;font-size:10px;font-weight:400;line-height:1.35;
+  white-space:nowrap;color:var(--dsw-alias-label-tertiary,currentColor);
+  font-variant-numeric:tabular-nums}
+/* A glyph rather than the word 删除: the row is a card, and a word in the corner of
+   a card reads as another thing to press rather than as the way to get rid of it. */
+.da-mark-del{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-tertiary,currentColor);font:inherit;font-size:11px;line-height:1;
+  cursor:pointer;opacity:0}
+.da-mark:hover .da-mark-del,.da-mark[data-selected="true"] .da-mark-del{opacity:1}
 .da-mark-del:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14));color:inherit}
+.da-mark-del:focus-visible{opacity:1}
 
 /* The empty list is a picture and two lines: a card of grey text reads as broken,
    and "nothing yet" is a state, not an error. */
@@ -383,6 +473,16 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-empty-ico{width:46px;height:46px;fill:none;stroke:var(--dsw-alias-border-l4,currentColor);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;opacity:.85}
 .da-empty-title{font-size:12px;font-weight:650;color:var(--dsw-alias-label-secondary,inherit)}
 .da-empty-hint{font-size:11px;line-height:1.6;color:var(--dsw-alias-label-tertiary,inherit);max-width:190px}
+/* The figure's context menu. Laid out at a fixed width because the placement
+   maths needs one number; rows are the height that maths assumes. */
+.da-menu{position:fixed;z-index:40;display:flex;flex-direction:column;gap:1px;width:208px;
+  padding:4px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);
+  box-shadow:0 8px 24px rgba(15,17,21,.16),0 0 0 1px var(--dsw-alias-border-l2,rgba(0,0,0,.1))}
+.da-menu-item{display:flex;align-items:center;height:27px;padding:0 8px;border:0;border-radius:6px;
+  background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12.5px;
+  text-align:left;cursor:pointer;white-space:nowrap}
+.da-menu-item:hover,.da-menu-item:focus-visible{background:var(--da-accent-soft,rgba(23,109,242,.14));outline:none}
+
 .da-status{flex:0 0 auto;padding:6px 10px;font-size:12px;color:var(--dsw-alias-label-secondary,inherit)}
 .da-status[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
 .da-status[data-tone="ok"]{color:var(--dsw-alias-state-success-primary,currentColor)}

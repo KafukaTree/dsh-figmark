@@ -183,3 +183,5 @@ describe('the browser storage the defaults come from', () => {
     expect(cleared).toEqual([`${PREFERENCES_KEY}=${JSON.stringify({ color: '#e03131' })}`])
   })
 })
+
+

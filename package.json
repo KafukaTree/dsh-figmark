@@ -1,8 +1,8 @@
 {
   "name": "dsh-figmark",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "private": false,
-  "description": "DSH \u63d2\u4ef6\uff1a\u5728\u53f3\u4fa7\u680f\u9884\u89c8\u91cc\u5bf9\u79d1\u7814\u914d\u56fe\u3001SVG\u3001PDF\u3001HTML \u76f4\u63a5\u5708\u753b\u6279\u6ce8\uff0c\u6807\u6ce8\u5199\u8fdb\u4fa7\u8f66\u6587\u4ef6\u5e76\u53ef\u4e00\u952e\u4ea4\u7ed9\u667a\u80fd\u4f53\u6539\u56fe\u6e90",
+  "description": "DSH 插件：在右侧栏预览里对科研配图、SVG、PDF、HTML 直接圈画批注，标注写进侧车文件并可一键交给智能体改图源",
   "license": "MIT",
   "icon": "./icon.svg",
   "keywords": [

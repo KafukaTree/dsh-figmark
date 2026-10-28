@@ -53,6 +53,15 @@ interface FigureTarget {
   readonly path: string
   /** Media type implied by the suffix. */
   readonly mediaType: string
+  /**
+   * Absolute directory of the Session that owns this figure, or null when the
+   * address is absolute and names no Session.
+   *
+   * The browser needs it for the one thing it cannot work out alone: a path
+   * relative to the reader's workspace, which is the form worth copying because
+   * it survives the project being moved.
+   */
+  readonly workspace: string | null
 }
 
 /**
@@ -67,12 +76,12 @@ async function resolveTarget(
 ): Promise<{ ok: true; target: FigureTarget } | { ok: false; message: string }> {
   const parsed = parseFileAddress(address)
   if (parsed === undefined) return { ok: false, message: `not a file address: ${address}` }
+  const sessionId = parsed.sessionId
+  const cwd = sessionId === undefined ? undefined : await deps.sessionCwd(sessionId)
   let absolute: string
   if (isAbsolute(parsed.path)) {
     absolute = parsed.path
   } else {
-    const sessionId = parsed.sessionId
-    const cwd = sessionId === undefined ? undefined : await deps.sessionCwd(sessionId)
     if (cwd === undefined) {
       return { ok: false, message: `cannot resolve this Session's directory for a relative path: ${address}` }
     }
@@ -88,7 +97,7 @@ async function resolveTarget(
   } catch {
     return { ok: false, message: `no such figure: ${absolute}` }
   }
-  return { ok: true, target: { address, path: absolute, mediaType } }
+  return { ok: true, target: { address, path: absolute, mediaType, workspace: cwd ?? null } }
 }
 
 /**

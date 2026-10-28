@@ -451,3 +451,19 @@ describe('annotation route edge cases', () => {
     expect(answer.body['error']).toBe('method  is not allowed')
   })
 })
+
+describe('naming the workspace a figure lives in', () => {
+  it('reports the Session directory, so the browser can offer a relative path', async () => {
+    await writeFile(join(directory, 'fig1.svg'), FIGURE)
+    const address = `dsh-resource://file/session/s1//${directory}/fig1.svg`
+    const response = await callRoute({ sessionCwd: async () => directory }, { url: `/dsh-figmark/annotation?address=${encodeURIComponent(address)}` })
+    expect((response.body as { figure: { workspace: string } }).figure.workspace).toBe(directory)
+  })
+
+  it('reports no workspace for an absolute address, which names no Session', async () => {
+    await writeFile(join(directory, 'fig2.svg'), FIGURE)
+    const address = `dsh-resource://file/absolute//${directory}/fig2.svg`
+    const response = await callRoute({ sessionCwd: async () => directory }, { url: `/dsh-figmark/annotation?address=${encodeURIComponent(address)}` })
+    expect((response.body as { figure: { workspace: string | null } }).figure.workspace).toBeNull()
+  })
+})

@@ -9,6 +9,7 @@ import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceD
 import { en, zh } from '../src/client/locales'
 import type { ComposerLike } from '../src/client/composer'
 import type { SessionsLike } from '../src/client/session'
+import type { RemoteLike } from '../src/client/host-actions'
 import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
 import { PINCH_SETTLE_DELAY_MS } from '../src/client/zoom'
 import { readPreferences } from '../src/client/preferences'
@@ -30,7 +31,12 @@ function svgBytes(): Uint8Array {
 function hostPayload(answers: HostAnswers = {}): unknown {
   return {
     ok: true,
-    figure: { path: '/w/fig.svg', mediaType: 'image/svg+xml', sha256: answers.sha256 ?? 'a'.repeat(64) },
+    figure: {
+      path: '/w/fig.svg',
+      mediaType: 'image/svg+xml',
+      sha256: answers.sha256 ?? 'a'.repeat(64),
+      workspace: answers.workspace === undefined ? '/w' : answers.workspace,
+    },
     annotation: answers.annotation ?? null,
   }
 }
@@ -75,6 +81,8 @@ interface HostAnswers {
   readonly deleteError?: string
   /** Make the removal reject with something that is not an Error. */
   readonly deleteThrows?: unknown
+  /** The Session directory the Host names, or null for one it cannot name. */
+  readonly workspace?: string | null
 }
 
 /** Install the fetch stub answering as the host would. */
@@ -218,6 +226,11 @@ async function mountBody(
 }
 
 /** A body mounted over an inline SVG figure. */
+/** The rows the figure menu is showing, in drawing order. */
+function menuLabels(host: HTMLElement): string[] {
+  return [...host.querySelectorAll('.da-menu-item')].map(row => row.textContent ?? '')
+}
+
 function svgBody(answers: HostAnswers = {}, props: Partial<AnnotatorBodyProps> = {}, options: { readonly stageWidth?: number } = {}): Promise<{
   readonly host: HTMLElement
   readonly root: Root
@@ -766,9 +779,13 @@ describe('editing marks', () => {
     expect(entries[1]).toContain('102')
     // A row is numbered in the mark's own colour, so the list and the picture
     // are matched by one glance.
-    const numbers = [...document.querySelectorAll('.da-mark-index')]
+    // The number is neutral — an index is not a legend — and the shape carries the
+    // mark's colour instead.
+    const numbers = [...document.querySelectorAll('.da-mark-n')]
     expect(numbers).toHaveLength(2)
-    expect((defined(numbers[1]) as HTMLElement).style.background).toBe('rgb(224, 49, 49)')
+    expect((defined(numbers[1]) as HTMLElement).style.color).toBe('')
+    const glyphs = [...document.querySelectorAll('.da-mark-glyph')]
+    expect((defined(glyphs[1]) as HTMLElement).style.color).toBe('rgb(224, 49, 49)')
   })
 
   it('names an anchor by whatever it says, and shows no label for one that says nothing', async () => {
@@ -828,11 +845,24 @@ describe('editing marks', () => {
   })
 
   it('names the shape each row stands for, so a pen and a box read apart', async () => {
+    // As the tool's own glyph rather than its word: five shapes, one icon each, and
+    // the rail already taught the reader what they look like. The word survives as
+    // the glyph's tooltip, which is where a word belongs.
     mounted = await svgBody({
       annotation: { ...saved, marks: [{ id: 'm1', kind: 'pen', color: '#2f9e44', points: [[1, 1], [5, 6], [9, 2]] }] },
     })
     await openList(document.body)
-    expect(document.querySelector('.da-mark-meta')?.textContent).toContain(zh.toolPen)
+    // Both drawn as light strokes in the mark's colour: the number says which, the
+    // glyph says what shape, and neither is a block of fill on the row.
+    const row = defined(document.querySelector('.da-mark'))
+    expect(defined(row.querySelector('.da-mark-n')).textContent).toBe('1')
+    const glyph = defined(document.querySelector('.da-mark-glyph'))
+    expect(glyph.getAttribute('title')).toContain(zh.toolPen)
+    expect(glyph.querySelector('svg')).not.toBeNull()
+    expect(glyph.getAttribute('style')).toContain('color')
+    // The shape no longer repeats itself in the row's second line, which is left for
+    // the facts the shape cannot carry.
+    expect(document.querySelector('.da-mark-meta')?.textContent ?? '').not.toContain(zh.toolPen)
   })
 })
 
@@ -1125,16 +1155,39 @@ describe('zoom', () => {
     expect(stage.scrollLeft).toBeCloseTo(Math.max(0, offset + 100 * (width / 200) - 250), 5)
   })
 
-  it('leaves a two-finger scroll panning the view', async () => {
+  it('reads a plain wheel as the magnification, not as a scroll', async () => {
+    // The same motion over the same page used to have two readings — scroll the
+    // page, or ask for the next one — and on a page that fits the pane there was
+    // nothing to scroll, so it read as a page turn. One motion, one meaning now.
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
     const event = new WheelEvent('wheel', {
-      deltaY: 40, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+      deltaY: -40, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
     })
     await act(async () => { stage.dispatchEvent(event) })
-    expect(event.defaultPrevented).toBe(false)
-    expect((defined(document.querySelector('.da-surface')) as HTMLElement).style.width).toBe('300px')
+    // Taken from the browser, because a prevented wheel cannot scroll the page
+    // behind the plugin either, and zoomed in, because that is what the wheel means.
+    expect(event.defaultPrevented).toBe(true)
+    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(300)
+  })
+
+  it('answers a wheel both ways, and a pinch as the same gesture', async () => {
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    // A trackpad pinch arrives ctrl-modified; a mouse wheel does not. Both are the
+    // magnification, so neither may depend on the modifier to be understood.
+    await pinch(stage, { deltaY: -40, clientX: 60, clientY: 50 })
+    const magnified = Number.parseFloat(surface.style.width)
+    expect(magnified).toBeGreaterThan(300)
+    const down = new WheelEvent('wheel', {
+      deltaY: 40, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(down) })
+    expect(Number.parseFloat(surface.style.width)).toBeLessThan(magnified)
   })
 
   it('scales the paper once, rather than the figure inside it as well', async () => {
@@ -1228,6 +1281,271 @@ describe('zoom', () => {
     expect(surface.style.width).toBe('200px')
     await pinch(stage, { deltaY: -40, clientX: 10, clientY: 10 })
     expect(Number.parseFloat(surface.style.width)).toBeCloseTo(200 * Math.exp(0.4), 1)
+  })
+})
+
+describe('the icons', () => {
+  it('draws every toolbar icon on one grid, so one stroke width means one thickness', () => {
+    // stroke-width inside an inline SVG is in that icon's own units. Two icons set to
+    // the same number but drawn on different grids come out at different thicknesses:
+    // the pointer sat on a 24 grid beside five icons on a 16 grid, so it drew a third
+    // thinner than the rest while being the fattest shape in the row. One grid is what
+    // makes the row read as one set, and it is invisible until it is broken.
+    return (async (): Promise<void> => {
+      const { host } = await svgBody({ annotation: saved }, { mode: 'annotate' })
+      const svgs = [...host.querySelectorAll<SVGSVGElement>('.da-tool-icon svg')]
+      expect(svgs.length).toBeGreaterThan(4)
+      for (const svg of svgs) expect(svg.getAttribute('viewBox')).toBe('0 0 24 24')
+    })()
+  })
+})
+
+describe('the figure menu', () => {
+  /** Let the desktop probe and any gesture settle before looking at the DOM. */
+  async function settle(): Promise<void> {
+    await act(async () => { await Promise.resolve() })
+  }
+
+  /**
+   * A remote carrier that answers every gesture with `ok`, and records what it was
+   * asked for — the menu's only outward effect besides the clipboard.
+   */
+  function carrier(): { remote: RemoteLike; asked: string[] } {
+    const asked: string[] = []
+    const remote: RemoteLike = {
+      session: {
+        canOpenWorkspacePath: async () => ({ ok: true, value: true }),
+        openWorkspacePath: async (request: { readonly path: string; readonly action?: 'reveal' }) => {
+          asked.push(`${request.action ?? 'open'} ${request.path}`)
+          return { ok: true }
+        },
+      },
+    }
+    return { remote, asked }
+  }
+
+  /** Right-click the stage, the way a reader asks for the menu. */
+  function rightClick(host: HTMLElement): void {
+    act(() => {
+      defined(host.querySelector('.da-stage')).dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 40 }),
+      )
+    })
+  }
+
+  it('opens on a right-click and lists what the host can do', async () => {
+    // The saved figure carries a workspace, so the relative row is offered beside
+    // the absolute one; the carrier answers yes, so the two Host gestures are too.
+    const { remote } = carrier()
+    const { host } = await svgBody({ annotation: saved }, { remote })
+    await settle()
+    rightClick(host)
+    expect(menuLabels(host)).toEqual([zh.menuSendToAgent, zh.menuSendToComposer, zh.menuOpen, zh.menuReveal, zh.menuCopyImage, zh.menuCopyRelative, zh.menuCopyAbsolute])
+  })
+
+  it('leaves out the host gestures when there is no desktop to perform them', async () => {
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    expect(menuLabels(host)).toEqual([zh.menuSendToAgent, zh.menuSendToComposer, zh.menuCopyImage, zh.menuCopyRelative, zh.menuCopyAbsolute])
+  })
+
+  it('asks the host to open the figure, and says so', async () => {
+    const { remote, asked } = carrier()
+    const { host } = await svgBody({ annotation: saved }, { remote })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuOpen)))
+    await settle()
+    expect(asked).toEqual(['open /w/fig.svg'])
+    expect(host.textContent).toContain(zh.menuOpened)
+  })
+
+  it('asks the host to reveal the figure in the file manager', async () => {
+    const { remote, asked } = carrier()
+    const { host } = await svgBody({ annotation: saved }, { remote })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuReveal)))
+    await settle()
+    expect(asked).toEqual(['reveal /w/fig.svg'])
+    expect(host.textContent).toContain(zh.menuRevealed)
+  })
+
+  it('copies the path, and closes the menu as it does', async () => {
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyAbsolute)))
+    await settle()
+    expect(written).toEqual(['/w/fig.svg'])
+    expect(host.querySelector('.da-menu')).toBeNull()
+    expect(host.textContent).toContain(zh.menuCopied)
+  })
+
+  it('copies the path relative to the workspace', async () => {
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyRelative)))
+    await settle()
+    expect(written).toEqual(['fig.svg'])
+  })
+
+  it('says so when the clipboard refuses', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: async () => { throw new Error('denied') } } })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyAbsolute)))
+    await settle()
+    expect(host.textContent).toContain(zh.menuCopyFailed)
+  })
+
+  it('stays open while the reader presses inside it', async () => {
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    const panel = defined(host.querySelector('.da-menu'))
+    act(() => { panel.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
+    expect(host.querySelector('.da-menu')).not.toBeNull()
+  })
+
+  it('says so when the host refuses to open the figure', async () => {
+    const remote: RemoteLike = {
+      session: {
+        canOpenWorkspacePath: async () => ({ ok: true, value: true }),
+        openWorkspacePath: async () => ({ ok: false }),
+      },
+    }
+    const { host } = await svgBody({ annotation: saved }, { remote })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuOpen)))
+    await settle()
+    expect(host.textContent).toContain(zh.menuOpenFailed)
+  })
+
+  it('offers only the absolute copy for a figure outside the workspace', async () => {
+    // A Host that names no Session directory: the figure still loads, and the one
+    // row that always works is the only copy row left. This figure also has no
+    // marks, so there is nothing to hand over either.
+    const { host } = await svgBody({ workspace: null })
+    await settle()
+    rightClick(host)
+    expect(menuLabels(host)).toEqual([zh.menuCopyImage, zh.menuCopyAbsolute])
+  })
+
+  it('offers the hand-off when the figure has marks to hand over', async () => {
+    const { host } = await svgBody({ annotation: saved, workspace: null })
+    await settle()
+    rightClick(host)
+    expect(menuLabels(host)).toEqual([zh.menuSendToAgent, zh.menuSendToComposer, zh.menuCopyImage, zh.menuCopyAbsolute])
+  })
+
+  it('sends the figure to the agent from the menu', async () => {
+    const { sessions, prompts } = stubSessions()
+    const { host } = await svgBody({ annotation: saved }, { sessions })
+    await settle()
+    rightClick(host)
+    // Scoped to the menu: the dock's own send button carries the same words.
+    await click(defined(host.querySelector('.da-menu')?.querySelector('button')))
+    await settle()
+    expect(prompts).toHaveLength(1)
+  })
+
+  it('hands the figure to the composer from the menu', async () => {
+    const composer = stubComposer()
+    const { host } = await svgBody({ annotation: saved }, { conversation: composer.conversation })
+    await settle()
+    rightClick(host)
+    // The second row of the menu is the composer hand-off.
+    await click(defined(host.querySelectorAll('.da-menu button')[1] as HTMLButtonElement | undefined))
+    await settle()
+    // The draft the composer was handed is the same message the dock's button writes.
+    expect(composer.drafts).toBe('page-1.png:image/png')
+  })
+
+  it('says so when the host refuses to reveal the figure', async () => {
+    const remote: RemoteLike = {
+      session: {
+        canOpenWorkspacePath: async () => ({ ok: true, value: true }),
+        openWorkspacePath: async () => ({ ok: false }),
+      },
+    }
+    const { host } = await svgBody({ annotation: saved }, { remote })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuReveal)))
+    await settle()
+    expect(host.textContent).toContain(zh.menuRevealFailed)
+  })
+
+  it('copies the picture the reader sees', async () => {
+    const taken: string[] = []
+    vi.stubGlobal('ClipboardItem', class {
+      readonly types: string[]
+      constructor(parts: Record<string, Blob>) { this.types = Object.keys(parts) }
+    })
+    vi.stubGlobal('navigator', {
+      clipboard: { write: async (items: unknown[]) => { taken.push((items[0] as { types: string[] }).types[0] ?? '') } },
+    })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyImage)))
+    await settle()
+    expect(taken).toEqual(['image/png'])
+    expect(host.textContent).toContain(zh.menuCopied)
+  })
+
+  it('says so when the picture could not be copied', async () => {
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyImage)))
+    await settle()
+    // No ClipboardItem in this environment, so the write cannot happen.
+    expect(host.textContent).toContain(zh.menuCopyFailed)
+  })
+
+  it('says so when the picture could not even be drawn', async () => {
+    // A copy that fails while composing the export never reaches the clipboard, so
+    // the reader gets the same sentence rather than a menu that closed silently.
+    vi.stubGlobal('ClipboardItem', class {
+      readonly types: string[]
+      constructor(parts: Record<string, Blob>) { this.types = Object.keys(parts) }
+    })
+    vi.stubGlobal('navigator', { clipboard: { write: async () => {} } })
+    stubRasterizer({ imageError: true })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    await click(defined(button(host, zh.menuCopyImage)))
+    await settle()
+    expect(host.textContent).toContain(zh.menuCopyFailed)
+  })
+
+  it('closes when the reader presses Escape', async () => {
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    expect(host.querySelector('.da-menu')).not.toBeNull()
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(host.querySelector('.da-menu')).toBeNull()
+  })
+
+  it('closes when the reader clicks elsewhere', async () => {
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    expect(host.querySelector('.da-menu')).not.toBeNull()
+    act(() => { document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })) })
+    expect(host.querySelector('.da-menu')).toBeNull()
   })
 })
 
@@ -2292,7 +2610,7 @@ describe('autosave', () => {
     mounted = result
     await openList(result.host)
     expect(defined(result.host.querySelector('.da-mark')).getAttribute('data-selected')).toBe('false')
-    await click(defined(result.host.querySelector('.da-mark-index')))
+    await click(defined(result.host.querySelector('.da-mark-glyph')))
     expect(defined(result.host.querySelector('.da-mark')).getAttribute('data-selected')).toBe('true')
     expect(defined(result.host.querySelector('.da-comment'))).not.toBeNull()
   })
@@ -2478,5 +2796,264 @@ describe('the style fold against the top of the panel', () => {
     const fold = defined(document.querySelector('.da-style-row')) as HTMLElement
     expect(fold.getAttribute('data-side')).toBe('below')
     expect(STYLES).toContain('.da-style-row[data-side="below"]{bottom:auto;top:calc(100% + 6px)')
+  })
+})
+
+describe('a page body without its chrome', () => {
+  // A continuous column mounts every page at once, and only the page being read
+  // should carry the tools: a column where each page had its own floating bar would
+  // be a wall of chrome with one page's worth of figure under it.
+  it('draws no tools and no bar when the owner says not to', async () => {
+    await svgBody({}, { chrome: false })
+    expect(document.querySelector('.da-palette')).toBeNull()
+    expect(document.querySelector('.da-bar')).toBeNull()
+  })
+
+  it('draws the tools and the bar by default', async () => {
+    await svgBody({})
+    expect(document.querySelector('.da-palette')).not.toBeNull()
+    expect(document.querySelector('.da-bar')).not.toBeNull()
+  })
+})
+
+describe('a body whose owner places its bar', () => {
+  // A paged document draws many page bodies and one pane; the bar belongs to the
+  // pane, so the body hands its chrome over rather than drawing it inside a page.
+  it('portals its chrome into the node the owner hands it', async () => {
+    const dock = document.createElement('div')
+    dock.className = 'owner-dock'
+    document.body.append(dock)
+    await svgBody({}, { chromeHost: dock })
+    expect(document.querySelector('.da-root .da-bar')).toBeNull()
+    expect(dock.querySelector('.da-bar')).not.toBeNull()
+    expect(dock.querySelector('.da-palette')).not.toBeNull()
+  })
+
+  it('places the paging its owner drew, before the pen', async () => {
+    await svgBody({}, {
+      pagingSlot: <span data-testid="owner-paging">1 / 9</span>,
+    })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const paging = defined(bar.querySelector('[data-testid="owner-paging"]'))
+    const style = defined(bar.querySelector('.da-style'))
+    expect(bar.textContent).toContain('1 / 9')
+    // Paging is what the reader decides first; the colour belongs to the stroke after.
+    expect(paging.compareDocumentPosition(style) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('sends through the owner’s callback when it has one', async () => {
+    const targets: string[] = []
+    await svgBody({}, { onSend: target => { targets.push(target) } })
+    await click(button(document.body, zh.sendToAgent))
+    await click(button(document.body, zh.sendToComposer))
+    expect(targets).toEqual(['agent', 'composer'])
+  })
+})
+
+describe('a body that lets its owner keep the magnification', () => {
+  // A file's pages are one picture in several sheets: a pinch on page 3 has to be a
+  // pinch on the document, or the reader lands on page 4 at a different size.
+  it('reports the factor to the owner instead of keeping it', async () => {
+    const asked: (number | 'fit')[] = []
+    await svgBody({}, { onZoom: (next) => { asked.push(next) } }, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    await pinch(stage, { deltaY: -40, clientX: 100, clientY: 100 })
+    // The factor is only handed over once the gesture pauses: a pinch reports one
+    // settled size, not one per wheel event.
+    await act(async () => {
+      await new Promise<void>((resolve) => { setTimeout(resolve, PINCH_SETTLE_DELAY_MS + 40) })
+    })
+    expect(asked).toHaveLength(1)
+  })
+
+  it('draws at the factor the owner handed it', async () => {
+    await svgBody({}, { zoom: 2 }, { stageWidth: 500 })
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    // A stated factor replaces the fit, it does not multiply it: 200px at 2×.
+    expect(surface.style.width).toBe('400px')
+  })
+})
+
+describe('a body that lists the whole document', () => {
+  // The list is the map of what is about to be sent, and what is sent from a paged
+  // document is every page's marks at once: a list of only this sheet would read as
+  // "one mark" on a file carrying seven.
+  it('lists every mark the owner hands it, and deletes through the owner', async () => {
+    const removed: string[] = []
+    await svgBody({}, {
+      documentMarks: [
+        { id: 'own', kind: 'arrow', color: '#1971c2', points: [] },
+        { id: 'other-page', kind: 'rect', color: '#e03131', points: [] },
+      ],
+      onDocumentRemove: (id) => { removed.push(id) },
+    })
+    await openList(document.body)
+    const rows = [...document.querySelectorAll('.da-mark')]
+    expect(rows).toHaveLength(2)
+    // A mark this page is not holding is the owner's to drop, not this draft's.
+    await click(button(defined(rows[1] as HTMLElement), zh.delete))
+    expect(removed).toEqual(['other-page'])
+  })
+})
+
+describe('a body whose owner keeps the open card and the selection', () => {
+  // In a column the chrome moves from page to page as the reader scrolls. A card or
+  // a selection held by the page body would be dropped at every page boundary, so
+  // the list would shut itself while being read.
+  it('opens the card the owner says is open, and reports a change back', async () => {
+    const opened: (string | null)[] = []
+    await svgBody({}, {
+      openPanel: null,
+      onOpenPanelChange: (next) => { opened.push(next) },
+    })
+    // The owner says nothing is open, so no card is.
+    expect(document.querySelector('.da-float-list')).toBeNull()
+    await click(button(document.body, zh.marks))
+    // The choice is the owner's from here on: the body reports it instead of keeping
+    // a second copy that could disagree with the document.
+    expect(opened[opened.length - 1]).toBe('list')
+  })
+
+  it('reports a new selection to the owner rather than keeping it', async () => {
+    const picked: (string | null)[] = []
+    await svgBody({}, {
+      draft: { marks: [{ id: 'a', kind: 'arrow', color: '#1971c2', points: [[10, 10], [40, 30]] }] },
+      openPanel: 'list',
+      selectedId: null,
+      onSelectedIdChange: (next) => { picked.push(next) },
+    })
+    const row = defined(document.querySelector('.da-mark') as HTMLElement | null)
+    await act(async () => {
+      defined(row.querySelector('.da-mark-text') as HTMLElement | null)
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    // The selection is one thing in the reader's head, so the document holds it and
+    // a page body only ever says what happened.
+    expect(picked).toEqual(['a'])
+  })
+})
+
+describe('removing a mark the owner has selected', () => {
+  // Deleting the selected mark has to clear the selection, whichever side keeps it:
+  // a pill pointing at a mark that is gone names nothing.
+  it('clears the owner-held selection when the selected mark is removed', async () => {
+    const picked: (string | null)[] = []
+    await svgBody({}, {
+      draft: { marks: [{ id: 'a', kind: 'arrow', color: '#1971c2', points: [[10, 10], [40, 30]] }] },
+      openPanel: 'list',
+      selectedId: 'a',
+      onSelectedIdChange: (next) => { picked.push(next) },
+    })
+    const row = defined(document.querySelector('.da-mark') as HTMLElement | null)
+    await click(button(row, zh.delete))
+    expect(picked).toContain(null)
+  })
+})
+
+describe('the wheel as the one magnification gesture', () => {
+  // The reader's complaint was that the same motion meant two things: a wheel over
+  // a page that fits the pane looked like a request for the next page, while a wheel
+  // meant for a closer look is the same motion. It means one thing now, and the page
+  // turn is the keyboard's.
+  it('magnifies on a plain wheel upward, with no modifier held', async () => {
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    const before = Number.parseFloat(surface.style.width)
+    const event = new WheelEvent('wheel', {
+      deltaY: -30, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(before)
+  })
+
+  it('shrinks on a plain wheel downward', async () => {
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    const before = Number.parseFloat(surface.style.width)
+    const event = new WheelEvent('wheel', {
+      deltaY: 30, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(event) })
+    expect(Number.parseFloat(surface.style.width)).toBeLessThan(before)
+  })
+
+  it('keeps the point under the pointer where it was', async () => {
+    // A wheel that grew the picture away from the pointer would make the reader chase
+    // the part they were looking at.
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    // Wide enough that the picture has to overflow the scrollport to stay anchored:
+    // a picture narrower than its pane has no scroll offset to move.
+    for (let step = 0; step < 6; step += 1) {
+      await act(async () => {
+        stage.dispatchEvent(new WheelEvent('wheel', {
+          deltaY: -60, clientX: 400, clientY: 180, bubbles: true, cancelable: true,
+        }))
+      })
+    }
+    // The scrollport moved to hold the anchor under the pointer.
+    expect(stage.scrollLeft).toBeGreaterThan(0)
+  })
+})
+
+describe('a row of the list as the way to the mark', () => {
+  // The row is the reader's index of their own work: pressing one should take them
+  // to the mark and open its comment, not just highlight a number.
+  it('selects the mark and opens its comment from the row', async () => {
+    mounted = await svgBody({ annotation: saved })
+    await openList(document.body)
+    expect(document.querySelector('.da-float-detail')).toBeNull()
+    await click(defined(document.querySelector('.da-mark-text')))
+    expect(document.querySelector('.da-float-detail')).not.toBeNull()
+    expect(defined(detailBox().value)).toContain('标号指错了')
+  })
+
+  it('keeps the number, the shape and the delete on one row', async () => {
+    // The row is a card, and everything on it is about one mark. Deleting from a row
+    // that no longer had this mark's number on it would be two marks in one line.
+    mounted = await svgBody({ annotation: saved })
+    await openList(document.body)
+    const row = defined(document.querySelector('.da-mark'))
+    expect(row.querySelector('.da-mark-n')?.textContent).toBe('1')
+    expect(row.querySelector('.da-mark-glyph svg')).not.toBeNull()
+    // A plain figure has no pages, so a row of its list carries no page at all —
+    // the page belongs to the document, not to the mark.
+    expect(row.querySelector('.da-mark-page')).toBeNull()
+    const del = defined(row.querySelector('.da-mark-del'))
+    expect(del.getAttribute('aria-label')).toBe(zh.delete)
+    expect(del.textContent).toBe('✕')
+  })
+
+  it('says which page a mark is on, and nothing else it can show', async () => {
+    // A document's rows can name pages the reader is not looking at, so the page is
+    // the fact worth the second line. A plain figure has no pages and gets no line.
+    mounted = await svgBody({ annotation: saved })
+    await openList(document.body)
+    expect(document.querySelector('.da-mark-meta')?.textContent ?? '').not.toContain('页')
+  })
+})
+
+describe('a list row that turns the page', () => {
+  // Only a paged body can turn, and only its owner knows the page number — so the
+  // row reports the mark instead of turning anything itself.
+  it('asks the owner to reveal a mark, rather than turning its own page', async () => {
+    const revealed: string[] = []
+    mounted = await svgBody({}, {
+      onRevealMark: (mark) => { revealed.push(mark.id) },
+      documentMarks: [{ id: 'm1', kind: 'rect', color: '#1971c2', points: [[1, 1], [9, 9]], page: 4 }],
+    })
+    await openList(document.body)
+    await click(defined(document.querySelector('.da-mark-text')))
+    expect(revealed).toEqual(['m1'])
+    // The page sits at the row's end, not on the line under the sentence.
+    expect(defined(document.querySelector('.da-mark-page')).textContent).toContain('4')
+    expect(document.querySelector('.da-mark-meta')).toBeNull()
   })
 })

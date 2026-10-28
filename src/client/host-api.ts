@@ -20,6 +20,12 @@ export interface LoadedAnnotation {
   readonly sha256: string
   /** The saved document, or null when the figure was never annotated. */
   readonly annotation: AnnotationDocument | null
+  /**
+   * Absolute directory of the Session that owns the figure, or null when the
+   * Host could not name one. The menu needs it to offer a workspace-relative
+   * path; everything else about the figure works without it.
+   */
+  readonly workspace: string | null
 }
 
 /** Result of one annotation save. */
@@ -75,7 +81,7 @@ export async function loadAnnotation(
   const body = await response.json() as {
     ok?: boolean
     error?: string
-    figure?: { path: string; mediaType: string; sha256: string }
+    figure?: { path: string; mediaType: string; sha256: string; workspace?: string | null }
     annotation?: AnnotationDocument | null
   }
   if (body.ok !== true || body.figure === undefined) {
@@ -86,6 +92,7 @@ export async function loadAnnotation(
     mediaType: body.figure.mediaType,
     sha256: body.figure.sha256,
     annotation: body.annotation ?? null,
+    workspace: body.figure.workspace ?? null,
   }
 }
 
