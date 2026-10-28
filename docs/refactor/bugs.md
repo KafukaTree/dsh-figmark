@@ -1099,6 +1099,18 @@ Recorded so the next reader does not re-investigate them.
 
 Found while auditing the same files; none of them changes what the plugin does.
 
+- **`src/client/styles.ts` — eleven class rules nothing can match.** Extracted
+  every `.da-…` class the stylesheet names and searched the rest of `src/` for it:
+  `da-btn-icon`, `da-btn-count`, `da-chip`, `da-stylewrap`, `da-docbar-count`,
+  `da-docbar-note`, `da-page-field`, `da-page-total`, `da-send`, `da-send-note`
+  and `da-tool-label` appear only in the stylesheet. There is no dynamic class
+  concatenation to explain it (`grep 'className={`' src/` finds one template
+  string, and it is an id). `da-tool-label` is the interesting one: two rules hang
+  off it, including the pressed-tool colour
+  (`styles.ts:192,196`), so a reader comparing the stylesheet to the toolbar would
+  conclude the tools show a caption. They do not — `chrome.tsx` renders the icon
+  alone, and `tests/tmp-audit-chrome.spec.tsx` asserted
+  `querySelectorAll('.da-tool-label').length === 0` while this was being written.
 - **`src/client/locales.ts:78,80,117-119`** — five keys are defined in both
   languages and referenced nowhere: `pageOf`, `sendNone`, `detailHint`,
   `detailUnset`, `detailIdle`. Checked by extracting every key from the `zh`
