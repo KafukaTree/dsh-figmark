@@ -25,6 +25,7 @@
     "tests/**/*.ts",
     "tests/**/*.tsx",
     "tsdown.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "tools/**/*.ts"
   ]
 }

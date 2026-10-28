@@ -17,7 +17,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
 import { AnnotatorBody, type AnnotatorBodyProps } from '../../src/client/AnnotatorBody'
 import { zh } from '../../src/client/locales'
-import { defined, stubRasterizer, stubRect } from '../dom'
+import { defined, stubRasterizer } from '../dom'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect id="bg" width="200" height="100" fill="#fff"/><path id="line2d_1" d="M10 10 L100 90" stroke="#000"/><text x="10" y="20">102</text></svg>'
 const ADDRESS = 'dsh-resource://file/session/s1/fig.svg'
