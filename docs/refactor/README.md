@@ -23,7 +23,7 @@ work around it.
 |---|---|---|
 | `golden.sh` | a changed DOM: class names, attributes, order, path geometry, text | interaction timing, anything not rendered in its six states |
 | `tools/api-check.ts` | a call site importing a name that moved out of the module it names | a changed signature, a changed default value |
-| `pnpm run check` | type errors, lint, uncovered lines | behaviour at all |
+| `tools/gate.sh check` | type errors, lint, uncovered lines, imports that no longer resolve | behaviour at all |
 
 None of the three is sufficient. Together they cover the failure modes a file
 split actually has: the branch that got reordered, the name that got dropped,
@@ -31,15 +31,30 @@ the signature that got tightened.
 
 ## What "low coupling, high cohesion" is measured by
 
-`measure.mjs` builds the import graph and reports fan-in, fan-out, instability,
-import cycles and the files big enough that one file is plainly doing several
-jobs. Baseline, recorded before any split:
+`tools/measure.ts` builds the import graph and reports fan-in, fan-out,
+instability, import cycles and the files big enough that one file is plainly
+doing several jobs. Baseline, recorded before any split:
 
 ```
 modules=48 lines=13624 edges=113
 cycles=1 -> src/client/annotator-contract.ts -> src/client/locales.ts -> src/client/annotator-contract.ts
 files >400 lines: 9 (7616 lines)
 ```
+
+After the four splits:
+
+```
+modules=102 lines=16694 edges=271
+cycles=0
+files >400 lines: 4 (3253 lines)
+  largest file: src/client/AnnotatorBody.tsx 1838 (was 2512)
+```
+
+Module count and edge count both more than doubled, and that is the intended
+direction rather than a cost: the same code, arranged as 102 named pieces
+instead of 48, with the one cycle removed. A split that added files without
+adding names would show up here as edges rising while the large-file count
+stayed the same — which is the number to watch, not the total.
 
 Run it any time:
 
@@ -77,3 +92,25 @@ regression, watch it go red, revert:
 The second one is not invented for the occasion: it is the exact break that put
 seventeen tests red mid-refactor, found by this tool afterwards. That is the
 argument for having it.
+
+## What the refactor found
+
+The other half of the job was to find bugs without changing behaviour, so the
+findings live in two files rather than in patches:
+
+- `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown (12 entries)
+- `docs/refactor/pdf-md-bugs.md` — the PDF and Markdown chains (12 entries)
+
+A fix is a behaviour change, and a behaviour change needs its own decision, its
+own test and its own note. Letting one ride inside a file split would make the
+golden dump look like the split moved rendering when it did not.
+
+Each entry carries the file and line, how to make it happen, what the reader
+sees, and a severity that is about the reader. Findings marked "shown" were
+reproduced against this tree, not inferred; several needed a driver to expose
+and the driver is described in the entry.
+
+The one class worth reading first: of the high-severity findings, three are the
+same mistake in three places — **switching documents does not reset the state
+that belonged to the old one** — and the worst of them writes one document's
+marks into another document's sidecar.
