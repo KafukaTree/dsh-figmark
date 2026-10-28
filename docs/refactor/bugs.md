@@ -995,6 +995,24 @@ the real `describeMark`:
 is assembled, not when the mark is described, which is why the unit tests that
 count entries stay green.
 
+### 45. The goal field advertises a 300-character limit and enforces nothing
+
+`SummaryRecord` renders `<span className="da-count">{props.summary.length}/300</span>`
+(`annotator/records.tsx:64`). There is no `maxLength`, no truncation in
+`onWrite`, and no length rule in the sidecar schema — searching `src/` for the
+number 300 outside CSS and figure sizes finds only that one line. The counter is
+a measurement, not a gate, and it is written to look like a gate.
+
+Reader impact: the count reaching `420/300` reads as "over the limit, this will
+be cut" to anyone who has used a form; nothing is cut. The overshoot then travels
+into the message the agent receives as-is. Either half alone would be fine — a
+soft meter with no fraction, or a hard cap — but the fraction claims an enforced
+boundary and the boundary is not there.
+
+Shown: mounted with a 420-character summary, the counter reads `420/300`,
+`getAttribute('maxlength')` is `null`, `HTMLTextAreaElement.maxLength` is `-1`,
+and the field's value is the full 420 characters.
+
 ## Fixed during the refactor
 
 None yet: a fix would be a behaviour change, which is what this refactor exists
