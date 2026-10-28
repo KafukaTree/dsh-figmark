@@ -348,3 +348,15 @@ Recorded so the next reader does not re-investigate them.
   lets the later handle win, so an edge would beat a corner. The two never
   coincide geometrically, so nothing observable changes; only the comment is
   wrong.
+
+## On the ignore comments the split added
+
+Coverage is enforced per file at 100%, so a split that moves a defensive branch
+into a smaller file can only stay green by either testing it or declaring it
+unreachable. The `v8 ignore` count went 32 → 35 across the refactor, and the
+three new texts are all legitimate relocations rather than new blind spots: the
+`start`/`stop` block guarding the two palette drags (which needs a live ref for
+the whole drag) became two `next` comments on the same lines, and the guard on a
+figure-menu row likewise keeps the reason it had. What changed is the form, not
+the coverage — the same lines are dark before and after, and none of them is a
+row a reader can reach.
