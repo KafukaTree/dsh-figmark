@@ -12,6 +12,19 @@ tools/gate.sh check                                             # typecheck, lin
 docs/refactor/golden.sh after && docs/refactor/golden.sh diff   # what it renders
 ```
 
+`golden.sh` drives two harnesses, because one render tree cannot reach both
+halves of the plugin: `tests/refactor/golden.spec.tsx` renders the figure panel
+in six states (nothing drawn, marks saved, the style popover, the list and target
+card, one mark selected, an unsupported address), and
+`tests/refactor/documents.spec.tsx` renders the PDF body in eight (waiting for
+its first raster, page one, marks and a summary, a file that no longer matches
+its annotation, the page field, the last page, no address, no bytes) and the
+Markdown body in nine (loaded, line gutter out, edited, the difference, a note on
+a hunk, an empty difference, a document that moved under an edit, still arriving,
+copy keys). Both write each state's `innerHTML` and are skipped unless their
+output variable is set, so an ordinary `vitest run` neither runs them nor counts
+them.
+
 `tools/gate.sh` takes an exclusive lock before running. Several agents share
 this working tree, and `vitest --coverage` writes `coverage/.tmp/*.json` as it
 goes — two runs at once overwrite each other's temp files and the loser dies
@@ -21,7 +34,7 @@ work around it.
 
 | proof | catches | blind to |
 |---|---|---|
-| `golden.sh` | a changed DOM: class names, attributes, order, path geometry, text | interaction timing, anything not rendered in its six states |
+| `golden.sh` | a changed DOM: class names, attributes, order, path geometry, text — in the figure panel and in both document bodies | interaction timing, anything not rendered in its states, geometry that only exists on a raster |
 | `tools/api-check.ts` | a call site importing a name that moved out of the module it names | a changed signature, a changed default value |
 | `tools/gate.sh check` | type errors, lint, uncovered lines, imports that no longer resolve | behaviour at all |
 
@@ -86,10 +99,11 @@ regression, watch it go red, revert:
 
 | proof | regression introduced | what it said |
 |---|---|---|
-| `golden.sh` | `className="da-root"` → `"da-root-x"` in `AnnotatorBody.tsx` | five of six states `changed:` |
+| `golden.spec.tsx` | `className="da-root"` → `"da-root-x"` in `AnnotatorBody.tsx` | five of six states `changed:` |
+| `documents.spec.tsx` | `changed body` → `CHANGED BODY` in the captured Markdown difference | `changed: md-diff`, exit 1 |
 | `tools/api-check.ts` | `session.ts` importing `baseNameOf` from `shared/address` again | `imports baseNameOf from src/shared/address.ts, which no longer exports it` |
 
-The second one is not invented for the occasion: it is the exact break that put
+The last one is not invented for the occasion: it is the exact break that put
 seventeen tests red mid-refactor, found by this tool afterwards. That is the
 argument for having it.
 
