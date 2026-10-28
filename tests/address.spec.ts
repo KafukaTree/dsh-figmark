@@ -1,7 +1,8 @@
 /** The `dsh-resource://file/…` grammar this plugin decodes. */
 import { describe, expect, it } from 'vitest'
 import { parseFileAddress } from '../src/shared/address'
-import { figureMediaType, isFigurePath, suffixOf } from '../src/shared/figure-kind'
+import { figureMediaType, isFigurePath, isPagedFigurePath } from '../src/shared/figure-kind'
+import { suffixOf } from '../src/shared/path-name'
 import { annotationCandidates, legacyAnnotationPath, legacyPagePattern, sidecarPaths } from '../src/host/sidecar'
 import { resolveSessionCwd } from '../src/host/session-cwd'
 
@@ -75,6 +76,14 @@ describe('document suffixes', () => {
   it('reads the suffix of a Windows-separated path too', () => {
     expect(suffixOf('C:\\w\\figures\\fig1.PNG')).toBe('png')
     expect(isFigurePath('C:\\w\\figures\\fig1.PNG')).toBe(true)
+  })
+
+  it('classes only a document that has pages as a paged figure', () => {
+    expect(isPagedFigurePath('/a/b/report.pdf')).toBe(true)
+    expect(isPagedFigurePath('/a/b/report.PDF')).toBe(true)
+    expect(isPagedFigurePath('/a/b/fig1.svg')).toBe(false)
+    expect(isPagedFigurePath('/a/b/report.html')).toBe(false)
+    expect(isPagedFigurePath('/a/b/notes.md')).toBe(false)
   })
 })
 

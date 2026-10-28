@@ -8,10 +8,16 @@ default, or an order — so the constraint is enforced by tooling, not by care.
 ## The three proofs
 
 ```sh
+tools/gate.sh check                                             # typecheck, lint, imports, coverage
 docs/refactor/golden.sh after && docs/refactor/golden.sh diff   # what it renders
-node --experimental-strip-types tools/api-check.ts .            # what it can import
-pnpm run check                                                  # the three gates
 ```
+
+`tools/gate.sh` takes an exclusive lock before running. Several agents share
+this working tree, and `vitest --coverage` writes `coverage/.tmp/*.json` as it
+goes — two runs at once overwrite each other's temp files and the loser dies
+with `ENOENT: coverage/.tmp/coverage-N.json`, which reads like a broken test
+and is really two people running the same command. Wait for the lock; do not
+work around it.
 
 | proof | catches | blind to |
 |---|---|---|

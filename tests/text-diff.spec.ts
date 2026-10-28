@@ -9,7 +9,7 @@ import {
   formatUnifiedDiff,
   textLines,
 } from '../src/shared/text-diff'
-import { baseNameOf } from '../src/shared/address'
+import { baseNameOf } from '../src/shared/path-name'
 import { defined } from './dom'
 
 describe('splitting text into lines', () => {

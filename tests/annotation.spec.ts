@@ -12,15 +12,11 @@ import {
   WEIGHT_MIN,
   annotatedPages,
   clampWeight,
-  describeFigureScope,
-  describeMark,
-  describeMarks,
   isWeight,
   pageFileSuffix,
 } from '../src/shared/annotation'
+import { describeFigureScope, describeMark, describeMarks } from '../src/shared/mark-summary'
 import { readAnnotation, readAnnotationDocument, removeAnnotation, writeAnnotation } from '../src/host/store'
-import {
-} from '../src/shared/annotation'
 import { defined } from './dom'
 
 const document_: AnnotationDocument = {
