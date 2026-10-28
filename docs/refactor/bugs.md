@@ -45,6 +45,22 @@ a class name in the markup with no rule at all. Both are invisible to a sweep
 that asks only "does this selector find an element" — the check has to ask which
 declaration wins.
 
+An eighth, which the later audits kept running into: **a sentence written where
+the fact was known, and invalidated where the fact was decided.** That is finding
+42 and its repeat at 59 (advice to "see the attached PDF" written where the page
+count was known, the attachment decided where the upload was known), finding 62,
+and finding 64 — a note that was true when it was typed and is sent after its
+subject has gone. Finding 61 belongs here too: the guard was written on the
+assumption that the button being pressable is what tells the reader why it does
+nothing.
+
+A ninth, about the diff itself rather than anything drawn: **a boundary that is
+one off, in a quantity nobody looks at until it bites.** Removing the final
+newline makes a difference with no hunks (61). One line past a thousand turns the
+whole file into the message (63). An insertion is filed under the line above it
+(65). None of these is a computation error — each is a definition that is off by
+one unit of something (a newline, a cell budget, a line index).
+
 ## Open
 
 ### 1. Clearing or delivering an annotation does not always make it stay gone

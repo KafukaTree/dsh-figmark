@@ -113,7 +113,8 @@ The other half of the job was to find bugs without changing behaviour, so the
 findings live in two files rather than in patches:
 
 - `docs/refactor/bugs.md` — canvas, export, host, autosave, markdown, delivery,
-  text-diff, styles and layout (66 entries)
+  text-diff, styles and layout (66 entries; the file head names the nine shapes
+  most of them fall into)
 - `docs/refactor/pdf-md-bugs.md` — the PDF and Markdown chains (12 entries)
 
 A fix is a behaviour change, and a behaviour change needs its own decision, its
