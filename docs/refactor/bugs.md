@@ -25,7 +25,12 @@ Two more threads are worth naming because they explain several entries at once:
 **a screen-pixel constant used as a figure-pixel one, or the reverse** (findings
 31, 35, 39), and **one quantity computed two different ways in two places** — the
 figure's width for fit (30) against the paper's width for layout, the pointer's
-position for re-anchoring (36) against the mark's own point.
+position for re-anchoring (36) against the mark's own point, the guard's idea of a
+body's length in code units (40) against the browser's idea of it in bytes.
+
+A fifth thread is quieter and worth naming on its own: **a unit or a budget that
+is right for ASCII and wrong for everything else.** Finding 40 is the HTTP form of
+it; findings 38 and the anchor-text rules are the drawing form.
 
 ## Open
 
@@ -826,6 +831,103 @@ the reader is not pointing at.
 Shown: `anchorAtPoint` with scale 1 asks about a 12-client-px span; with scale 6
 (zoomed in) it asks about 2 client px; with scale 1/6 (zoomed out) it asks about
 72 client px. The probe count is 25 in all three cases.
+
+### 40. An autosave is refused for a body length the browser measures differently
+
+`host-api.ts:85` defines `KEEPALIVE_LIMIT = 60_000` and `:120` applies keepalive
+only when `payload.length <= KEEPALIVE_LIMIT`. `String.prototype.length` counts
+UTF-16 **code units**; the browser enforces its keepalive budget in UTF-8
+**bytes** (Chrome: 65536 bytes shared by every in-flight keepalive request, and it
+counts the method, URL and headers against the same budget). For a body of
+non-ASCII text the two disagree by up to a factor of three, so the guard passes a
+request the browser then refuses outright.
+
+The refusal is not a quiet truncation: `fetch` rejects with `TypeError: Failed to
+fetch`, nothing is sent, and `saveAnnotation` never reaches its status check.
+
+Reader impact: the flush on `pagehide` (`AnnotatorBody.tsx:1084`) is the only
+write that keeps the last edit of a tab that is being closed, and it is the one
+call that goes through with `keepalive=true` (`AnnotatorBody.tsx:1203`). The
+failure lands in `onError`, which calls `setStatus` on a component that is
+already being torn down — the reader never sees it. A figure whose note is written in Chinese, or
+whose sidecar is large mostly in non-ASCII summary text, is silently lost on
+close.
+
+Shown: a real Chromium posting ASCII bodies through keepalive accepts 60000 bytes
+and rejects 60001-and-up (measured by bisection, one fresh page per size because
+the budget is per-renderer). A body of 30000 `图` characters is **30000 code
+units** — well under the guard, so keepalive is set — and **89970 UTF-8 bytes**,
+and `fetch` throws `TypeError: Failed to fetch`; the server receives nothing. The
+same text at 20000 characters is 59970 bytes and is accepted. Ordinary
+(non-keepalive) saves of the same size succeed, so only the close-the-tab path is
+affected.
+
+### 41. The send button is pressable when there is nothing to send, and says nothing
+
+Both hand-off paths begin with a guard that returns without a word, and both carry
+a comment claiming the opposite. `AnnotatorBody.tsx:1250-1255`:
+
+> The only enforcement point: the toolbar buttons stay clickable so this guard is
+> what decides, not a disabled attribute that hides the reason.
+> ... `if (scope.length === 0 || size === null || size.height <= 0) return`
+
+and `pdf/document-save.ts:127-134` the same shape, with `context.fail(notReady)`
+covering only the `collect() === null` case. The guard decides, but it does not say
+why: the press is dropped before `setBusy` and before any status line, so the
+reader gets no busy state, no error, no line at all.
+
+The comment's premise is what fails. A *disabled* button with a tooltip would tell
+the reader something; a live button that does nothing tells them the button is
+broken. The dock marks send and compose with `disabled={props.busy}` only
+(`annotator/chrome.tsx:267-274`), so an empty surface offers both, fully lit.
+
+Reader impact: a reader who writes the figure-level note but draws no mark — or
+who clears the marks and expects the note to still travel — presses send, watches
+nothing happen, and presses again. Nothing is broken on disk; the annotation
+simply never leaves. `notReady` exists and is never reached on this path.
+
+Shown: an `AnnotatorBody` over a 200x100 SVG with one saved annotation rendered,
+send pressed on an empty surface — the button reports `disabled: false`, no
+`.da-status` element is ever created (`status === null` renders `null`), and the
+fetch stub records zero POSTs and the session stub zero prompts. The control
+(fresh surface, one arrow drawn, same press) also records zero POSTs in jsdom
+because the export path needs a raster the environment cannot produce; that half
+of the comparison is therefore **not** shown, and the claim above rests on the
+code paths, not on the control.
+
+### 42. The edit message tells the agent a copy is attached, whether or not it is
+
+`buildEditMessage` (`client/edit-message.ts:129-133`) writes, whenever more hunks
+were hidden than `MAX_DIFF_LINES` allows:
+
+> 另有 N 处改动未在本消息里展开，完整结果见随本消息发送的 `notes.md.edited.md`。
+
+That sentence is decided from `fitted.hidden > 0` alone. Whether a file part
+actually travels is decided later, by `attachFile` (`client/session.ts:157-186`),
+which silently declines in three cases — no upload service, a subagent
+continuation, and an upload the service refuses — and each time pushes only into
+`warnings`, the list the *reader* sees in the status line. The message body was
+already composed; nothing rewrites it.
+
+Reader impact: the agent is told to look for an attachment that is not in the
+message. Its instructions for the hidden hunks are unrecoverable — the diff in the
+message is capped, the copy it should have consulted never arrived, and the one
+place that knows this (the reader's status line) is not what the agent reads. The
+reader, meanwhile, has been told the work was sent.
+
+Shown: `deliverEdit` with `fileUpload: undefined` and an 80-hunk diff (800 lines,
+one change every 10, `coarse: false`, 36 hunks hidden). The message part list has
+no `file` part, the text contains `完整结果见随本消息发送的 notes.md.edited.md`,
+and the returned warnings are `["本次组合没有附件服务，编辑后的副本未随消息发送。"]`
+— which `MarkdownBody.tsx:188-191` renders to the reader only.
+
+The neighbouring case is the same shape and older: `deliverAnnotation`'s
+`buildAnnotationMessage` decides "the annotated image is attached" from
+`paths.reviewPath !== null` (`client/annotation-message.ts:75`), which is a
+statement about what the *Host wrote to disk*, not about what the session service
+accepted. Whether that one bites depends on the image part path, which the
+session takes unconditionally, so it is recorded here as the same mistake rather
+than as a separate finding.
 
 ## Fixed during the refactor
 
