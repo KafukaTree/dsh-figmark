@@ -12,8 +12,9 @@ not inferred from reading. Where one was *not* reproduced, it says so.
 
 The PDF and Markdown chains have their own file, `pdf-md-bugs.md` (12 entries);
 they are not repeated here. Between the two files, the high-severity findings
-cluster on one mistake: **switching documents does not reset the state that
-belonged to the old one.**
+cluster on two mistakes: **switching documents does not reset the state that
+belonged to the old one** (findings 19 and the PDF set), and **a per-mark
+gesture running the whole-figure path** (findings 13 and 15).
 
 ## Open
 
@@ -288,6 +289,199 @@ Shown: `composeReviewSvg` over one arrow (numbered 1) and one pin (numbered 2)
 emitted exactly one `<text>` node, containing `2`. The arrow's number reaches
 `markSvg` and is dropped there.
 
+### 13. Sending one comment from its pill destroys every other mark
+
+`run()` narrows what it *posts* when it is given a mark — `const scope = only ===
+undefined ? marks : [only]` (`AnnotatorBody.tsx:1254`) — but its tail is the
+whole-figure path: after a successful hand-off it calls `await discard()`
+(`:1286`, `:1303`), which issues `DELETE` on the sidecar, does `commit([])` and
+`writeSummary('')` (`:1222-1237`). So the other marks are removed from the
+surface *and* their sidecar is deleted, replaced by one holding only the mark
+that was sent and no summary at all.
+
+The comment pill's two buttons go to `run('agent', selected)` (`:1802-1803`).
+The toolbar's send is the whole-figure hand-off; the pill's is not, and the
+design note this feature came with says so: "the button sits beside one
+comment, so it means that comment. The bar keeps the whole-figure hand-off"
+(`docs/notes/implemented/2026-10-23-a-comment-on-the-spot.md:38-39`).
+
+Reader impact: draw three arrows, write a comment on one, press the pill's send
+— the other two arrows and the figure's own summary are gone, and the delete is
+on disk, so nothing brings them back. Severity: high; one click loses work the
+reader cannot recover.
+
+Shown: two arrows with a sentence each, the second one selected; pressing
+`.da-comment-send-primary` took the surface from two marks to zero, issued
+exactly one `DELETE`, posted `marks: ["第二条"]` only, and reported
+"已发送给智能体，标注已从面板清空".
+
+### 14. The comment pill's send always fails inside a PDF page
+
+A page body is mounted with `page={...}`, no `content`, and `onSend={run}` owned
+by `PdfBody`. The host-load effect returns early when `isPage`
+(`AnnotatorBody.tsx:643`), so `loaded` stays `null` and `buildDocument` returns
+`null` for the life of the body (`:1150`). `run` then throws
+`new Error(t('loadFailed'))` at `:1260` and reports it as a save failure
+(`:1305`). Nothing in `run` defers to `props.onSend`, and the pill is not gated
+the way the toolbar is — `chrome.tsx:264` hides the bar's two sends in a page
+body with no `onSend`.
+
+Reader impact: open a PDF, select a mark that carries a comment, press 发送给智能体
+in the pill: nothing is saved, nothing is sent, and a red line says
+`保存标注失败：读取附图失败` — blaming the figure, not the button. Every time, on the
+document type the pill was added for. Severity: high; a labelled primary button
+that can only fail.
+
+Shown: a page body with one commented mark in its draft. The pill rendered both
+buttons; pressing the primary one recorded `prompts = 0`, zero `POST`s and the
+status line above. The toolbar's send, via the same page body, is hidden.
+
+### 15. Clear on a paged document deletes the sidecar while other pages keep their marks
+
+`onClear` in a page body is `() => { void discard() }`
+(`AnnotatorBody.tsx:1785`). `discard` knows only `address`, which for a page
+body is the *document's* address, and its own draft: it deletes the document
+sidecar, `commit([])`s the page on screen, and blanks the document summary. It
+never consults `props.onDocumentRemove` for the other pages' marks, and
+`PdfBody`'s own `cleared` (`PdfBody.tsx:281`) — the callback that drops every
+page and bumps the generation — is never reached from here.
+
+Reader impact: in a document with marks on several pages, press clear from the
+list: the sidecar file is deleted, the page on screen empties, and the rows for
+the other pages stay — while the document's summary is blanked. The reader has
+no consistent account of what just happened, and the next autosave rewrites a
+sidecar holding the survivors under an empty summary. Severity: high; it damages
+a file and half-clears a document.
+
+Shown: a page body handed `documentMarks` of two marks and an `onDocumentRemove`
+recorder. Pressing clear issued one `DELETE`, left both list rows standing, and
+called `onDocumentRemove` not once.
+
+### 16. A stroke drawn before the sidecar read lands is thrown away
+
+The figure is drawable as soon as it decodes, which is independent of the
+annotation read. When that read resolves, `history.replace(result.annotation.marks)`
+(`AnnotatorBody.tsx:651`) overwrites `marks` wholesale. Anything drawn in the
+window between the two is replaced by whatever the read returned — silently, and
+without a step to walk back to, because `replaceMarks` changes the current marks
+and nothing else.
+
+Reader impact: on a slow disk the reader draws an arrow and it disappears a beat
+later, replaced by the saved annotation. Nothing was written and no message says
+the stroke was dropped. Severity: medium; the loss is one gesture, but the
+reader watches it happen and cannot tell why.
+
+Shown: a deferred read; one arrow drawn (surface held mark `mmvsh8w4w-1`); then
+the read answered with a saved document — the surface held `old` and the drawn
+arrow was gone.
+
+### 17. Redo survives an edit to a comment, so a redo throws the sentence away
+
+`amend` applies the typing without recording a step — by design — but it also
+leaves the redo trail alone: `{...history, marks: update(history.marks)}`
+(`annotator/history.ts:152-154`). Every other mutation that changes `marks` goes
+through `commitMarks`, which sets `future: []` (`:60-66`). So after an undo
+followed by typing, `future[0]` is still a snapshot of `marks` taken *before*
+the sentence existed, and one redo restores it.
+
+Typing reaches this path from `setMarkDetail` (`AnnotatorBody.tsx:944`).
+
+Reader impact: undo once, type a sentence into the mark that is left, then press
+redo (or ⌘⇧Z): the sentence disappears and there is no redo left to bring it
+back. Severity: medium; it is the reader's own words, lost by an unrelated key.
+
+Shown: draw two arrows with a sentence each, ⌘Z (two marks → one), select the
+survivor, type `改过的说明` (present in the DOM), ⌘⇧Z — the sentence is gone and
+the mark count is back to two.
+
+### 18. An error line stays on screen after the condition clears
+
+`status` is only ever assigned a message: twelve `setStatus` calls in
+`AnnotatorBody.tsx`, and no `setStatus(null)` anywhere. The line is rendered
+whenever it is non-null (`:1685`). A failed debounced write reports at `:1206`;
+a later successful write of the same annotation reports nothing, because there
+is nothing to report, and leaves the red text in place.
+
+Reader impact: a save fails once — disk full, a host hiccup — and the next one
+succeeds silently while the panel still reads `保存标注失败：磁盘满了`. The reader
+either redoes the work or gives up on the annotation, believing it is not being
+saved. Severity: medium; the panel states something false about the reader's
+own data.
+
+Shown: the first autosave `POST` answered `{ok: false, error: '磁盘满了'}`, a
+second edit produced a second, successful `POST`, and the status line still read
+`磁盘满了`.
+
+### 19. Opening a second figure keeps the first figure's marks
+
+The load effect is keyed on `address` (`AnnotatorBody.tsx:667`), so it is
+written to run again for a new figure — but its `if (result.annotation !== null)`
+branch (`:652`) has no `else`, and `marks`, `summary`, `createdAt` and `stale`
+all keep the previous document's values when the new one has no sidecar. The
+autosave write then builds a document from those marks under the *new* address.
+
+Reader impact: open figure A (annotated), then figure B (never annotated): B
+shows A's mark with A's sentence, and one stroke writes a sidecar under B's name
+carrying A's mark, A's summary and A's `createdAt`. Severity: medium; the wrong
+annotation lands on the wrong picture.
+
+Inferred, not driven on a live shell: re-rendering the same root with a new
+`resourceAddress` — which the effect's dependency list anticipates — reproduces
+it. Whether the sidebar re-uses one body instance for a new document instead of
+remounting it decides whether a reader can reach it; the shape is the same as
+the known PDF document-switch fault, at a third site.
+
+### 20. Deleting another page's mark cannot be undone
+
+A mark that belongs to another page is removed through the owner:
+`props.onDocumentRemove(id)` and a return, with no `commit`
+(`AnnotatorBody.tsx:927-930`). The owner's `removeAnyMark` is
+`setMarks(current => withoutMark(current, id))` (`PdfBody.tsx:229-231`) — plain
+state, outside the page body's history, which only covers the page it shows.
+
+Reader impact: in a PDF's document-wide list, rows for other pages carry the
+same ✕ as the current page's. Deleting one is permanent while deleting a row
+from the current page is undoable — the same gesture, opposite consequences, and
+no cue which is which. Severity: medium; silent, unrecoverable loss of one mark.
+
+Inferred from the code path; the probe showed the undo button staying disabled
+after a foreign row was removed and enabling after an own one.
+
+### 21. The selected element mark is never lit harder when the body owns its selection
+
+`litSpots` passes `props.selectedId` into `collectLitSpots`
+(`AnnotatorBody.tsx:1500`), where the selection test is `input.selectedId ===
+mark.id` (`annotator/spotlights.ts:45`). But the resolved selection is
+`props.selectedId ?? ownSelectedId` (`:268`): a body with no owner — the
+image, SVG and HTML bodies register no `selectedId` — always hands over
+`undefined`, so `selected` is always false. The memo's dependencies
+(`[findElement, marks, props.selectedId]`) omit the body-owned selection too, so
+it is not even recomputed when it changes.
+
+Reader impact: selecting an element mark from the list lights the element but
+never with the stronger ring that tells "the one you picked" from "the one the
+picker is hovering", so in a figure with several marked elements the two states
+look the same. Severity: low; an emphasis that is simply never applied.
+
+Shown: an uncontrolled body with one element mark — `da-spot` on the element,
+`da-spot-selected` never, both before and after selecting its row (whose
+`data-selected` was true).
+
+### 22. A drag that ends where it started records an undo step that changes nothing
+
+`patchChangesNothing` compares `mark[key] === patch[key]` for each key
+(`annotator/mark-edits.ts:26`). Every patch field is a primitive except `points`,
+which a geometry gesture always hands over as a fresh array — so an identical
+geometry compares unequal.
+
+Reader impact: nudge a mark and put it back, then press undo: the first press
+pops a step that changes nothing visible, so the reader presses again and jumps
+back two edits instead of one. Severity: low; a confusing first undo.
+
+Shown at the predicate: an identical `points` array is reported as a change
+(`patchChangesNothing` → false), which is exactly what its own header says it
+avoids — see the comment drift below.
+
 ## Fixed during the refactor
 
 None yet: a fix would be a behaviour change, which is what this refactor exists
@@ -343,11 +537,41 @@ Recorded so the next reader does not re-investigate them.
   and skips when the signature is unchanged, so the loser writes identical bytes.
   Two *panels* saving is last-writer-wins; each write is atomic, so the file is
   never torn.
+- **`DEPTH = 50` on every path that can grow a stack.** `commitMarks` trims
+  `past`, `undoStep` caps `future`, `redoStep` trims `past` again
+  (`annotator/history.ts:60-66, 89-97, 104-112`), and each returns the same
+  value when there is no step, so a spurious render cannot grow either stack.
+- **The autosave signature guard.** Loading schedules no write, a re-render with
+  unchanged marks schedules none, and empty marks plus an empty summary writes a
+  delete rather than an empty sidecar.
+- **The keyboard guard.** Backspace, Escape and ⌘Z inside a `TEXTAREA`/`INPUT`
+  leave the marks alone (`AnnotatorBody.tsx:1102-1136`).
+- **The weight rail on an element mark.** It stands down, and asking for the
+  weight a mark already wears records no step.
+- **`collectLitSpots` rebuilding and deduping by selector.** A mark that outlives
+  the element it names goes dark instead of lighting a stale one.
 - **`handleAt`'s comment contradicting its tie-break.** The comment says a corner
   beats the edge handle it shares a position with, but `distance <= bestDistance`
   lets the later handle win, so an edge would beat a corner. The two never
   coincide geometrically, so nothing observable changes; only the comment is
   wrong.
+
+## Wording that no longer matches the code
+
+Found while auditing the same files; none of them changes what the plugin does.
+
+- **`src/client/preferences.ts:45-55`** — `DrawingPreferences`'s JSDoc documents a
+  `mode` field ("how a paged document is read") that the interface does not
+  declare, directly above the closing brace.
+- **`src/client/annotator/mark-edits.ts:7-11`** — the header promises a field-by-field
+  compare so a reference compare cannot "record an undo step that undoes
+  nothing"; `points` *is* compared by reference and does exactly that (finding 22).
+- **`src/client/AnnotatorBody.tsx:1250-1253`** — "the only enforcement point" is true
+  of the toolbar's send; the comment pill reaches `run` as well, which is finding 14.
+- **`docs/notes/implemented/2026-10-23-a-comment-on-the-spot.md:60`** — "the field
+  still stops at 500 characters in the message"; no 500-character cap exists in
+  `src/`, and `src/shared/mark-summary.ts:214-218` writes the detail whole. Related
+  to known finding 7, which is about the 4 MiB read limit rather than a cap.
 
 ## On the ignore comments the split added
 
