@@ -12,9 +12,11 @@ not inferred from reading. Where one was *not* reproduced, it says so.
 
 The PDF and Markdown chains have their own file, `pdf-md-bugs.md` (12 entries);
 they are not repeated here. Between the two files, the high-severity findings
-cluster on two mistakes: **switching documents does not reset the state that
-belonged to the old one** (findings 19 and the PDF set), and **a per-mark
-gesture running the whole-figure path** (findings 13 and 15).
+cluster on three mistakes: **switching documents does not reset the state that
+belonged to the old one** (finding 19 and the PDF set), **a per-mark gesture
+running the whole-figure path** (findings 13, 15, 23), and **saving before the
+target has agreed to take the save** (findings 24, and the delivery half of
+finding 1).
 
 ## Open
 
@@ -482,6 +484,95 @@ Shown at the predicate: an identical `points` array is reported as a change
 (`patchChangesNothing` → false), which is exactly what its own header says it
 avoids — see the comment drift below.
 
+### 23. The delivered picture carries marks that were not sent
+
+`exportPng` composes from every mark on the surface — `composeReviewSvg(target,
+marks)` (`AnnotatorBody.tsx:1143`), with `marks` in the memo's dependencies — but
+`run()` narrows what it *posts* to the delivered scope: `const scope = only ===
+undefined ? marks : [only]` (`:1254`), and `exportPng` is called at `:1264` with
+no scope at all. So a pill send rasterizes a picture of the whole figure and
+ships it beside a message that names one mark.
+
+The numbers disagree too. `composeReviewSvg` numbers by array index
+(`export.ts:137`), while the message describes the posted scope in `buildDocument`
+— so on a mixed figure the reader reads "① 箭头 …" and the picture paints **2**
+on the pin they actually sent.
+
+Reader impact: the agent is handed a picture as the record of what the reader
+sent, and that record contains marks the reader deliberately left behind — with
+numbering that contradicts the prose beside it. Severity: high; the agent acts on
+marks nobody sent.
+
+Shown: two arrows on the sidecar, the second one selected, pill send pressed. The
+`POST` carried `marks: ["m2"]` only; the captured review SVG still carried both
+shafts (`M 10 10 …` unsent and `M 60 60 …` sent) and the message's only marker was
+`①` while the picture painted no number for either. Same defect from the other
+side: an unscoped figure where only the pin is sent, message `①`, picture `2`.
+
+### 24. A refused hand-off writes the truncated sidecar before it validates the target
+
+`run()` saves first and asks permission afterwards: `await saveAnnotation(address,
+document_, review)` is at `:1265`, and the three guards that can refuse the
+hand-off — no session in the address (`:1272`), no conversation (`:1276`), no
+sessions service (`:1289`) — all come after it. When one throws, the catch at
+`:1305` only sets a status line: the one-mark document is already on disk,
+`discard()` never runs, and the screen still shows every mark.
+
+Reader impact: on a figure with several marks, press a send that cannot be
+delivered. The status says the *save* failed, the screen looks untouched — and
+the file now holds one mark and no summary. Reopening the figure shows what the
+failed send quietly kept. Severity: high; the reader loses marks to an operation
+they were told did not happen.
+
+Shown: a sidecar with two marks and the summary `改标号`, mounted without
+`sessions`. Pressing the pill's send issued one `POST` whose body held 1 mark —
+while the screen still showed 2 — and no `DELETE` at all, with the status
+`保存标注失败：the sessions service is unavailable`.
+
+The summary survives this particular path (the posted document is built with the
+surface's current summary, only the *marks* are narrowed), so the file keeps two
+things that disagree: one mark where the screen shows two. An auditor's probe
+reported the summary as lost as well; re-driven here, it was still `改标号` in the
+posted body, so that part is not recorded.
+
+Second mechanism, same tail: with the `POST` held open, a mark drawn while it is
+in flight is destroyed when `discard()` finally runs — `before: 1, during: 1,
+drawn: 2, after: 0`. Reproduced on the toolbar's whole-figure send too, so this is
+not finding 13's pill-only path: any send wipes what was drawn during it.
+
+### 25. Deleting one mark clears the selection the reader was typing into
+
+`removeMark` deselects through `setSelectedId(current => (current === id ? null :
+current))` (`AnnotatorBody.tsx:932`), but `setSelectedId` is not a real updater:
+it evaluates `next(selectedId)` against the `selectedId` captured when it was
+built (`:269-273`). `removeMark`'s dependency list (`:933`) omits `setSelectedId`,
+so a `removeMark` built during an earlier render keeps a stale closure over the
+selection from that render.
+
+Reader impact: select a mark, open its comment card, then press ✕ on a *different*
+row to prune the list. That row goes, and the card the reader was typing into
+closes. Severity: medium; the reader loses their place for an edit they did not
+make.
+
+Shown: two marks, row 1 selected (`data-selected` `["true","false"]`, card open);
+clicking row 2's ✕ left `["false"]` and no `.da-float-detail`. Control: typing one
+character first (which commits and rebuilds `removeMark`) leaves `["true"]` and
+the card open — so it is the stale closure, not a deliberate deselect.
+
+### 26. Error text reaches the reader untranslated
+
+`failureStatus` concatenates the caught message onto a translated prefix, and
+three of the messages it can catch are English literals: `composer.ts:94`
+`the session has no composer to write into`, `composer.ts:99` `the composer
+refused the attachments`, and the guards at `AnnotatorBody.tsx:1272/1276/1289`.
+
+Reader impact: a Chinese panel reports `保存标注失败：the sessions service is
+unavailable` — half a sentence the reader can act on, half a stack-trace phrase
+they cannot. Severity: low; the panel is honest but unreadable at the moment it
+matters.
+
+Shown: the literal status text above, from finding 24's probe.
+
 ## Fixed during the refactor
 
 None yet: a fix would be a behaviour change, which is what this refactor exists
@@ -544,6 +635,14 @@ Recorded so the next reader does not re-investigate them.
 - **The autosave signature guard.** Loading schedules no write, a re-render with
   unchanged marks schedules none, and empty marks plus an empty summary writes a
   delete rather than an empty sidecar.
+- **Numbering across pages and a scoped send.** `numberingOf` numbers the whole
+  document by page then draw order, and a scoped send passes the document's
+  numbering into `buildDocument`, so the prose keeps one set of numbers. (The
+  *picture* does not — that is finding 23.)
+- **Mark identity across a reload.** Marks are read verbatim from the sidecar and
+  never re-keyed; `canvas/ids.ts` mints ids only for new marks.
+- **The autosave signature baseline.** The first effect run after a load records
+  the signature and schedules nothing, so opening a figure is not written back.
 - **The keyboard guard.** Backspace, Escape and ⌘Z inside a `TEXTAREA`/`INPUT`
   leave the marks alone (`AnnotatorBody.tsx:1102-1136`).
 - **The weight rail on an element mark.** It stands down, and asking for the
@@ -560,6 +659,19 @@ Recorded so the next reader does not re-investigate them.
 
 Found while auditing the same files; none of them changes what the plugin does.
 
+- **`src/client/AnnotatorBody.tsx:1031-1046`** — two orphaned JSDoc blocks with no
+  declaration beneath them; they document `chooseColor`/`repaintSelected`, which
+  live at `:1593-1611` undocumented.
+- **`src/client/AnnotatorBody.tsx:1754-1767`** — the same two comment blocks
+  appear twice verbatim; the second pair is dead.
+- **`src/client/AnnotatorBody.tsx:655-657`** — the load effect's comment explains
+  that "the saved document's number style describes the picture on screen". No
+  field on the annotation schema holds a number style; `numberStyle` does not
+  exist anywhere in `src/`.
+- **`src/client/annotator-contract.ts:187-190`** — declares `mode` and
+  `onModeChange`; `pdf/PdfBody.tsx` owns and passes them, `AnnotatorBody` reads
+  neither (zero grep hits), and its own docstring at `:216-218` states "There is
+  no viewing mode". A dead contract kept alive by one supplier.
 - **`src/client/preferences.ts:45-55`** — `DrawingPreferences`'s JSDoc documents a
   `mode` field ("how a paged document is read") that the interface does not
   declare, directly above the closing brace.
