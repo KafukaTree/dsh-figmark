@@ -245,15 +245,25 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
    leave a drag free to move the view: under a drawing tool the same drag draws. */
 .da-stage[data-hand="true"]{cursor:grab}
 /* A drag that has started is a hand closed on the table: the cursor is how the
-   reader knows the gesture took, without moving the picture first. */
-.da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing}
+   reader knows the gesture took, without moving the picture first. Every descendant
+   too, and not just the stage, because the overlay covers the figure and would
+   otherwise keep saying what it said before the press. */
+.da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
 /* The rendered document takes the figure's place; the overlay above it owns every
    pointer event, which is also what keeps a link inside it from navigating. */
 .da-html{display:block;border:0;background:#fff;pointer-events:none}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-mode="view"]{pointer-events:none}
-.da-overlay[data-tool="select"]{cursor:default}
-.da-overlay:not([data-tool="select"]){cursor:crosshair}
+.da-overlay[data-tool="select"]{cursor:inherit}
+.da-overlay:not([data-tool="select"]):not([data-tool="element"]){cursor:crosshair}
+.da-overlay[data-tool="element"]{cursor:pointer}
+/* The element a click would take, or already names, lit in its own shape rather than
+   boxed. A drop shadow follows whatever the element paints — a stroked curve, filled
+   glyphs, a patch — so one rule lights every kind of artist the figure can hold. The
+   rule itself is written by spotlight.ts and injected from there, because the same
+   text has to go into a rendered document's own stylesheet and into the exported
+   picture; keeping a second copy here would be a third place for it to drift.
+*/
 .da-page{font-size:12px;min-width:44px;text-align:center;color:var(--dsw-alias-label-secondary,inherit)}
 /* The document's toolbar sits above the page body, so the pane is one column of
    definite height and the body takes what is left of it. */

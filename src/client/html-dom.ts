@@ -14,6 +14,8 @@
  * @module dsh-figmark/client/html-dom
  */
 import type { MarkAnchor } from '../shared/annotation'
+import { depthBelow, selectorFor } from './dom-path'
+import { isPaper, pickStack } from './pick'
 
 /**
  * Width every document is rendered at, in figure pixels.
@@ -88,61 +90,27 @@ export function loadFrameDocument(frame: HTMLIFrameElement | null, source: strin
   return frameDocument.documentElement
 }
 
-/** How deep an element sits below the document body. */
-function depthBelow(element: Element, body: Element): number {
-  let depth = 0
-  for (let node = element.parentElement; node !== null && node !== body; node = node.parentElement) depth += 1
-  return depth
-}
-
 /** Whether an element is an anonymous inline wrapper: it names no anchor of its own. */
 function isAnonymousWrapper(element: Element): boolean {
   return element.id === '' && WRAPPER_TAGS.includes(element.tagName.toLowerCase())
 }
 
 /**
- * One element's path from the document body.
- *
- * Every step is exact for the document it was read from: a step is the element's
- * own `#id` where it has one, and its position among same-name siblings
- * otherwise. The walk stops at the body — and says so — unless an `#id` made the
- * tail self-rooted: a bare `p:nth-of-type(1)` is body-relative but reads as
- * document-wide, which in a document with nested paragraphs names the wrong
- * element. `body > p:nth-of-type(1)` can be pasted into a query as it stands.
- */
-function selectorFor(element: Element, body: Element): string {
-  const segments: string[] = []
-  let rooted = false
-  for (let current: Element | null = element; current !== null && current !== body; current = current.parentElement) {
-    if (current.id !== '') {
-      segments.unshift(`#${current.id}`)
-      rooted = true
-      break
-    }
-    const tag = current.tagName
-    let position = 1
-    for (let sibling = current.previousElementSibling; sibling !== null; sibling = sibling.previousElementSibling) {
-      if (sibling.tagName === tag) position += 1
-    }
-    segments.unshift(`${tag.toLowerCase()}:nth-of-type(${position})`)
-  }
-  if (!rooted) segments.unshift('body')
-  return segments.join(' > ')
-}
-
-/**
  * Describe the element under one point of a rendered document.
  *
- * Every candidate's own box is tested rather than asking the browser what is
- * under the pointer: the frame's document is inert, and a walk over it answers
- * the same way whether an element is filled or not. Only elements with a box can
- * be named at all — that is what rules out the markup that is never painted.
+ * The browser answers which element covers the point, because only it knows the
+ * painted geometry: a paragraph whose text stops halfway through its box covers only
+ * that half, and a table cell covers its cell rather than the whole row. Measuring
+ * boxes instead would name whichever box happened to be smallest, which on a
+ * document is usually the innermost wrapper around the text rather than the block the
+ * reader sees highlighted.
  *
- * The smallest box containing the point wins, ties going to the deeper element.
- * An anonymous inline wrapper does not count as a name — a mark on the `<b>`
- * inside a heading points at that heading — so wrappers are held back as a
- * fallback for the one case they are all a point has: text a document leaves
- * directly in the body.
+ * Two elements are withheld from the answer. The document's own background covers the
+ * whole rendered width, so naming it would mean "the page" for a click on blank paper
+ * — a mark around everything says nothing about any part of it. And an anonymous
+ * inline wrapper (`<span>`, `<b>`) names nothing a source reader can act on, so it is
+ * only used when it is the last thing there is: text a document leaves directly in the
+ * body has nothing else to name.
  *
  * @param document - the frame's document, or nothing when the frame is gone.
  * @param x - point x in figure pixels.
@@ -152,6 +120,40 @@ function selectorFor(element: Element, body: Element): string {
 export function anchorInDocument(document: Document | null | undefined, x: number, y: number): MarkAnchor | undefined {
   const body = document?.body
   if (body === null || body === undefined) return undefined
+  const frame = body.getBoundingClientRect()
+  const stack = pickStack(document, x, y)
+  if (stack === null) return measureInDocument(body, x, y)
+  let wrapper: Element | undefined
+  for (const element of stack) {
+    if (!body.contains(element) || element === body) continue
+    if (isPaper(element, frame)) continue
+    if (isAnonymousWrapper(element)) {
+      wrapper ??= element
+      continue
+    }
+    return describeInDocument(element, body)
+  }
+  return wrapper === undefined ? undefined : describeInDocument(wrapper, body)
+}
+
+/**
+ * The smallest box containing the point, for a document that cannot be asked.
+ *
+ * This is what answers when the engine has no hit testing — a document parsed by a
+ * test double. The smallest containing box is the honest rule available there, but it
+ * cannot tell that a paragraph's text stops halfway through its box, so the browser's
+ * own answer is used whenever it exists and this never runs in the panel.
+ *
+ * The smallest box wins, ties going to the deeper element. An anonymous inline wrapper
+ * does not count as a name — a mark on the `<b>` inside a heading points at that
+ * heading — so wrappers are held back as a fallback for the one case they are all a
+ * point has: text a document leaves directly in the body.
+ * @param body - the document body the point is on.
+ * @param x - point x in figure pixels.
+ * @param y - point y in figure pixels.
+ * @returns the element, or undefined when no box contains the point.
+ */
+function measureInDocument(body: Element, x: number, y: number): MarkAnchor | undefined {
   let named: Element | undefined
   let namedArea = Number.POSITIVE_INFINITY
   let namedDepth = -1
@@ -179,10 +181,20 @@ export function anchorInDocument(document: Document | null | undefined, x: numbe
     }
   }
   const described = named ?? wrapper
-  if (described === undefined) return undefined
+  return described === undefined ? undefined : describeInDocument(described, body)
+}
+
+/**
+ * One element of a rendered document, written as the anchor a mark carries.
+ *
+ * @param described - the element to name.
+ * @param body - the document body the selector is rooted at.
+ * @returns the anchor.
+ */
+function describeInDocument(described: Element, body: Element): MarkAnchor {
   const rect = described.getBoundingClientRect()
-  // `Element.textContent` is `string | null` in the DOM types, but only a
-  // Document or a Doctype can report null; an element always reports its text.
+  // `Element.textContent` is `string | null` in the DOM types, but only a Document or
+  // a Doctype can report null; an element always reports its text.
   const rawText = described.textContent as string
   const text = rawText.trim().replace(/\s+/g, ' ').slice(0, ANCHOR_TEXT_LIMIT)
   return {

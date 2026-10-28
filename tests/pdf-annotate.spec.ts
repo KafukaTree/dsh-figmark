@@ -309,6 +309,20 @@ describe('marks a reader has to cope with', () => {  it('writes a half-drawn sha
     expect(read.map(annotation => annotation.appearance)).toEqual([false, false, false])
   })
 
+  it('writes an element mark as the box it was selected in', async () => {
+    // A stray `element` mark on a page with no DOM to name is still a place and a
+    // box, so it is written as the one box annotation type that says "this region".
+    const annotated = await annotatePdf(await sourceBytes(), [{
+      page: 1,
+      transform: FLAT,
+      marks: [{ id: 'el', kind: 'element', color: '#1971c2', points: [[100, 200], [300, 260]], detail: 'this bar', page: 1 }],
+    }])
+    const read = await readAnnotations(annotated, 1)
+    expect(read.map(annotation => annotation.subtype)).toEqual(['Square'])
+    expect(read[0]?.contents).toBe('this bar')
+    expect(await appearanceContent(annotated, 1, 0)).toContain('RG')
+  })
+
   it('refuses a mark with no coordinates at all', async () => {
     await expect(annotatePdf(await sourceBytes(), [{
       page: 1,

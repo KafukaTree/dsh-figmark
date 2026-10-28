@@ -42,6 +42,7 @@ import {
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
 import { draggedMarks } from './mark-geometry'
+import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
 import { PINCH_SETTLE_DELAY_MS, anchoredScroll, clampZoom, wheelZoomFactor } from './zoom'
@@ -135,7 +136,20 @@ const TOOLS: readonly { readonly tool: Tool; readonly label: string }[] = [
   { tool: 'ellipse', label: 'toolEllipse' },
   { tool: 'pen', label: 'toolPen' },
   { tool: 'point', label: 'toolPoint' },
+  { tool: 'element', label: 'toolElement' },
 ]
+
+/**
+ * The tools that only mean something on a surface made of elements.
+ *
+ * An inline SVG and a rendered HTML document are both trees, so a picker can name a
+ * node in either one. A raster figure is one bitmap: there is nothing inside it to
+ * point at, so the tool would sit in the row offering a gesture that could only ever
+ * answer "no element here". It is left out there rather than shown and refused —
+ * but it is kept in {@link TOOLS} for both surfaces that can use it, because a tool
+ * that appears and disappears with media type has to be one list, not two.
+ */
+const ELEMENT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['element'])
 
 /**
  * The tools that draw something with a size the rail can set.
@@ -153,6 +167,7 @@ const TOOL_COPY: Record<AnnotationMark['kind'], string> = {
   ellipse: 'toolEllipse',
   pen: 'toolPen',
   point: 'toolPoint',
+  element: 'toolElement',
 }
 
 /**
@@ -188,38 +203,63 @@ function GripDots({ wide }: { readonly wide: boolean }): ReactNode {
 }
 
 /**
- * The select tool: a cursor, outlined rather than filled.
+ * The select tool: an open hand.
+ *
+ * The hand is what the tool *is* — dragging with it moves the paper, and the stage's
+ * own cursor already says `grab` while it is armed. A cursor arrow here said the
+ * opposite thing: an arrow is the pointer a marking tool wears, and `element` wears
+ * one, so the two tiles looked like the same tool.
+ *
+ * The shape is Tabler's `hand-stop`, taken whole at its own 24 grid: five fingers drawn
+ * as five strokes would be a smudge at 17px, and this one's palm-and-thumb silhouette
+ * survives the size.
+ */
+function GrabIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d={'M8 13v-7.5a1.5 1.5 0 0 1 3 0v6.5'} />
+      <path d={'M11 5.5v-2a1.5 1.5 0 1 1 3 0v8.5'} />
+      <path d={'M14 5.5a1.5 1.5 0 1 1 3 0v6.5'} />
+      <path d={'M17 7.5a1.5 1.5 0 1 1 3 0v8.5a6 6 0 0 1 -6 6h-2h.208a6 6 0 0 1 '
+        + '-5.012 -2.7a69.74 69.74 0 0 1 -.196 -.3c-.312 -.479 -1.407 -2.388 '
+        + '-3.286 -5.728a1.5 1.5 0 0 1 .536 -2.022a1.867 1.867 0 0 1 2.28 .28l1.47 1.47'} />
+    </svg>
+  )
+}
+
+/**
+ * The element tool: a cursor, outlined rather than filled.
+ *
+ * It is the arrow the whole panel used to wear for `select`, moved to the tool that
+ * actually behaves like a pointer: `element` asks what is under the cursor and takes the
+ * thing it is over. Where `select` got it, it named a tool that does not point at
+ * anything — it drags the paper.
  *
  * Filled, it read as a black blob against the dark chip — the silhouette was there but
  * the direction it points was not, which is the only thing a cursor has to say. As an
- * outline it belongs to the same stroke set as the other five glyphs.
+ * outline it belongs to the same stroke set as the other glyphs.
  *
  * The shape is Tabler's `cursor-text`-sibling `pointer` glyph, taken whole at its own
  * 24 grid: its body is one closed curve with round joins rather than the seven hard
  * corners a hand-traced outline has, and at 16px that softness is the whole difference
  * between a cursor and a shard. Scaled by hand it lost exactly that.
  */
-function PointerIcon(): ReactNode {
-  return (
-    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d={'M14.185 13.14l5.644 -2.202c1.625 -.634 1.538 -2.962 -.13 -3.473'
-        + 'l-14.319 -4.382c-1.41 -.431 -2.73 .888 -2.298 2.298l4.382 14.318'
-        + 'c.51 1.668 2.84 1.755 3.473 .13l2.202 -5.644a1.84 1.84 0 0 1 1.045 -1.045'} />
-    </svg>
-  )
-}
+const POINTER_PATH = 'M15.02 14.03l4.74 -1.85c1.36 -.53 1.29 -2.49 -.11 -2.92l-12.03 -3.68'
+  + 'c-1.18 -.36 -2.29 .75 -1.93 1.93l3.68 12.03c.43 1.4 2.39 1.47 2.92 .11'
+  + 'l1.85 -4.74a1.55 1.55 0 0 1 .88 -.88'
 
 /**
  * The stroke each marking tool draws, so the row says it in pictures as well as words.
  *
- * Every icon in the row is drawn on the same 24-unit grid as {@link PointerIcon}. That
- * is not cosmetic: `stroke-width` in an inline SVG is measured in the icon's own units,
- * so a 16-unit icon and a 24-unit icon given the same number draw at different
- * thicknesses. On one grid they cannot drift, and the six read as one set.
+ * Every icon in the row is drawn on the same 24-unit grid. That is not cosmetic:
+ * `stroke-width` in an inline SVG is measured in the icon's own units, so a 16-unit
+ * icon and a 24-unit icon given the same number draw at different thicknesses. On one
+ * grid they cannot drift, and the whole row reads as one set.
  *
- * `select` is not a marking tool and never comes here: it draws nothing, so it
- * wears the pointer instead.
+ * `select` never comes here: it draws nothing, so it wears the open hand. `element` does
+ * come here, because a mark that is an element is drawn as the box around it, and the
+ * arrow beside it says the tool picks rather than draws.
  */
 function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
   const shape = tool === 'arrow'
@@ -230,19 +270,24 @@ function ToolIcon(tool: Exclude<Tool, 'select'>): ReactNode {
         ? <circle cx="12" cy="12" r="8.2" />
         : tool === 'pen'
           ? <path d="M 4 18 C 7 6 12 20 20 5" />
-          // The point tool wears the mark it places: a filled drop with a hole where
-          // the number goes, and a dot inside it. The hole is a second subpath cut out
-          // with evenodd; the dot is a separate circle rather than a third subpath,
-          // because evenodd would cut that hole back open.
-          : (
-            <>
-              <path fillRule="evenodd"
-                d="M 12 22.4 Q 4.9 15.1 4.1 10.16 A 7.9 7.9 0 1 1 19.9 10.16 Q 19.1 15.1 12 22.4 Z
-                   M 12 16.02 A 5.62 5.62 0 1 0 12 4.78 A 5.62 5.62 0 1 0 12 16.02 Z"
-                fill="currentColor" stroke="none" />
-              <circle cx="12" cy="10.4" r="2" fill="currentColor" stroke="none" />
-            </>
-          )
+          // The element tool points at what it takes, so it wears the arrow; the same
+          // path the `select` tile used to wear, from one constant so the two can never
+          // drift apart again.
+          : tool === 'element'
+            ? <path d={POINTER_PATH} />
+            // The point tool wears the mark it places: a filled drop with a hole where
+            // the number goes, and a dot inside it. The hole is a second subpath cut out
+            // with evenodd; the dot is a separate circle rather than a third subpath,
+            // because evenodd would cut that hole back open.
+            : (
+              <>
+                <path fillRule="evenodd"
+                  d="M 12 22.4 Q 4.9 15.1 4.1 10.16 A 7.9 7.9 0 1 1 19.9 10.16 Q 19.1 15.1 12 22.4 Z
+                     M 12 16.02 A 5.62 5.62 0 1 0 12 4.78 A 5.62 5.62 0 1 0 12 16.02 Z"
+                  fill="currentColor" stroke="none" />
+                <circle cx="12" cy="10.4" r="2" fill="currentColor" stroke="none" />
+              </>
+            )
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{shape}</svg>
   )
@@ -388,6 +433,29 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const paperRef = useRef<HTMLDivElement | null>(null)
   const figureRef = useRef<HTMLDivElement | null>(null)
+  /**
+   * The elements this body is currently lighting, if any.
+   *
+   * A ref rather than state: the light is a class on figure elements, which React does
+   * not render, and putting it in state would re-render every mark on the figure to say
+   * where the pointer is. It only ever holds what this body put the class on, so the
+   * light is taken off exactly the elements it was put on.
+   *
+   * Two kinds of light share this list: the preview the picker shines on the element a
+   * click would take, and the light an element *mark* keeps for as long as it is on the
+   * figure. The preview is derived fresh on each move; the marks' lights are rebuilt
+   * from the annotation whenever it changes.
+   */
+  const litRef = useRef<readonly LitSpot[]>([])
+  /**
+   * The element the picker is offering right now, if any.
+   *
+   * Held beside `litRef` because the two answer different questions: this one is what
+   * the pointer is over, and `litRef` is everything currently wearing the light —
+   * which includes every element mark on the figure. Rebuilding the whole list on each
+   * pointer move needs to know what the preview was, and this is it.
+   */
+  const hovered = useRef<MarkAnchor | undefined>(undefined)
 
   /**
    * Hand the stage to the owner as its scrollport, and keep it here too.
@@ -530,14 +598,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const writeSummary = props.onSummaryChange ?? setOwnSummary
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
-  /**
-   * How large the numbers are drawn, and whether they are drawn at all.
-   *
-   * A property of the drawing rather than of one mark: the numbers have to read as
-   * one set, so the whole figure shares one size. It is saved with the marks because
-   * the delivered picture is the one the agent reads — a size the reader chose but
-   * the export ignored would be a control that does nothing.
-   */
   /**
    * Which popover is showing, if any.
    *
@@ -1753,6 +1813,118 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     [],
   )
 
+  /**
+   * Light the element a click would take, in the figure's own shapes.
+   *
+   * The picker says which element by name — the selector the anchor already carries —
+   * and this turns that name back into the element, in whichever document the figure's
+   * elements live. An inline SVG's are in this panel's document, rooted at the host
+   * the markup was injected into; a rendered document's are inside its frame, where
+   * the rule for the light has to be written into the figure's own stylesheet first,
+   * because that document's policy keeps the panel's stylesheet out.
+   *
+   * `undefined` puts the light out, which is what leaving the figure and putting the
+   * picker away both mean.
+   */
+  /**
+   * The element a selector names, in whichever document the figure's elements live.
+   *
+   * An inline SVG's elements are in this panel's document, rooted at the host the
+   * markup was injected into; a rendered document's are inside its frame, where the
+   * rule for the light has to be written into the figure's own stylesheet first,
+   * because that document's policy keeps the panel's stylesheet out.
+   *
+   * @param selector - the element's name, as an anchor spells it.
+   * @returns the element, or undefined when the figure no longer has one by that name.
+   */
+  const findElement = useCallback((selector: string): Element | undefined => {
+    // Whichever document the figure's elements are in. A ref that is still empty means
+    // nothing has mounted yet, which is not an error: there is no element to light, and
+    // the effect that runs once the figure arrives asks again.
+    /* v8 ignore start -- a body only asks once its figure has mounted, so neither ref is empty here. */
+    if (isHtml) {
+      const doc = frameRef.current?.contentDocument ?? null
+      if (doc === null) return undefined
+      ensureSpotlight(doc)
+      return elementAt({ root: doc, selector })
+    }
+    const host = figureHostRef.current
+    return host === null ? undefined : elementAt({ root: host, selector })
+    /* v8 ignore stop */
+  }, [isHtml])
+
+  /**
+   * Every element the figure should be lit on right now.
+   *
+   * Two things are lit, and they are different kinds of statement: an element *mark*
+   * keeps its light for as long as the mark exists — that is how a placed element is
+   * drawn at all, since it has no path of its own — and the picker's preview lights
+   * whatever a click would take, on top of those. The selected mark is lit harder.
+   *
+   * Built fresh rather than accumulated: the marks change, the figure is reloaded, and
+   * a list patched in place would keep lighting elements that are no longer there.
+   *
+   * @param preview - the element the picker is offering, if any.
+   * @returns what to light, in a stable enough order that the class work is minimal.
+   */
+  const litSpots = useCallback((preview: MarkAnchor | undefined): readonly LitSpot[] => {
+    const spots: LitSpot[] = []
+    const seen = new Set<Element>()
+    for (const mark of marks) {
+      const selector = mark.kind === 'element' ? mark.anchor?.selector : undefined
+      if (selector === undefined) continue
+      const element = findElement(selector)
+      if (element === undefined || seen.has(element)) continue
+      seen.add(element)
+      spots.push({ element, selected: props.selectedId === mark.id })
+    }
+    if (preview?.selector !== undefined) {
+      const element = findElement(preview.selector)
+      // A preview over an element that already carries a mark just brightens it: two
+      // classes on one element would be two statements about the same shape.
+      if (element !== undefined && !seen.has(element)) {
+        seen.add(element)
+        spots.push({ element, selected: false })
+      }
+    }
+    return spots
+  }, [findElement, marks, props.selectedId])
+
+  /**
+   * Hand the light to whatever the current state says should wear it.
+   *
+   * `figure` is in the dependency list because the elements the light goes on are the
+   * figure's own, and they do not exist until it has mounted: the marks file can arrive
+   * before the figure does, and without re-running on the figure's arrival every element
+   * mark would stay dark until something else happened to move.
+   */
+  const lightUp = useCallback((preview: MarkAnchor | undefined): void => {
+    litRef.current = moveSpotlight(litRef.current, litSpots(preview))
+  }, [litSpots])
+
+  // The light belongs to one figure's elements: a new figure, a new tool or an
+  // unmount leaves behind elements that may not exist a frame later, and a class left
+  // on markup that is about to be replaced is a leak the next figure inherits. The
+  // panel's own document needs the rule too, because that is where an inline SVG's
+  // elements live and the exported picture's rule is written independently.
+  useEffect(() => {
+    if (!isHtml) ensureSpotlight(document)
+  }, [isHtml])
+
+  useEffect(() => {
+    lightUp(hovered.current)
+  }, [lightUp, figure])
+
+  useEffect(() => () => {
+    moveSpotlight(litRef.current, [])
+    litRef.current = []
+  }, [])
+
+  const lightElement = useCallback((anchor: MarkAnchor | undefined): void => {
+    hovered.current = anchor
+    lightUp(anchor)
+  }, [lightUp])
+
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
   if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
   if (figureError !== null) return <p className="da-hint" role="alert">{figureError}</p>
@@ -1790,7 +1962,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const shownWeight = selected === null
     ? (WEIGHT_TOOLS.has(tool) ? weight : null)
-    : (selected.weight ?? WEIGHT_DEFAULT)
+    // An element mark has no stroke and no marker: it is the light on the element it
+    // names, and nothing about it is sized. The rail stood open on one anyway, reading
+    // the weight the mark used to carry when it was still drawn as a box — a slider
+    // that moved nothing, on a mark with nothing to move.
+    : (selected.kind === 'element' ? null : (selected.weight ?? WEIGHT_DEFAULT))
   /**
    * How far up the rail that value sits, from 0 at the lightest to 1 at the heaviest.
    *
@@ -1857,6 +2033,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * somewhere else: a paged document hands this body a node of the pane, and a bar
    * drawn inside a page is a bar that scrolls with that page.
    */
+  /**
+   * The tools this surface can actually use.
+   *
+   * A picker on a bitmap has nothing to pick, so the row itself is built from the
+   * media type rather than the button being drawn and then refusing. The order of the
+   * remaining tools is untouched, so the row the reader has learned is still the row
+   * they get — the picker joins at the end.
+   */
+  const tools = isVector || isHtml ? TOOLS : TOOLS.filter(entry => !ELEMENT_TOOLS.has(entry.tool))
+
   const chromeStrips = (
     <>
       <div className="da-palette" ref={paletteRef}
@@ -1886,14 +2072,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           onPointerCancel={() => { dragFrom.current = null; setDragging(false) }}>
           <GripDots wide />
         </div>
-        {TOOLS.map(entry => (
+        {tools.map(entry => (
           <button key={entry.tool} type="button" className="da-btn da-tool"
             aria-pressed={tool === entry.tool}
             aria-label={t(entry.label)}
             title={t(entry.label)}
             onClick={() => { setTool(entry.tool) }}>
             <span className="da-tool-icon" aria-hidden>
-              {entry.tool === 'select' ? <PointerIcon /> : ToolIcon(entry.tool)}
+              {entry.tool === 'select' ? <GrabIcon /> : ToolIcon(entry.tool)}
             </span>
           </button>
         ))}
@@ -2093,6 +2279,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 onPan={panBy}
                 onPanStart={() => { setPanning(true) }}
                 onPanEnd={() => { setPanning(false) }}
+                onHover={lightElement}
                 onEdit={editMark}
                 onDrawn={finishDrawing}
                 onLiveEdit={setLiveMark}

@@ -63,6 +63,21 @@ const pointOnly: AnnotationDocument = {
   marks: [{ id: 'p1', kind: 'point', color: '#e03131', points: [[100, 50]], detail: '图号在这里' }],
 }
 
+/**
+ * A document whose only mark is an element, which has neither stroke nor pin.
+ *
+ * It carries no `weight`, and that is the point of the fixture: the mark names a
+ * thing in the figure and draws the light on it, so there is no size for a rail to
+ * set.
+ */
+const elementOnly: AnnotationDocument = {
+  ...saved,
+  marks: [{
+    id: 'e1', kind: 'element', color: '#e03131', points: [[10, 10], [60, 40]],
+    anchor: { tag: 'g', id: 'line2d_1', bbox: [10, 10, 50, 30], selector: '#line2d_1' },
+  }],
+}
+
 /** One call the body made through fetch. */
 interface Call {
   readonly url: string
@@ -1298,6 +1313,21 @@ describe('the icons', () => {
       for (const svg of svgs) expect(svg.getAttribute('viewBox')).toBe('0 0 24 24')
     })()
   })
+
+  it('gives every tool its own glyph', () => {
+    // Two tiles wearing the same drawing is worse than a plain one: the reader has to
+    // press them to learn which is which, and the tool they cannot name is the one they
+    // stop using. `element` once fell through to the pin `point` wears, so the picker
+    // and the pin were the same drop.
+    return (async (): Promise<void> => {
+      const { host } = await svgBody({}, { mode: 'annotate' })
+      const palette = defined(document.querySelector('.da-palette'))
+      const drawings = [...palette.querySelectorAll('.da-tool-icon svg')].map(svg => svg.innerHTML)
+      expect(drawings.length).toBeGreaterThan(6)
+      expect(new Set(drawings).size).toBe(drawings.length)
+      expect(host.querySelectorAll('.da-palette .da-tool')).toHaveLength(drawings.length)
+    })()
+  })
 })
 
 describe('the figure menu', () => {
@@ -1921,6 +1951,17 @@ describe('the weight of the pen', () => {
     expect(button(document.body, zh.undo).disabled).toBe(true)
   })
 
+  it('stands the rail down for an element, which has no size to set', async () => {
+    // The complaint this answers: selecting an element left a weight slider open on
+    // the toolbar, and moving it changed nothing — the mark names something in the
+    // figure and draws a light on it, so there is no stroke and no pin. A control that
+    // moves nothing is worse than no control: it reads as a promise it cannot keep.
+    mounted = await svgBody({ annotation: elementOnly })
+    await selectFirstMark(document.body)
+    expect(document.querySelector('.da-weight')).toBeNull()
+    expect(document.querySelector('.da-weight-input')).toBeNull()
+  })
+
   it('offers the same rail for a point, where it sizes the pin rather than the pen', async () => {
     // One control for one idea: how big the selected mark is. A pin has no stroke to
     // weigh, so the rail keeps its place and changes its subject.
@@ -2517,6 +2558,28 @@ describe('a rendered document', () => {
     expect(frame().style.height).toBe('1843px')
   })
 
+  it('lights an element mark inside the frame, with a rule the document can see', async () => {
+    // A rendered document is its own document: the panel's stylesheet cannot reach into
+    // it, so the rule has to be written there. The mark's light is the only sign the
+    // mark exists, since an element mark draws nothing on the overlay.
+    const elementMarked: AnnotationDocument = {
+      ...savedHtml,
+      marks: [{
+        id: 'e1', kind: 'element', color: '#1971c2', points: [[0, 0], [1024, 200]],
+        detail: '这段要改', anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第一段', bbox: [0, 0, 1024, 200] },
+      }],
+    }
+    const result = await htmlBody({ annotation: elementMarked })
+    mounted = result
+    await reportHeight(1843)
+    const frameDocument = defined(frame().contentDocument)
+    expect(defined(frameDocument.querySelector('#lead')).classList.contains('da-spot')).toBe(true)
+    // One rule, written once, in the document the elements are in.
+    const rules = [...frameDocument.querySelectorAll('style[data-da-spot]')]
+    expect(rules).toHaveLength(1)
+    expect(rules[0]?.textContent).toContain('drop-shadow')
+  })
+
   it('renders the frame without a document rather than failing', async () => {
     const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentDocument')
     Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', { configurable: true, value: null })
@@ -3055,5 +3118,122 @@ describe('a list row that turns the page', () => {
     // The page sits at the row's end, not on the line under the sentence.
     expect(defined(document.querySelector('.da-mark-page')).textContent).toContain('4')
     expect(document.querySelector('.da-mark-meta')).toBeNull()
+  })
+})
+
+describe('the light the picker shines', () => {
+  it('lights the element itself rather than a box around it', async () => {
+    // An inline SVG's elements are children of the panel's document, so the light is a
+    // class on the element: the reader sees the curve glow rather than a box round it.
+    // The document is asked what is under the pointer, as a browser would answer it.
+    mounted = await svgBody()
+    await click(button(document.body, zh.toolElement))
+    const figure = defined(document.querySelector('svg.da-figure')) as SVGSVGElement
+    const host = defined(figure.parentElement) as HTMLElement
+    const text = defined(host.querySelector('text'))
+    text.setAttribute('id', 'lead')
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: 200, height: 100 })
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [text, host],
+    })
+    try {
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 10, clientY: 20 }))
+      })
+    } finally {
+      Reflect.deleteProperty(document, 'elementsFromPoint')
+    }
+    // The light is on the element the anchor named — the <text> itself, which is what
+    // makes the highlight follow the glyphs instead of drawing a rectangle.
+    expect(text.classList.contains('da-spot')).toBe(true)
+    // And nothing this plugin draws wears it: the overlay is the panel talking, not the
+    // figure, so lighting anything in it would be a second language again.
+    expect(overlay.querySelectorAll('.da-spot')).toHaveLength(0)
+  })
+
+  it('keeps an element mark lit on the element it names', async () => {
+    // An element mark draws nothing of its own — the light on the element IS the mark.
+    // Losing it would leave a mark in the list with no sign of it on the figure.
+    const marked: AnnotationDocument = {
+      ...saved,
+      marks: [{
+        id: 'e1', kind: 'element', color: '#1971c2', points: [[10, 20], [40, 40]],
+        detail: '标号指错了', anchor: { tag: 'text', selector: 'svg > text:nth-of-type(1)', text: '102', bbox: [10, 10, 30, 20] },
+      }],
+    }
+    mounted = await svgBody({ annotation: marked })
+    const text = defined(document.querySelector('svg.da-figure text'))
+    expect(text.classList.contains('da-spot')).toBe(true)
+    // Nothing this plugin draws carries the light: the figure's own shapes are what the
+    // mark is about, and the overlay is the panel talking.
+    expect(defined(document.querySelector('svg.da-overlay')).querySelectorAll('.da-spot')).toHaveLength(0)
+  })
+
+  it('lights the selected element mark harder than the others', async () => {
+    const marked: AnnotationDocument = {
+      ...saved,
+      marks: [{
+        id: 'e1', kind: 'element', color: '#1971c2', points: [[10, 20], [40, 40]],
+        detail: '标号指错了', anchor: { tag: 'text', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
+      }],
+    }
+    mounted = await svgBody({ annotation: marked }, { selectedId: 'e1' })
+    const text = defined(document.querySelector('svg.da-figure text'))
+    // Selected is said by how hard the light is, not by a box: a rectangle round a curve
+    // is a region the figure never drew.
+    expect(text.classList.contains('da-spot-selected')).toBe(true)
+  })
+
+  it('keeps lighting the element when the mark outlives the element it named', async () => {
+    // The figure may have been replaced since the mark was placed. A name that resolves
+    // to nothing is not an error, it is a mark with no light — the rest still shows.
+    const orphaned: AnnotationDocument = {
+      ...saved,
+      marks: [
+        {
+          id: 'e1', kind: 'element', color: '#1971c2', points: [[10, 20], [40, 40]],
+          detail: '不在图里了', anchor: { tag: 'g', selector: '#gone', bbox: [10, 10, 30, 20] },
+        },
+        {
+          id: 'e2', kind: 'element', color: '#1971c2', points: [[10, 20], [40, 40]],
+          detail: '同一个元素', anchor: { tag: 'text', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
+        },
+        {
+          id: 'e3', kind: 'element', color: '#1971c2', points: [[10, 20], [40, 40]],
+          detail: '又是它', anchor: { tag: 'text', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
+        },
+      ],
+    }
+    mounted = await svgBody({ annotation: orphaned })
+    // Two marks name the same element: it is one element, so it wears one light.
+    expect(document.querySelectorAll('.da-spot')).toHaveLength(1)
+  })
+
+  it('puts the light out when the picker is put away', async () => {
+    mounted = await svgBody()
+    await click(button(document.body, zh.toolElement))
+    const figure = defined(document.querySelector('svg.da-figure')) as SVGSVGElement
+    const host = defined(figure.parentElement) as HTMLElement
+    const text = defined(figure.querySelector('text'))
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: 200, height: 100 })
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [text, host],
+    })
+    try {
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 10, clientY: 20 }))
+      })
+      expect(document.querySelectorAll('.da-spot')).toHaveLength(1)
+      // A reader who puts the picker away is not asking about anything any more, and an
+      // element left lit would be a promise the tool no longer keeps.
+      await click(button(document.body, zh.toolSelect))
+    } finally {
+      Reflect.deleteProperty(document, 'elementsFromPoint')
+    }
+    expect(document.querySelectorAll('.da-spot')).toHaveLength(0)
   })
 })

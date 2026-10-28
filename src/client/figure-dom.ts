@@ -10,6 +10,8 @@
  */
 
 import type { MarkAnchor } from '../shared/annotation'
+import { depthBelow, isStableId, selectorWithin } from './dom-path'
+import { coversInterior, PICK_REACH, pickStack } from './pick'
 
 /**
  * Element names removed outright before inlining.
@@ -125,13 +127,6 @@ export function svgViewBox(root: SVGSVGElement, fallback: FigureIntrinsicSize): 
 /** Shape elements that carry no area of their own. */
 const NON_SHAPE_ELEMENTS = ['title', 'desc', 'defs', 'metadata', 'style', 'script']
 
-/** How deep an element sits below the figure container. */
-function depthBelow(element: Element, container: Element): number {
-  let depth = 0
-  for (let node = element.parentElement; node !== null && node !== container; node = node.parentElement) depth += 1
-  return depth
-}
-
 /**
  * Whether an element sits inside a subtree that never renders.
  *
@@ -149,30 +144,64 @@ function isNonRendered(element: Element, root: Element): boolean {
 }
 
 /**
- * Describe the figure element under one client-space point.
+ * The element a reader meant when they pointed at one of its parts.
  *
- * Hit testing walks every descendant's bounding box rather than asking the
- * browser what is under the pointer: a patent figure is mostly unfilled strokes,
- * and an element with `fill="none"` is not hit in its interior, so a browser hit
- * test answers the figure root for most of the drawing. The smallest containing
- * box wins, and the answer is then re-pointed at the nearest ancestor that names
- * itself (`id` or `<title>`, which is how a Graphviz node identifies itself).
- * @param container - element holding the inline figure, used as the coordinate origin.
- * @param clientX - pointer x in client space.
- * @param clientY - pointer y in client space.
- * @param scaleX - figure pixels per client pixel horizontally.
- * @param scaleY - figure pixels per client pixel vertically.
- * @returns the anchor, or undefined when the point names no figure element.
+ * A figure is drawn through anonymous geometry: matplotlib puts a tick's line, its
+ * label, and its number in one `<g id="xtick_1">`, and every one of those three is a
+ * nameless `<path>`, `<use>`, or `<text>` inside it. Naming the part gives the source
+ * reader nothing to open; naming the group that carries the id gives it the artist.
+ * The same rule is why a Graphviz node's `<title>` counts — that is how Graphviz says
+ * which node a shape belongs to.
+ *
+ * The walk stops at the container, so an id on the panel around the figure is never
+ * mistaken for the figure's own.
+ * @param hit - the element the browser says is painted under the pointer.
+ * @param container - the element holding the figure, which is never the answer.
+ * @returns the nearest ancestor-or-self that names itself, else the hit itself.
  */
-export function anchorAtPoint(
-  container: HTMLElement,
-  clientX: number,
-  clientY: number,
-  scaleX: number,
-  scaleY: number,
-): MarkAnchor | undefined {
-  const root = container.querySelector('svg')
-  if (root === null) return undefined
+function namingAncestor(hit: Element, container: Element): Element {
+  for (let node: Element | null = hit; node !== null && node !== container; node = node.parentElement) {
+    // A generated id names the area behind the artists, not an artist — matplotlib's
+    // `patch_1` is the figure's own white sheet and `patch_2` the axes' — so a walk
+    // that stopped on one would answer every click on blank paper with "the paper".
+    // The walk goes on to the group those names hang under, which is what the reader
+    // meant: the axes, or the figure's margin.
+    if (isStableId(node.id) || node.querySelector(':scope > title') !== null) return node
+  }
+  return hit
+}
+
+/**
+ * Whether an element is something a reader could mean to point at.
+ *
+ * Three things are ruled out. Anything outside the figure is not part of it — the same
+ * document holds the overlay that carries the marks, and that overlay is above the
+ * drawing, so it is the first thing every hit test finds. The figure root is the
+ * surface rather than anything drawn on it. And elements inside `defs` are never
+ * painted where they are declared, so a hit on one is a hit on whatever the
+ * declaration was cloned into.
+ *
+ * There is deliberately no "covers the whole figure, so it must be the paper" rule
+ * here, though an HTML document needs one. In a figure that rule is wrong: a trend
+ * line drawn corner to corner has the whole figure for a bounding box, so judging the
+ * sheet by extent would refuse to name the single most important line on the plot. The
+ * browser's paint order already answers "is anything here", and a background that does
+ * get picked is shown by the highlight before the click, so nothing is taken unseen.
+ *
+ * Everything else is fair game, including a `<path>`, a `<text>`, and the `<use>` a
+ * marker or a tick is drawn through: those are what the figure is made of, and the
+ * anchor re-points at whichever ancestor names itself.
+ * @param element - candidate element.
+ * @param root - the figure root.
+ * @returns true when a reader could be pointing at this element.
+ */
+function isPickable(element: Element, root: Element): boolean {
+  if (element === root) return false
+  if (!root.contains(element)) return false
+  return !isNonRendered(element, root)
+}
+
+function measuringHit(container: HTMLElement, root: Element, clientX: number, clientY: number): Element | undefined {
   let hit: Element | undefined
   let hitArea = Number.POSITIVE_INFINITY
   let hitDepth = -1
@@ -189,22 +218,60 @@ export function anchorAtPoint(
       hitDepth = depth
     }
   }
+  return hit
+}
+
+/**
+ * Describe the figure element under one client-space point.
+ *
+ * The browser answers which element covers the point, because only it knows the
+ * painted geometry: a `<path>` that opens a hole in itself covers less than its
+ * bounding box, and a sloped line covers almost none of the rectangle its ends span.
+ * Measuring boxes instead would name that sloped line for a click far above it, which
+ * is the one thing a reader annotating a plot would find most wrong.
+ *
+ * One thing the browser does not do is let a pick reach a stroke that is a pixel wide,
+ * so the point is asked about together with the ring of points around it. And one
+ * thing it cannot be asked is a shape with `fill="none"`, which is unpickable in its
+ * interior by definition — but a figure is mostly exactly those shapes, so while the
+ * question is being asked the figure's root is told to hit-test its geometry rather
+ * than its pointer-events. The property only affects hit testing, never painting, and
+ * it is put back before this function returns, so nothing an observer or the reader
+ * can see is left changed.
+ *
+ * The hit is then re-pointed at the nearest ancestor that names itself (`id` or a
+ * `<title>`, which is how Graphviz identifies a node), because a reader pointing at a
+ * mark on a curve means the curve and not the path segment under one pixel.
+ * @param container - element holding the inline figure, used as the coordinate origin.
+ * @param clientX - pointer x in client space.
+ * @param clientY - pointer y in client space.
+ * @param scaleX - figure pixels per client pixel horizontally.
+ * @param scaleY - figure pixels per client pixel vertically.
+ * @returns the anchor, or undefined when the point names no figure element.
+ */
+export function anchorAtPoint(
+  container: HTMLElement,
+  clientX: number,
+  clientY: number,
+  scaleX: number,
+  scaleY: number,
+): MarkAnchor | undefined {
+  const root = container.querySelector('svg')
+  if (root === null) return undefined
+  const frame = root.getBoundingClientRect()
+  const hit = pickInFigure(container, root, frame, clientX, clientY, scaleX, scaleY)
+  // Nothing painted under the pointer: a click on blank paper names nothing, rather
+  // than falling back to the sheet it is blank on.
   if (hit === undefined) return undefined
-  let described = hit
-  for (let node: Element | null = hit; node !== null && node !== container; node = node.parentElement) {
-    if (node.id !== '' || node.querySelector(':scope > title') !== null) {
-      described = node
-      break
-    }
-  }
+  const described = namingAncestor(hit, container)
   const rect = described.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
   const title = described.querySelector(':scope > title')?.textContent?.trim()
-  // `Element.textContent` is `string | null` in the DOM types, but only a
-  // Document or a Doctype can report null; an element always reports its text.
+  // `Element.textContent` is `string | null` in the DOM types, but only a Document or
+  // a Doctype can report null; an element always reports its text.
   const rawText = described.textContent as string
-  // `described` is `hit` or an ancestor of it, so its text already contains the
-  // hit's own text; there is nothing to fall back to.
+  // `described` is `hit` or an ancestor of it, so its text already contains the hit's
+  // own text; there is nothing to fall back to.
   const text = rawText.trim().replace(/\s+/g, ' ').slice(0, ANCHOR_TEXT_LIMIT)
   return {
     tag: described.tagName.toLowerCase(),
@@ -217,5 +284,80 @@ export function anchorAtPoint(
     ...(described.id === '' ? {} : { id: described.id }),
     ...(title === undefined || title === '' ? {} : { title }),
     ...(text === '' ? {} : { text }),
+    // The same locator an HTML mark carries, spelled against the figure's own root:
+    // the panel's document wraps the figure, so a body-relative path would name the
+    // panel's chrome rather than anything the source file contains.
+    selector: selectorWithin(described, root),
   }
+}
+
+/**
+ * The figure element painted under one client-space point.
+ *
+ * The browser is asked first, with the figure lending it the ability to hit-test
+ * unfilled geometry for the duration of the question. When it cannot answer at all —
+ * no hit testing in the engine — the boxes are measured instead.
+ * @param container - element holding the inline figure.
+ * @param root - the figure root.
+ * @param frame - the box the figure is drawn in.
+ * @param clientX - pointer x in client space.
+ * @param clientY - pointer y in client space.
+ * @param scaleX - figure pixels per client pixel horizontally.
+ * @param scaleY - figure pixels per client pixel vertically.
+ * @returns the element, or undefined when nothing is painted there.
+ */
+function pickInFigure(
+  container: HTMLElement,
+  root: Element,
+  frame: DOMRect,
+  clientX: number,
+  clientY: number,
+  scaleX: number,
+  scaleY: number,
+): Element | undefined {
+  // The reach is stated in screen pixels, so it is converted to the figure's own
+  // units: a magnified figure needs fewer of them to cover the distance the reader's
+  // hand covers.
+  const stack = pickStack(container.ownerDocument, clientX, clientY, PICK_REACH / Math.max(scaleX, scaleY))
+  if (stack === null) return measuringHit(container, root, clientX, clientY)
+  const painted = stack.find(element => isPickable(element, root))
+  // A shape with `fill="none"` is invisible to the pointer, so the browser can only
+  // report the sheet behind a hollow node — a Graphviz ellipse, a flowchart box. Only
+  // when the browser named nothing does the fill geometry get asked, because a shape
+  // that is painted has already answered and asking again could only overrule it.
+  if (painted !== undefined) return painted
+  return hollowAt(root, clientX, clientY)
+}
+
+/**
+ * The innermost unfilled shape whose own interior contains a point.
+ *
+ * The half of the job the browser's hit testing cannot do, kept to the case where it
+ * matters. Handing the figure `pointer-events: all` would also reach hollow shapes,
+ * but it opens every *stroke* to the pointer at the same time: measured on a real
+ * matplotlib figure, that changed one sampled point in five, and always for the
+ * worse — a curve with no fill began answering for the tick groups drawn in front of
+ * it. Asking each shape about its own fill area reaches the hollow node's middle and
+ * leaves the rest of the figure exactly as the browser reported it.
+ *
+ * Innermost wins for the same reason it does in the box measurement: a reader pointing
+ * inside a hollow frame means the thing inside it, and a later-drawn shape is in front
+ * of an earlier one, so document order breaks ties.
+ * @param root - the figure root.
+ * @param clientX - pointer x in client space.
+ * @param clientY - pointer y in client space.
+ * @returns the shape, or undefined when no unfilled shape covers the point.
+ */
+function hollowAt(root: Element, clientX: number, clientY: number): Element | undefined {
+  let found: Element | undefined
+  let foundDepth = -1
+  for (const shape of root.querySelectorAll('*')) {
+    if (!coversInterior(shape, clientX, clientY)) continue
+    const depth = depthBelow(shape, root)
+    if (depth >= foundDepth) {
+      found = shape
+      foundDepth = depth
+    }
+  }
+  return found
 }

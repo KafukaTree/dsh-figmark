@@ -673,6 +673,27 @@ describe('model-facing summary', () => {
     expect(describeMark(bare, 0, 'zh')).toContain('（<p>）')
   })
 
+  it('names the element an element mark selected, without reading it as a region', () => {
+    const mark: AnnotationMark = {
+      id: 'e1',
+      kind: 'element',
+      color: '#1971c2',
+      points: [[10, 20], [60, 90]],
+      detail: '这条线要加粗',
+      anchor: { tag: 'path', bbox: [10, 20, 50, 70], id: 'line2d_10' },
+    }
+    // The box locates the element on the picture; the anchor says which one it is.
+    // The phrase stays "element (box)" rather than "框选" so the agent reads a thing
+    // that was pointed at, not a region that was drawn.
+    expect(describeMark(mark, 0, 'zh'))
+      .toBe('① 选中元素 (10,20)-(60,90)（id=line2d_10），批注：这条线要加粗')
+    expect(describeMark(mark, 0, 'en')).toContain('element (10,20)-(60,90)')
+    // A half-recorded selection still says what it is, and says no box rather than
+    // inventing one from the single corner it has.
+    const one: AnnotationMark = { ...mark, points: [[10, 20]] }
+    expect(describeMark(one, 0, 'zh')).toBe('① 选中元素（id=line2d_10），批注：这条线要加粗')
+  })
+
   it('says how far a mark was turned, so the model knows its angle', () => {
     const turned = (rotation: number, kind: MarkKind = 'rect'): AnnotationMark => ({
       id: 'r', kind, color: '#000', points: [[10, 20], [60, 90]], rotation,

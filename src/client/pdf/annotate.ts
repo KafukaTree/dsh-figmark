@@ -339,7 +339,12 @@ function strokeContent(mark: AnnotationMark, placed: PlacedMark, rect: UserRect)
       })
       return `${stroke} ${path.join(' ')} S`
     }
-    case 'rect': {
+    // An element mark carries the element's own box, so on a page it draws as that
+    // box. The panel never offers the element tool for a PDF — a page has no
+    // elements to point at — but a sidecar written by hand can carry one, and a
+    // mark that resolves to its box is better than a mark that resolves to nothing.
+    case 'rect':
+    case 'element': {
       if (first === undefined || second === undefined) return ''
       const [x0, y0] = local(first)
       const [x1, y1] = local(second)
@@ -572,6 +577,9 @@ function annotationSubtype(mark: AnnotationMark): string {
     // can open, which is exactly the relationship the mark has to the page — a
     // comment at a position, with no shape claiming an extent.
     case 'point': return 'Text'
+    // The same box `strokeContent` draws for it, so the subtype and the appearance
+    // cannot disagree about what a stray element mark looks like.
+    case 'element': return 'Square'
   }
 }
 

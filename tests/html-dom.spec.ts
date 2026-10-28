@@ -81,6 +81,89 @@ describe('loading a frame', () => {
   })
 })
 
+describe('asking the document what is under the pointer', () => {
+  /** A parsed document whose hit testing answers from a map of point -> stack. */
+  function hitTesting(html: string, answers: Map<string, Element[]>): Document {
+    const parsed = parse(html)
+    Object.defineProperty(parsed, 'elementsFromPoint', {
+      configurable: true,
+      value: (x: number, y: number) => answers.get(`${x},${y}`) ?? [],
+    })
+    return parsed
+  }
+
+  it('names the painted element rather than the smallest box', () => {
+    const doc = hitTesting('<html><body><section id="s"><p>first</p><p>second</p></section></body></html>', new Map())
+    const section = defined(doc.querySelector('#s'))
+    const [first, second] = [...doc.querySelectorAll('p')]
+    stubRect(section, { left: 0, top: 0, width: 600, height: 400 })
+    stubRect(defined(first), { left: 0, top: 0, width: 600, height: 50 })
+    stubRect(defined(second), { left: 0, top: 50, width: 600, height: 50 })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [second, section] })
+    expect(anchorInDocument(doc, 300, 60)).toEqual({
+      tag: 'p',
+      bbox: [0, 50, 600, 50],
+      text: 'second',
+      selector: '#s > p:nth-of-type(2)',
+    } satisfies MarkAnchor)
+  })
+
+  it('withholds the background that covers the whole rendered width', () => {
+    const doc = hitTesting('<html><body><div id="page"></div><p id="p">hi</p></body></html>', new Map())
+    const page = defined(doc.querySelector('#page'))
+    const paragraph = defined(doc.querySelector('#p'))
+    stubRect(doc.body, { left: 0, top: 0, width: 1024, height: 800 })
+    stubRect(page, { left: 0, top: 0, width: 1024, height: 800 })
+    stubRect(paragraph, { left: 0, top: 0, width: 200, height: 40 })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [page, paragraph] })
+    // A mark around the whole page says nothing about any part of it.
+    expect(anchorInDocument(doc, 10, 10)?.id).toBe('p')
+  })
+
+  it('climbs out of an anonymous inline wrapper to the block that carries it', () => {
+    const doc = hitTesting('<html><body><article><p>the <b>bold</b> word</p></article></body></html>', new Map())
+    const article = defined(doc.querySelector('article'))
+    const paragraph = defined(doc.querySelector('p'))
+    const bold = defined(doc.querySelector('b'))
+    stubRect(article, { left: 0, top: 0, width: 400, height: 300 })
+    stubRect(paragraph, { left: 0, top: 0, width: 400, height: 40 })
+    stubRect(bold, { left: 20, top: 0, width: 40, height: 20 })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [bold, paragraph, article] })
+    expect(anchorInDocument(doc, 30, 10)?.tag).toBe('p')
+  })
+
+  it('names an anonymous wrapper only when it is all the point has', () => {
+    const doc = hitTesting('<html><body><span>bare text</span></body></html>', new Map())
+    const span = defined(doc.querySelector('span'))
+    stubRect(span, { left: 0, top: 0, width: 90, height: 20 })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [span] })
+    expect(anchorInDocument(doc, 10, 10)?.selector).toBe('body > span:nth-of-type(1)')
+  })
+
+  it('names nothing when only the body is painted there', () => {
+    const doc = hitTesting('<html><body><p>hi</p></body></html>', new Map())
+    stubRect(doc.body, { left: 0, top: 0, width: 1024, height: 800 })
+    // The body is the document's own sheet, not a thing on it.
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [doc.body] })
+    expect(anchorInDocument(doc, 500, 700)).toBeUndefined()
+  })
+
+  it('names nothing when an element outside the body is painted there', () => {
+    const doc = hitTesting('<html><body><p>hi</p></body></html>', new Map())
+    // The document's own head — or anything else outside the body — is not part of
+    // the surface the reader is annotating.
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [defined(doc.head)] })
+    expect(anchorInDocument(doc, 10, 10)).toBeUndefined()
+  })
+
+  it('falls back to measuring boxes when the document cannot be asked', () => {
+    const doc = parse('<html><body><p id="p">hi</p></body></html>')
+    stubRect(defined(doc.querySelector('#p')), { left: 0, top: 0, width: 100, height: 20 })
+    // No hit testing on the document: the boxes are the only answer available.
+    expect(anchorInDocument(doc, 10, 10)?.id).toBe('p')
+  })
+})
+
 describe('naming what a mark landed on', () => {
   it('names the smallest element containing the point, with its text and its path', () => {
     const doc = parse('<html><body><section id="s"><p>first</p> <p>second paragraph</p></section></body></html>')

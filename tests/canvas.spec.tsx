@@ -13,6 +13,7 @@ interface MountOptions {
   readonly tool: Tool
   readonly marks?: readonly AnnotationMark[]
   readonly anchoring?: boolean
+  readonly anchorAtFigurePoint?: (x: number, y: number) => MarkAnchor | undefined
   readonly selectedId?: string | null
   readonly container?: HTMLElement | null
   readonly svgSize?: { readonly width: number; readonly height: number }
@@ -23,6 +24,7 @@ interface MountOptions {
   readonly onRemove?: (id: string) => void
   readonly onEdit?: (id: string) => void
   readonly onDrawn?: (id: string) => void
+  readonly onHover?: (anchor: MarkAnchor | undefined) => void
   readonly numbering?: ReadonlyMap<string, number>
   readonly onPan?: (dx: number, dy: number) => void
   readonly onPanStart?: () => void
@@ -59,6 +61,7 @@ function mount(options: MountOptions): {
         color="#e03131"
         containerRef={containerRef}
         anchoring={options.anchoring ?? false}
+        {...(options.anchorAtFigurePoint === undefined ? {} : { anchorAtFigurePoint: options.anchorAtFigurePoint })}
         selectedId={options.selectedId ?? null}
         onSelect={options.onSelect ?? (() => {})}
         onAdd={options.onAdd ?? (() => {})}
@@ -67,6 +70,7 @@ function mount(options: MountOptions): {
         onRemove={options.onRemove ?? (() => {})}
         onEdit={options.onEdit ?? (() => {})}
         onDrawn={options.onDrawn}
+        {...(options.onHover === undefined ? {} : { onHover: options.onHover })}
         {...(options.onPan === undefined ? {} : { onPan: options.onPan })}
         {...(options.onPanStart === undefined ? {} : { onPanStart: options.onPanStart })}
         {...(options.onPanEnd === undefined ? {} : { onPanEnd: options.onPanEnd })}
@@ -470,6 +474,351 @@ describe('clicking the surface', () => {
       svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(selected).toEqual([null])
+  })
+})
+
+describe('picking an element', () => {
+  let mounted: ReturnType<typeof mount> | undefined
+  afterEach(() => {
+    mounted?.root.unmount()
+    mounted = undefined
+    document.body.innerHTML = ''
+  })
+
+  /** The element a click on the figure would name. */
+  const anchor: MarkAnchor = {
+    tag: 'line',
+    id: 'line2d_10',
+    title: 'growth',
+    bbox: [40, 30, 120, 60],
+    selector: '#line2d_10',
+  }
+
+  /** A surface that names `anchor` for every point on the figure. */
+  function picking(options: { readonly anchor?: MarkAnchor | undefined } = {}): ReturnType<typeof mount> & { readonly added: AnnotationMark[], readonly drawn: string[], readonly hovered: (MarkAnchor | undefined)[] } {
+    const added: AnnotationMark[] = []
+    const drawn: string[] = []
+    const hovered: (MarkAnchor | undefined)[] = []
+    const picked = mount({
+      tool: 'element',
+      anchoring: true,
+      anchorAtFigurePoint: () => ('anchor' in options ? options.anchor : anchor),
+      onAdd: mark => added.push(mark),
+      onDrawn: id => drawn.push(id),
+      onHover: anchor => hovered.push(anchor),
+    })
+    return { ...picked, added, drawn, hovered }
+  }
+
+  /** A surface naming an element from its own document, the way HTML does. */
+  function mountPicking(
+    anchorAtFigurePoint: (x: number, y: number) => MarkAnchor | undefined,
+    onHover?: (anchor: MarkAnchor | undefined) => void,
+  ): ReturnType<typeof mount> {
+    return mount({
+      tool: 'element',
+      anchoring: false,
+      anchorAtFigurePoint,
+      ...(onHover === undefined ? {} : { onHover }),
+    })
+  }
+
+  /** What the last thing the picker reported was, for a surface that reports names. */
+  function lastHovered(hovered: readonly (MarkAnchor | undefined)[]): MarkAnchor | undefined {
+    return hovered[hovered.length - 1]
+  }
+
+  it('turns the element under the pointer into a mark carrying its name', () => {
+    const surface = picking()
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(surface.added).toHaveLength(1)
+    const mark = defined(surface.added[0])
+    expect(mark.kind).toBe('element')
+    // The geometry is the element's own box as two corners, so everything that reads
+    // a rect reads this mark for free.
+    expect(mark.points).toEqual([[40, 30], [160, 90]])
+    expect(mark.anchor).toEqual(anchor)
+    // And no weight: the mark draws no stroke and no pin, so there is nothing for a
+    // pen weight to size. Carrying one would put a number in the file that changes
+    // nothing, and would grow the measured outline by half a stroke never painted.
+    expect(mark.weight).toBeUndefined()
+    expect(surface.drawn).toEqual([mark.id])
+  })
+
+  it('selects what it just picked, so its note box can open on it', () => {
+    const onSelect = vi.fn()
+    const added: AnnotationMark[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: true,
+      anchorAtFigurePoint: () => anchor,
+      onAdd: mark => added.push(mark),
+      onSelect,
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(onSelect).toHaveBeenCalledWith(defined(added[0]).id)
+  })
+
+  it('commits nothing when the pointer names no element', () => {
+    const surface = picking({ anchor: undefined })
+    mounted = surface
+    // A mark with no element would be a box claiming to name a thing.
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(surface.added).toHaveLength(0)
+  })
+
+  it('tells the figure which element a click would take', () => {
+    const surface = picking()
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    // Which element, not where to draw a box around it: the light belongs on the
+    // element itself, and only the body knows which document that element lives in.
+    expect(lastHovered(surface.hovered)).toEqual(anchor)
+    // The overlay draws no highlight of its own any more — a bracket round the box was
+    // a rectangle the figure never draws.
+    expect(surface.svg.querySelector('path[stroke="#4c8dff"]')).toBeNull()
+  })
+
+  it('leaves the light alone when the pointer stays on the same element', () => {
+    const anchorAtFigurePoint = vi.fn(() => anchor)
+    const surface = mountPicking(anchorAtFigurePoint)
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    const first = surface.svg.querySelector('path[stroke="#4c8dff"]')
+    pointer(surface.svg, 'pointermove', 62, 52)
+    // A stream of moves across one element must not re-render the whole overlay, so
+    // the same name and the same box leave the highlight exactly as it was.
+    expect(surface.svg.querySelector('path[stroke="#4c8dff"]')).toBe(first)
+    expect(anchorAtFigurePoint).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops the light when the pointer leaves the surface', () => {
+    const surface = picking()
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    expect(lastHovered(surface.hovered)).toEqual(anchor)
+    // React derives `pointerleave` from a `pointerout` that leaves the element, which
+    // is the event a browser actually sends when the pointer goes off the surface.
+    act(() => {
+      surface.svg.dispatchEvent(new MouseEvent('pointerout', { bubbles: true, relatedTarget: document.body }))
+    })
+
+    // With no element under the pointer there is nothing a click would take.
+    expect(lastHovered(surface.hovered)).toBeUndefined()
+  })
+
+  it('puts the light out when the picker is put away', () => {
+    const hovered: (MarkAnchor | undefined)[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: true,
+      anchorAtFigurePoint: () => anchor,
+      onHover: hover => hovered.push(hover),
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    expect(lastHovered(hovered)).toEqual(anchor)
+    // A disarm with no pointer move to report it: the reader left the figure with the
+    // picker armed, so nothing arrives to clear the light.
+    act(() => {
+      surface.root.render(
+        <Canvas
+          width={400} height={300} marks={[]} tool="select" color="#e03131"
+          containerRef={{ current: null }} anchoring={false} selectedId={null}
+          onSelect={() => {}} onAdd={() => {}} onMove={() => {}} onUpdate={() => {}}
+          onRemove={() => {}} onEdit={() => {}} onHover={hover => hovered.push(hover)}
+        />,
+      )
+    })
+    expect(lastHovered(hovered)).toBeUndefined()
+  })
+
+  it('moves the light to a different element, and away when nothing is under it', () => {
+    let lit: MarkAnchor | undefined = anchor
+    const hovered: (MarkAnchor | undefined)[] = []
+    const surface = mountPicking(() => lit, hover => hovered.push(hover))
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    expect(lastHovered(hovered)).toEqual(anchor)
+    // Another element under the pointer is a different promise, so the light follows.
+    const other: MarkAnchor = { ...anchor, id: 'line2d_11', selector: '#line2d_11' }
+    lit = other
+    pointer(surface.svg, 'pointermove', 200, 200)
+    expect(lastHovered(hovered)).toEqual(other)
+    // And a point that names nothing takes the light away rather than leaving the last
+    // element lit.
+    lit = undefined
+    pointer(surface.svg, 'pointermove', 300, 250)
+    expect(lastHovered(hovered)).toBeUndefined()
+  })
+
+  it('re-reports the same element when it is reflowed under the pointer', () => {
+    let lit: MarkAnchor = anchor
+    const hovered: (MarkAnchor | undefined)[] = []
+    const surface = mountPicking(() => lit, hover => hovered.push(hover))
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    // The same element re-read at a new box is still news: the name did not change, but
+    // what a click would take now covers a different area.
+    const reflowed: MarkAnchor = { ...anchor, bbox: [50, 40, 120, 60] }
+    lit = reflowed
+    pointer(surface.svg, 'pointermove', 62, 52)
+    expect(lastHovered(hovered)).toEqual(reflowed)
+  })
+
+  it('cannot be dragged once it is placed', () => {
+    const onMove = vi.fn()
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    // A press finds the mark by asking the figure what is under the pointer, so the
+    // double has to answer with the element the mark names.
+    const surface = mount({ tool: 'select', marks: [placed], selectedId: 'e1', onMove, anchoring: false, anchorAtFigurePoint: () => anchor })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointermove', 90, 80)
+    pointer(surface.svg, 'pointerup', 90, 80)
+    // Its box is where the element was; moving it would leave a mark naming an
+    // element while pointing somewhere else. Picking it again is how it is placed.
+    expect(onMove).not.toHaveBeenCalled()
+  })
+
+  it('opens a placed element for editing by pressing what it names', () => {
+    // An element mark draws nothing, so it has no shape to press. It is found by
+    // asking the figure what is under the pointer — the same question the picker
+    // asks — which is why the target and the light agree.
+    const onEdit = vi.fn()
+    mounted = mount({
+      tool: 'select', onEdit, anchoring: false, anchorAtFigurePoint: () => anchor,
+      marks: [{ id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }],
+    })
+    doubleClick(defined(mounted.svg.querySelector('[data-da-mark]')))
+    expect(onEdit).toHaveBeenCalledWith('e1')
+  })
+
+  it('draws nothing on a placed element, not even a frame or a hit box', () => {
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
+    // No handles: a resize would change which element the mark names.
+    expect(mounted.svg.querySelector('[data-da-handle]')).toBeNull()
+    // No frame either — a box around a curve is a rectangle the figure never draws,
+    // and "this region" is not what an element mark says. Selection is said by the
+    // light on the element itself.
+    expect(mounted.svg.querySelector('rect[stroke="#4c8dff"]')).toBeNull()
+    expect(mounted.svg.querySelector('path[stroke="#4c8dff"]')).toBeNull()
+    // And no hit box: a transparent rect over the element's box is the same rectangle
+    // in a different coat, and it would swallow every press meant for the figure
+    // inside it — the whole plot, when the element is a curve or an axis.
+    expect(mounted.svg.querySelector('rect')).toBeNull()
+  })
+
+  it('treats a press over nothing named, or over a name with no mark, as paper', () => {
+    // Two ways the question can come back empty: nothing is under the pointer, or what
+    // is under it carries no selector. Neither is an element mark, so the press must
+    // fall through to the surface rather than being swallowed by a mark that is not
+    // there.
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    const onSelect = vi.fn()
+    const surface = mount({
+      tool: 'select', onSelect, anchoring: false, marks: [placed],
+      // Named, but without the one locator a mark is matched by.
+      anchorAtFigurePoint: () => ({ tag: 'g', bbox: [0, 0, 10, 10] }),
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
+    expect(onSelect).not.toHaveBeenCalledWith('e1')
+  })
+
+  it('leaves a press on a named element that no mark claims to the paper', () => {
+    // The figure has an element under the pointer, but nothing has marked it: that is
+    // bare paper as far as this surface is concerned, and the press must not be
+    // consumed by looking for a mark that is not there.
+    const onSelect = vi.fn()
+    const surface = mount({
+      tool: 'select', onSelect, anchoring: false,
+      // A selector that names something, and no mark naming it.
+      anchorAtFigurePoint: () => ({ tag: 'g', bbox: [0, 0, 10, 10], selector: '#unmarked', id: 'unmarked' }),
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
+    // Nothing was selected by the press: the fall-through went to the surface.
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('ignores a double-click that lands on no element mark', () => {
+    // A select-tool double-click on bare paper is not an edit of anything.
+    const onEdit = vi.fn()
+    mounted = mount({ tool: 'select', onEdit, anchoring: false, anchorAtFigurePoint: () => undefined })
+    doubleClick(mounted.svg)
+    expect(onEdit).not.toHaveBeenCalled()
+  })
+
+  it('ignores a double-click on a placed element under a drawing tool', () => {
+    // The double-click is how one is opened for editing; under a drawing tool a
+    // double-click on the paper is two presses, not an edit.
+    const onEdit = vi.fn()
+    mounted = mount({
+      tool: 'arrow', onEdit, anchoring: false, anchorAtFigurePoint: () => anchor,
+      marks: [{ id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }],
+    })
+    doubleClick(mounted.svg)
+    expect(onEdit).not.toHaveBeenCalled()
+  })
+
+  it('leaves the paper free for other marks once an element is placed', () => {
+    // The bug this pins: an element's box was a hit target, so a placed curve covered
+    // most of the figure and every attempt to draw a second mark inside it selected
+    // the first one instead.
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
+      anchor: { tag: 'g', id: 'line2d_12', bbox: [40, 30, 120, 60], selector: '#line2d_12' },
+    }
+    const onAdd = vi.fn()
+    const surface = mount({
+      tool: 'arrow', onAdd, anchoring: false,
+      // Under an arrow press the element under the pointer is named, but that names
+      // what the new arrow points at — it must not become the press's subject.
+      anchorAtFigurePoint: () => anchor,
+      marks: [placed], selectedId: 'e1',
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointermove', 90, 80)
+    pointer(surface.svg, 'pointerup', 90, 80)
+    // The press drew an arrow rather than selecting the element mark again.
+    expect(onAdd).toHaveBeenCalledTimes(1)
+    expect((onAdd.mock.calls[0] as [AnnotationMark])[0].kind).toBe('arrow')
+  })
+
+  it('lets a second element be picked inside the first one\'s box', () => {
+    // The real case this pins: three decaying curves on one plot, whose boxes almost
+    // entirely overlap — each starts at the same x and sweeps down and to the right.
+    // With a hit rect over the first mark's box, every later pick landed inside that
+    // box and was swallowed, so the second and third curves could never be marked.
+    // The picker asks the figure what is under the pointer, so overlapping boxes say
+    // nothing at all.
+    const first: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[49, 28], [265, 152]],
+      anchor: { tag: 'g', id: 'line2d_12', bbox: [49, 28, 216, 124], selector: '#line2d_12' },
+    }
+    const second: MarkAnchor = { tag: 'g', id: 'line2d_10', bbox: [49, 70, 216, 82], selector: '#line2d_10' }
+    const onAdd = vi.fn()
+    const surface = mount({
+      tool: 'element', onAdd, anchoring: false,
+      // Wherever the pointer is, this plot answers with the curve underneath it: the
+      // second curve here, whose box sits inside the first one's.
+      anchorAtFigurePoint: () => second,
+      marks: [first],
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 120, 90)
+    pointer(surface.svg, 'pointerup', 120, 90)
+    expect(onAdd).toHaveBeenCalledTimes(1)
+    const added = (onAdd.mock.calls[0] as [AnnotationMark])[0]
+    expect(added.kind).toBe('element')
+    expect(added.anchor?.selector).toBe('#line2d_10')
   })
 })
 

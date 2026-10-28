@@ -1,5 +1,5 @@
 /** Mark rendering, review-image composition, and figure sanitizing. */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationMark } from '../src/shared/annotation'
 import {
   PIN_FONT_SIZE,
@@ -17,12 +17,34 @@ import {
 import { figureUnit } from '../src/client/scale'
 import { bytesToDataUrl, composeReviewSvg, reviewSize, rasterizePng } from '../src/client/export'
 import { anchorAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '../src/client/figure-dom'
+import { PICK_REACH } from '../src/client/pick'
 import { defined, installDom, stubRasterizer, stubRect } from './dom'
 
 const arrow: AnnotationMark = { id: 'a', kind: 'arrow', color: '#e03131', points: [[0, 0], [10, 0]] }
 const pen: AnnotationMark = { id: 'p', kind: 'pen', color: '#000', points: [[0, 0], [5, 5], [10, 0]] }
 
 describe('mark geometry', () => {
+  it('draws an element as nothing at all', () => {
+    // An element mark is drawn as light on the element itself (spotlight.ts), not as a
+    // stroke of its own: a box around a curve says "this region" when the mark says
+    // "this thing", and that is exactly what the light was brought in to fix.
+    const element: AnnotationMark = { id: 'e', kind: 'element', color: '#1971c2', points: [[10, 20], [60, 50]] }
+    expect(markPathData(element)).toBeUndefined()
+    // It still has a box — the canvas uses it for the mark's invisible hit area, and
+    // the picker used it to say what was taken. The box is the two corners plus the pen
+    // weight's half, because that is how every mark is measured.
+    const box = defined(markOutline(element))
+    expect(box.width).toBeGreaterThan(50)
+    expect(box.height).toBeGreaterThan(30)
+    expect(box.x).toBeLessThan(10)
+    expect(box.y).toBeLessThan(20)
+  })
+
+  it('carries no path for an element mark with one corner only', () => {
+    const one: AnnotationMark = { id: 'e', kind: 'element', color: '#1971c2', points: [[0, 0]] }
+    expect(markPathData(one)).toBeUndefined()
+  })
+
   it('draws an arrow as a shaft plus two head strokes', () => {
     const path = markPathData(arrow)
     expect(path?.split('M').length).toBe(3)
@@ -165,6 +187,41 @@ describe('review image', () => {
     expect(svg).not.toContain('a &lt; b')
     expect(svg).not.toContain('这里')
     expect([...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/gu)].map(match => match[1])).toEqual(['1'])
+  })
+
+  describe('an element mark in the delivered picture', () => {
+    let dom: ReturnType<typeof installDom>
+    beforeEach(() => { dom = installDom() })
+    afterEach(() => { dom.window.close() })
+
+  it('lights the element an element mark names, inside the delivered picture', () => {
+    // The panel lights the element itself for an element mark (spotlight.ts). If the
+    // picture did not, the agent would be reading a figure with no mark on it at all —
+    // an element mark draws nothing else.
+    const svg = composeReviewSvg(
+      {
+        kind: 'svg',
+        markup: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">'
+          + '<g id="line2d_1"><path d="M 0 0 L 100 100"/></g></svg>',
+        viewBox: '0 0 100 100',
+        width: 100,
+        height: 100,
+      },
+      [{ id: 'e', kind: 'element', color: '#1971c2', points: [[10, 10], [60, 60]], anchor: { tag: 'g', selector: '#line2d_1', bbox: [10, 10, 60, 60] } }],
+    )
+    expect(svg).toContain('class="da-spot"')
+    expect(svg).toContain('drop-shadow')
+    // Nothing else is drawn for it: no stroke, no box.
+    expect(svg).not.toContain('stroke="#1971c2"')
+  })
+
+  it('lights nothing when the figure has no element mark on it', () => {
+    const svg = composeReviewSvg(
+      { kind: 'svg', markup: '<svg width="10" height="10"><rect width="10" height="10"/></svg>', viewBox: '0 0 10 10', width: 10, height: 10 },
+      [{ id: 'r', kind: 'rect', color: '#000', points: [[1, 1], [5, 5]] }],
+    )
+    expect(svg).not.toContain('da-spot')
+  })
   })
 
   it('draws a point mark as a filled pin with its number inside', () => {
@@ -479,6 +536,265 @@ describe('figure DOM', () => {
     expect(anchor?.id).toBe('n1')
     expect(anchor?.title).toBeUndefined()
     expect(anchor?.text).toBeUndefined()
+  })
+})
+
+describe('asking the browser what is under the pointer', () => {
+  let dom: ReturnType<typeof installDom>
+  beforeEach(() => { dom = installDom() })
+  afterEach(() => {
+    // Hit testing is written onto the document by the test that needs it, so it is
+    // taken off again rather than left standing for the next spec's document.
+    Reflect.deleteProperty(document, 'elementsFromPoint')
+    dom.window.close()
+  })
+
+  /**
+   * A container holding one figure, whose document answers hit testing from a map.
+   *
+   * jsdom has no `elementsFromPoint` and no layout to base one on, so the answer the
+   * browser would give is written down instead. Keys are pointer positions; a point
+   * absent from the map is a point over blank paper, which is what a browser reports
+   * there too.
+   * @param markup - the figure's own markup.
+   * @param answers - what each point reports, in paint order.
+   * @returns the container and the questions the document was asked.
+   */
+  function figureThatAnswers(markup: string, answers: Map<string, Element[]>): { container: HTMLElement, asked: string[] } {
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = defined(parseFigureSvg(markup))
+    container.append(root)
+    stubRect(container, { left: 0, top: 0, width: 100, height: 100 })
+    stubRect(root, { left: 0, top: 0, width: 100, height: 100 })
+    const asked: string[] = []
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: (x: number, y: number) => {
+        asked.push(`${x},${y}`)
+        return answers.get(`${x},${y}`) ?? []
+      },
+    })
+    return { container, asked }
+  }
+
+  it('names the painted element rather than the box around it', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><line id="trend" x1="0" y1="0" x2="100" y2="100"/></svg>',
+      new Map(),
+    )
+    const line = defined(container.querySelector('svg')).querySelector('#trend')
+    stubRect(defined(line), { left: 0, top: 0, width: 100, height: 100 })
+    // The browser says the line covers this point; measuring boxes would also have
+    // said so, but the box of a sloped line covers points the line does not.
+    const answers = new Map<string, Element[]>()
+    for (let dx = -PICK_REACH; dx <= PICK_REACH; dx += 1) answers.set(`${50 + dx},50`, [defined(line)])
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: (x: number, y: number) => answers.get(`${x},${y}`) ?? [],
+    })
+    expect(anchorAtPoint(container, 50, 50, 1, 1)?.id).toBe('trend')
+  })
+
+  it('names the group behind an anonymous sheet rather than the sheet', () => {
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+      + '<g id="figure_1"><g id="patch_1"><path d="M0 0h100v100H0z"/></g>'
+      + '<g id="axes_1"><g id="patch_2"><path d="M10 10h80v80H10z"/></g></g></g></svg>'
+    const { container } = figureThatAnswers(markup, new Map())
+    const figure = defined(container.querySelector('#figure_1'))
+    const axes = defined(container.querySelector('#axes_1'))
+    const sheet = defined(container.querySelector('#patch_1'))
+    const plot = defined(container.querySelector('#patch_2'))
+    stubRect(figure, { left: 0, top: 0, width: 100, height: 100 })
+    stubRect(axes, { left: 10, top: 10, width: 80, height: 80 })
+    stubRect(sheet, { left: 0, top: 0, width: 100, height: 100 })
+    stubRect(plot, { left: 10, top: 10, width: 80, height: 80 })
+    const answers = new Map<string, Element[]>([
+      ['5,5', [defined(sheet.querySelector('path')), sheet]],
+      ['50,50', [defined(plot.querySelector('path')), plot, defined(sheet.querySelector('path')), sheet]],
+    ])
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: (x: number, y: number) => answers.get(`${x},${y}`) ?? [],
+    })
+    // `patch_N` names the area behind the artists, not an artist: answering with it
+    // would mean every click on blank paper says "the paper". The group it hangs under
+    // is what the reader meant — here the figure's margin, there the axes.
+    expect(anchorAtPoint(container, 5, 5, 1, 1)?.id).toBe('figure_1')
+    expect(anchorAtPoint(container, 50, 50, 1, 1)?.id).toBe('axes_1')
+  })
+
+  it('asks about the figure without touching a single one of its properties', () => {
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" width="100" height="100"/></svg>'
+    const { container } = figureThatAnswers(markup, new Map())
+    const root = defined(container.querySelector('svg'))
+    const before = root.getAttribute('style')
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [] })
+    anchorAtPoint(container, 10, 10, 1, 1)
+    // Handing the figure `pointer-events: all` to reach an unfilled shape also opens
+    // every stroke to the pointer: measured on a real matplotlib figure, that changed
+    // one sampled point in five and always for the worse, because a curve with no fill
+    // began answering for the tick groups in front of it. The fill geometry is asked
+    // instead, so the figure is left exactly as it was found.
+    expect(root.getAttribute('style')).toBe(before)
+    expect(root.style.pointerEvents).toBe('')
+  })
+
+  it('names the hollow shape the pointer is inside of', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">'
+      + '<ellipse id="node" fill="none" stroke="#000" cx="100" cy="100" rx="60" ry="40"/></svg>',
+      new Map(),
+    )
+    const node = defined(container.querySelector('#node'))
+    stubRect(node, { left: 40, top: 60, width: 120, height: 80 })
+    // The browser reports nothing under the pointer: a shape with `fill="none"` is
+    // transparent to it, which is why a hollow node's middle used to name nothing.
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [] })
+    Object.defineProperty(node, 'isPointInFill', { configurable: true, value: () => true })
+    // jsdom has no matrix type; the double only has to be an invertible transform.
+    const identity = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0, inverse: () => identity }
+    Object.defineProperty(node, 'getScreenCTM', { configurable: true, value: () => identity })
+    expect(anchorAtPoint(container, 100, 100, 1, 1)?.id).toBe('node')
+  })
+
+  it('leaves a painted shape alone even though its fill area also covers the point', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">'
+      + '<rect id="bar" fill="#4c6ef5" x="20" y="20" width="160" height="160"/></svg>',
+      new Map(),
+    )
+    const bar = defined(container.querySelector('#bar'))
+    stubRect(bar, { left: 20, top: 20, width: 160, height: 160 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [bar] })
+    // A painted shape has already been answered for by the browser. Asking its fill
+    // geometry as well could only reorder an answer that is already right.
+    const asked = vi.fn(() => true)
+    Object.defineProperty(bar, 'isPointInFill', { configurable: true, value: asked })
+    expect(anchorAtPoint(container, 100, 100, 1, 1)?.id).toBe('bar')
+    expect(asked).not.toHaveBeenCalled()
+  })
+
+  it('puts a hit outside the figure back where it came from', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" width="100" height="100"/></svg>',
+      new Map(),
+    )
+    const root = defined(container.querySelector('svg'))
+    // The panel's own stylesheet may have set this; the loan must not undo it.
+    root.style.pointerEvents = 'none'
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [] })
+    expect(anchorAtPoint(container, 10, 10, 1, 1)).toBeUndefined()
+    expect(root.style.pointerEvents).toBe('none')
+  })
+
+  it('falls back to measuring boxes when the document cannot be asked at all', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" x="10" y="10" width="40" height="20"/></svg>',
+      new Map(),
+    )
+    // No `elementsFromPoint` on the document: jsdom's own state, and the state of any
+    // engine without hit testing. The boxes are the only answer available.
+    Reflect.deleteProperty(document, 'elementsFromPoint')
+    stubRect(defined(container.querySelector('#r')), { left: 10, top: 10, width: 40, height: 20 })
+    expect(anchorAtPoint(container, 30, 20, 1, 1)?.id).toBe('r')
+  })
+
+  it('skips the figure root and anything the figure never paints', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><rect id="ghost" width="100" height="100"/></defs><rect id="r" x="10" y="10" width="20" height="20"/></svg>',
+      new Map(),
+    )
+    const root = defined(container.querySelector('svg'))
+    const ghost = defined(container.querySelector('#ghost'))
+    const rect = defined(container.querySelector('#r'))
+    stubRect(rect, { left: 10, top: 10, width: 20, height: 20 })
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [ghost, root, rect],
+    })
+    // The sheet names nothing, and a declaration in `defs` is not painted there.
+    expect(anchorAtPoint(container, 15, 15, 1, 1)?.id).toBe('r')
+  })
+
+  it('names a full-width painted shape, because a line can cover the whole figure too', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="bg" width="100" height="100"/></svg>',
+      new Map(),
+    )
+    const background = defined(container.querySelector('#bg'))
+    stubRect(background, { left: 0, top: 0, width: 100, height: 100 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [background] })
+    // A figure cannot use the document's "covers everything, so it is the paper" rule:
+    // a trend line drawn corner to corner has the whole figure for a box, so that rule
+    // would refuse to name the one line the reader most likely means. A background
+    // that does get named is shown by the highlight before the click.
+    expect(anchorAtPoint(container, 50, 50, 1, 1)?.id).toBe('bg')
+  })
+
+  it('carries the element path a source reader can paste', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="axes_1"><rect id="line2d_1" width="10" height="10"/></g></svg>',
+      new Map(),
+    )
+    const line = defined(container.querySelector('#line2d_1'))
+    stubRect(line, { left: 0, top: 0, width: 10, height: 10 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [line] })
+    expect(anchorAtPoint(container, 5, 5, 1, 1)?.selector).toBe('#line2d_1')
+  })
+
+  it('spells a nameless element path from the figure root', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g class="n"><path d="M0 0 L10 10"/></g></svg>',
+      new Map(),
+    )
+    const path = defined(container.querySelector('path'))
+    stubRect(path, { left: 0, top: 0, width: 10, height: 10 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [path] })
+    // Rooted at the figure, so the same path means the same element in the reader's
+    // own source file rather than in the panel's document.
+    expect(anchorAtPoint(container, 5, 5, 1, 1)?.selector).toBe('svg > g:nth-of-type(1) > path:nth-of-type(1)')
+  })
+
+  it('counts a nameless element among its same-name siblings', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><path d="M0 0 L4 4"/>'
+      + '<path d="M4 4 L10 10"/><text x="0" y="10">hi</text></svg>',
+      new Map(),
+    )
+    const second = defined(container.querySelectorAll('path')[1])
+    stubRect(second, { left: 4, top: 4, width: 6, height: 6 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [second] })
+    // The position is among same-name siblings only, so the text in front of neither
+    // path has any say in it.
+    expect(anchorAtPoint(container, 5, 5, 1, 1)?.selector).toBe('svg > path:nth-of-type(2)')
+  })
+
+  it('refuses a hit that belongs to the panel rather than to the figure', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" width="10" height="10"/></svg>',
+      new Map(),
+    )
+    const rect = defined(container.querySelector('#r'))
+    const chrome = defined(container.parentElement)
+    stubRect(rect, { left: 0, top: 0, width: 10, height: 10 })
+    stubRect(chrome, { left: 0, top: 0, width: 900, height: 900 })
+    // The same document holds the panel's own chrome, and the overlay in front of the
+    // drawing is a hit too; neither is a thing on the figure.
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [chrome, rect] })
+    expect(anchorAtPoint(container, 5, 5, 1, 1)?.id).toBe('r')
+  })
+
+  it('names nothing when the panel is the only thing under the pointer', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" width="10" height="10"/></svg>',
+      new Map(),
+    )
+    const chrome = defined(container.parentElement)
+    stubRect(chrome, { left: 0, top: 0, width: 900, height: 900 })
+    Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [chrome] })
+    // Not a fallback to the sheet: a point on the panel's own padding names nothing.
+    expect(anchorAtPoint(container, 5, 5, 1, 1)).toBeUndefined()
   })
 })
 

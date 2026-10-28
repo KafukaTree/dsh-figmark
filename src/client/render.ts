@@ -237,6 +237,13 @@ export function markPathData(mark: AnnotationMark): string | undefined {
     }
     case 'point':
       return undefined
+    case 'element':
+      // An element mark draws no path of its own: it is drawn as the light on the
+      // element it names (see `spotlight.ts`), in the panel and in the delivered
+      // picture alike. Corner brackets were what it used to be, and they had the
+      // failing the light exists to fix — on a curve the brackets are corners of a
+      // rectangle the figure never draws.
+      return undefined
   }
 }
 
@@ -341,6 +348,21 @@ export function pointMarkBox(mark: AnnotationMark, unit = 1): MarkBox | undefine
 /** Whether a mark draws as a stroke (so the overlay can size its hit area). */
 export function isStrokeKind(kind: MarkKind): boolean {
   return kind !== 'point'
+}
+
+/**
+ * Whether a mark's extent is the reader's to change.
+ *
+ * Two kinds say a size that is not theirs to edit. A `point` has no extent at all —
+ * it is one coordinate, and a resize handle would stretch nothing. An `element` has
+ * one, but it belongs to the element: the box is where that element was when it was
+ * picked, and dragging a corner would leave a mark claiming to name a thing while
+ * pointing at some other area. Both are still selectable and still carry a number.
+ * @param kind - the kind of mark.
+ * @returns true when the mark offers no resize or turn handles.
+ */
+export function hasFixedExtent(kind: MarkKind): boolean {
+  return kind === 'point' || kind === 'element'
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   markPathData, pinNumberCentre, pinPathData,
 } from './render'
 import { figureUnit } from './scale'
+import { lightMarkup } from './spotlight'
 import { plotBounds } from './plot'
 
 /** The figure layer placed under the marks. */
@@ -78,13 +79,26 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
   return parts.join('')
 }
 
-/** The figure layer as SVG elements. */
-function figureSvg(layer: FigureLayer): string {
+/**
+ * The figure layer as SVG elements.
+ *
+ * `lit` is the elements the review is about. An `element` mark draws nothing of its
+ * own — it is the light on the element, and that light lives on the figure's own
+ * markup, so it has to be written in here, where the figure is placed. The alternative
+ * is a picture where the reader approved a glowing curve and the agent reads a
+ * rectangle around it.
+ *
+ * @param layer - the figure to place.
+ * @param lit - selectors of the elements to light, already resolved from the marks.
+ * @returns the figure's elements.
+ */
+function figureSvg(layer: FigureLayer, lit: readonly string[] = []): string {
   if (layer.kind === 'raster') {
     return `<image x="0" y="0" width="${layer.width}" height="${layer.height}" href="${layer.dataUrl}"/>`
   }
   const viewBox = layer.viewBox === undefined ? '' : ` viewBox="${layer.viewBox}"`
-  const inner = layer.markup.replace(/^<\?xml[^>]*\?>\s*/u, '').replace(/^<svg[^>]*>/iu, '').replace(/<\/svg>\s*$/iu, '')
+  const litMarkup = lightMarkup(layer.markup, lit)
+  const inner = litMarkup.replace(/^<\?xml[^>]*\?>\s*/u, '').replace(/^<svg[^>]*>/iu, '').replace(/<\/svg>\s*$/iu, '')
   return `<svg x="0" y="0" width="${layer.width}" height="${layer.height}"${viewBox}`
     + ` preserveAspectRatio="xMidYMid meet">${inner}</svg>`
 }
@@ -137,11 +151,16 @@ export function composeReviewSvg(
   const grown = paper.x !== 0 || paper.y !== 0
     || paper.width !== layer.width || paper.height !== layer.height
   const edge = grown ? figureEdge(layer.width, layer.height, unit) : ''
+  // Every element mark names one element, and the picture has to say which of them the
+  // review is about the same way the panel did: by lighting them.
+  const lit = marks.flatMap(mark => (mark.kind === 'element' && mark.anchor?.selector !== undefined
+    ? [mark.anchor.selector]
+    : []))
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
     + ` width="${paper.width}" height="${paper.height}" viewBox="0 0 ${paper.width} ${paper.height}">`
     + `<rect x="0" y="0" width="${paper.width}" height="${paper.height}" fill="#ffffff"/>`
     + `<g transform="${shift}">`
-    + figureSvg(layer)
+    + figureSvg(layer, lit)
     + edge
     + marks.map(mark => markSvg(mark, numbers.get(mark.id), unit)).join('')
     + '</g></svg>'

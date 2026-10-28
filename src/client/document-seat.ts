@@ -41,8 +41,6 @@ export interface PagedAnnotationInput {
   readonly summary: string
   /** Creation time of the document already on disk, when it was loaded. */
   readonly createdAt: string | null
-  /** How large the document's numbers are drawn, when the reader chose a size. */
-  /** Whether the document's numbers are drawn at all. */
 }
 
 /** One annotated page rendered for the session, in the page's own units. */

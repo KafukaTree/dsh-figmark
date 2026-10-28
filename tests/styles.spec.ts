@@ -79,6 +79,18 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('.da-figure-frame{background:var(--dsw-alias-bg-base,#fff)')
   })
 
+  it('lets the hand under the select tool reach the overlay over the figure', () => {
+    // The stage says `grab`; the overlay covers the whole figure and is what the
+    // pointer is actually over, so a cursor of its own there took the hand away the
+    // moment the reader moved onto the picture — exactly where dragging starts. It
+    // inherits instead, and a drag in progress (which is `grabbing`) wins over every
+    // descendant, so the closed hand also survives the move onto a mark.
+    expect(STYLES).toContain('.da-stage[data-hand="true"]{cursor:grab}')
+    expect(STYLES).toContain('.da-overlay[data-tool="select"]{cursor:inherit}')
+    expect(STYLES).not.toContain('.da-overlay[data-tool="select"]{cursor:default}')
+    expect(STYLES).toContain('[data-panning="true"] *{cursor:grabbing !important}')
+  })
+
   it('gives the wait for the first page a box that holds the pane’s frame', () => {
     // The page slot is sized like the body's own column: without it the pane
     // collapses to a line of text until the page arrives.

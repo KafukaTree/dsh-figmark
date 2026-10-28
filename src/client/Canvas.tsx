@@ -7,7 +7,7 @@
  * means the same thing at any zoom or pane width.
  * @module dsh-figmark/client/Canvas
  */
-import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor, MarkKind } from '../shared/annotation'
 import { WEIGHT_DEFAULT } from '../shared/annotation'
 import { anchorAtPoint } from './figure-dom'
@@ -23,7 +23,7 @@ import {
 } from './handles'
 import { boxCentre, markBounds, shiftPoints, uprightBounds, type MarkBox } from './mark-geometry'
 import {
-  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, pinFontSizeOf, strokeWidthOf,
+  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, hasFixedExtent, pinFontSizeOf, strokeWidthOf,
   markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from './render'
 import { figureUnit } from './scale'
@@ -47,7 +47,7 @@ export interface MarkPatch {
 }
 
 /** Tools the toolbar can activate. */
-export type Tool = 'select' | 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point'
+export type Tool = 'select' | 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point' | 'element'
 
 /**
  * The `weight` field of a new mark, or nothing when it is the default.
@@ -117,6 +117,17 @@ export interface CanvasProps {
    * surface, and only one of them can be answered for any given figure.
    */
   readonly anchorAtFigurePoint?: ((x: number, y: number) => MarkAnchor | undefined) | undefined
+  /**
+   * Report the element the pointer is over while the picker is armed.
+   *
+   * The canvas knows *which* element a click would take but not how to light it: an
+   * inline SVG's elements belong to the panel's document and a rendered document's
+   * belong to its frame, and only the body knows which of those it is looking at.
+   * Reporting the name lets the body light the element itself, so the highlight has
+   * the element's own shape instead of a box drawn around it.
+   * @param anchor - what the pointer names, or undefined when it names nothing.
+   */
+  readonly onHover?: ((anchor: MarkAnchor | undefined) => void) | undefined
   /** Currently selected mark. */
   readonly selectedId: string | null
   /** Select one mark, or clear the selection. */
@@ -305,6 +316,28 @@ export function Canvas(props: CanvasProps): ReactNode {
    */
   const drew = useRef(false)
   /**
+   * The element the pointer is currently over, while the `element` tool is armed.
+   *
+   * Held here so that a stream of moves across one element does not have to be
+   * reported twice: the parent is told only when the name changes, or when the same
+   * element is re-read at a new box. Null means either no tool, or a point that names
+   * nothing.
+   */
+  const [hover, setHover] = useState<MarkAnchor | null>(null)
+  /**
+   * Tell the parent which element the pointer is over.
+   *
+   * A separate effect rather than a call inside the move handler: the highlight
+   * belongs to the figure's own document, and this component never touches it. Kept
+   * on `hover` and the callback alone, so a move that names the same element reports
+   * nothing at all — the effect's dependencies are the two things that can change the
+   * answer, not the props object a parent rebuilds every render.
+   */
+  const reportHover = props.onHover
+  useEffect(() => {
+    reportHover?.(hover ?? undefined)
+  }, [hover, reportHover])
+  /**
    * Where the current press landed, in figure pixels.
    *
    * Recorded in the capture phase because a mark's hit area stops the bubble, so
@@ -315,7 +348,7 @@ export function Canvas(props: CanvasProps): ReactNode {
   const pressedAt = useRef<{ value: FigurePoint }>({ value: [0, 0] })
 
   /** Convert one pointer event to figure pixels. */
-  const toFigure = (event: ReactPointerEvent<SVGSVGElement>): FigurePoint => {
+  const toFigure = (event: Pick<ReactPointerEvent<SVGSVGElement>, 'currentTarget' | 'clientX' | 'clientY'>): FigurePoint => {
     // The handler is bound to the surface itself, so `currentTarget` is always
     // the element whose box the coordinates are measured in.
     const rect = event.currentTarget.getBoundingClientRect()
@@ -337,7 +370,10 @@ export function Canvas(props: CanvasProps): ReactNode {
    * hit-tested against client coordinates instead, because its elements live in
    * the same document as this overlay and their boxes are the browser's own.
    */
-  const anchorFor = (event: ReactPointerEvent<SVGSVGElement>, point: FigurePoint): MarkAnchor | undefined => {
+  const anchorFor = (
+    event: Pick<ReactPointerEvent<SVGSVGElement>, 'currentTarget' | 'clientX' | 'clientY'>,
+    point: FigurePoint,
+  ): MarkAnchor | undefined => {
     if (props.anchorAtFigurePoint !== undefined) return props.anchorAtFigurePoint(point[0], point[1])
     const container = containerRef.current
     if (!anchoring || container === null) return undefined
@@ -350,6 +386,62 @@ export function Canvas(props: CanvasProps): ReactNode {
   const capturePress = (event: ReactPointerEvent<SVGSVGElement>): void => {
     pressedAt.current.value = toFigure(event)
   }
+
+  /**
+   * Whether two anchors name the same element in the same place.
+   *
+   * Two separate reads of the same element can arrive as two objects, and the
+   * highlight only has to change when what it is drawn around changes. Comparing the
+   * name *and* the box covers both ways it can: a different element, or the same
+   * element after the surface reflowed under it.
+   * @param one - the anchor drawn now, or null when nothing is lit.
+   * @param other - the anchor the pointer just named.
+   * @returns true when the highlight would look exactly the same.
+   */
+  const sameAnchor = (one: MarkAnchor | null, other: MarkAnchor | null): boolean => {
+    if (one === null || other === null) return one === other
+    if (one.selector !== other.selector || one.id !== other.id || one.tag !== other.tag) return false
+    return one.bbox.every((value, index) => value === other.bbox[index])
+  }
+
+  /**
+   * One element as a mark, from the anchor that named it.
+   *
+   * The geometry is the element's own box, written as the two corners every
+   * box-shaped mark carries, so everything downstream — the hit area, the control
+   * frame, the export, the PDF appearance — reads an element mark through the same
+   * code a `rect` goes through. What makes it a different mark is what it also
+   * carries: the anchor, which is the name of the thing rather than the area.
+   * @param anchor - the element that was picked.
+   * @returns the mark to commit.
+   */
+  const elementMark = (anchor: MarkAnchor): AnnotationMark => {
+    const [x, y, boxWidth, boxHeight] = anchor.bbox
+    return {
+      id: nextMarkId(),
+      kind: 'element',
+      color,
+      points: [[x, y], [x + boxWidth, y + boxHeight]],
+      // No `weight`: an element mark draws no stroke and no marker — the light on the
+      // element it names is the whole of it — so the pen weight has nothing to size.
+      // Carrying it would put a number in the file that changes nothing about the
+      // picture and, worse, would grow the mark's measured outline by half a stroke
+      // that is never painted.
+      anchor,
+    }
+  }
+
+  /**
+   * Forget the highlight whenever the picker is put away.
+   *
+   * The highlight says "this is what a click would take"; with no picker armed there
+   * is no click to describe, and a lit element left behind would be a promise the
+   * tool no longer keeps. Disarming also covers the case a pointer never will: the
+   * reader leaves the figure with the picker armed, so no move arrives to clear it.
+   */
+  useEffect(() => {
+    if (tool !== 'element') setHover(null)
+  }, [tool])
 
   /**
    * Begin moving the mark a press landed on.
@@ -389,6 +481,11 @@ export function Canvas(props: CanvasProps): ReactNode {
     // The shape's own hit area is content, so under a drawing tool a press on it
     // still belongs to the stroke being started.
     if (handle === undefined && tool !== 'select') return
+    // An element mark cannot be dragged: its box is where the element was, and a box
+    // moved a few pixels away would still claim to name that element while pointing
+    // at nothing in particular. Picking it again is how it is placed, so the press
+    // that would move it just selects it.
+    if (handle === undefined && mark.kind === 'element') return
     if (typeof event.currentTarget.setPointerCapture === 'function' && event.pointerId !== undefined) {
       event.currentTarget.setPointerCapture(event.pointerId)
     }
@@ -431,9 +528,9 @@ export function Canvas(props: CanvasProps): ReactNode {
     // mark must fall through to moving it — otherwise a click near a corner of
     // an unselected mark would silently resize it.
     if (props.selectedId !== mark.id) return false
-    // A point mark is framed by a highlight ring instead of handles, because it
-    // has no extent to resize and a rotation would mean nothing.
-    if (mark.kind === 'point') return false
+    // Marks with a fixed extent are framed by a dashed box instead of handles: a
+    // point has no extent to resize, and an element's box belongs to the element.
+    if (hasFixedExtent(mark.kind)) return false
     const grabbed = handleAt(
       controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * grip, grip,
     )
@@ -505,12 +602,50 @@ export function Canvas(props: CanvasProps): ReactNode {
     return patch
   }
 
+  /**
+   * The element mark the pointer is over, if any.
+   *
+   * An element mark draws nothing, so it has no painted shape a press can land on, and
+   * a hit `rect` over its box would swallow the whole plot: an element is routinely a
+   * curve, a legend or an axis spanning most of the figure, so a box-shaped target
+   * would block every other mark and every press meant for the paper. It also said the
+   * wrong thing — the box around a diagonal curve is a region the figure never drew,
+   * which is the very mismatch the light was introduced to fix.
+   *
+   * So the question is asked the other way round: which element is under this point,
+   * and which mark names that element. The answer is the same `anchorFor` the picker
+   * uses, which is why the target and the light agree by construction.
+   *
+   * @param event - the press to place.
+   * @param point - the press in figure pixels.
+   * @returns the mark whose element is under the press.
+   */
+  const elementMarkAt = (
+    event: Pick<ReactPointerEvent<SVGSVGElement>, 'currentTarget' | 'clientX' | 'clientY'>,
+    point: FigurePoint,
+  ): AnnotationMark | undefined => {
+    const named = anchorFor(event, point)
+    if (named === undefined) return undefined
+    const selector = named.selector
+    if (selector === undefined) return undefined
+    return marks.find(mark => mark.kind === 'element' && mark.anchor?.selector === selector)
+  }
+
   const start = (event: ReactPointerEvent<SVGSVGElement>): void => {
     // Every gesture begins here, so this is where the previous one's trailing click
     // stops being owed: a press that neither pans nor draws must leave a later click
     // meaning what it says.
     drew.current = false
     if (tool === 'select') {
+      // A press on a placed element selects it, the way a press on any other mark
+      // does — but it is found by asking the figure what is under the pointer, not by
+      // a box drawn over it. That keeps the target exactly as big as the thing the
+      // mark is about: pressing elsewhere inside the box is pressing paper.
+      const overElement = elementMarkAt(event, toFigure(event))
+      if (overElement !== undefined) {
+        beginGesture(overElement, event)
+        return
+      }
       // Under `select` a drag on empty space has no other meaning: a mark's own hit
       // area takes its presses first, so reaching here on the surface means the
       // pointer is over the table rather than over anything on it. Pushing the
@@ -547,6 +682,20 @@ export function Canvas(props: CanvasProps): ReactNode {
       drew.current = true
       return
     }
+    if (tool === 'element') {
+      // Picking is a click, not a drag: the element under the pointer is already the
+      // whole answer, and there is nothing for a drag to decide. A press that names
+      // no element does nothing at all, rather than placing a mark on the background —
+      // an element mark with no element would be a box claiming to name a thing.
+      const picked = anchorFor(event, point)
+      if (picked === undefined) return
+      const mark = elementMark(picked)
+      props.onAdd(mark)
+      props.onSelect(mark.id)
+      props.onDrawn?.(mark.id)
+      drew.current = true
+      return
+    }
     drawing.current = true
     if (typeof event.currentTarget.setPointerCapture === 'function' && event.pointerId !== undefined) {
       event.currentTarget.setPointerCapture(event.pointerId)
@@ -567,6 +716,14 @@ export function Canvas(props: CanvasProps): ReactNode {
       panned.current = true
       props.onPan?.(dx, dy)
       return
+    }
+    // Each move under the picker re-asks what is under the pointer, so the highlight
+    // follows the cursor and a click can only ever pick what was already lit.
+    // An unchanged name leaves the state alone: a stream of moves across one element
+    // would otherwise re-render the whole overlay for every frame of it.
+    if (tool === 'element') {
+      const found = anchorFor(event, toFigure(event)) ?? null
+      setHover(current => (sameAnchor(current, found) ? current : found))
     }
     if (press !== null) {
       const point = toFigure(event)
@@ -733,16 +890,21 @@ export function Canvas(props: CanvasProps): ReactNode {
   }
 
   /**
-   * The highlight drawn around a selected `point` mark.
+   * The highlight drawn around a selected point mark.
    *
-   * A frame with eight resize handles would be a lie: a point mark has no extent,
-   * so there is nothing to stretch and nothing to turn. What it does need is to
-   * read as selected, which a dashed box around the pin says without offering
-   * handles that would do nothing.
+   * A frame with eight resize handles would be a lie here: a point has no extent, so
+   * there is nothing to stretch. A dashed box says "this one, and only selected"
+   * without offering handles that would do nothing.
+   *
+   * An element mark is *not* framed. Its box is a rectangle the figure never draws —
+   * around a curve it can cover half the plot — so a frame there would say "this
+   * region" when the mark says "this thing". It reads as selected by being lit
+   * harder, in its own shape, which is the rule in `spotlight.ts`.
+   * @param box - the frame to draw, in figure pixels.
+   * @returns the frame, or nothing when there is no box to draw it around.
    */
-  const renderPointFrame = (shown: AnnotationMark): ReactNode => {
-    const box = pointMarkBox(shown, unit)
-    /* v8 ignore next -- a point mark carries exactly the one coordinate it was placed at. */
+  const renderFixedFrame = (box: MarkBox | undefined): ReactNode => {
+    /* v8 ignore next -- both kinds that reach this frame always have a box. */
     if (box === undefined) return null
     // A control, like the frame around a stroke mark: sized on screen, not on the figure.
     const inset = 3 * hairline
@@ -775,7 +937,7 @@ export function Canvas(props: CanvasProps): ReactNode {
      */
     const hitArea = pin === undefined || isDraft ? null : (
       <path d={pin} fill="transparent" stroke="transparent" strokeWidth={HIT_WIDTH * unit}
-        style={{ pointerEvents: 'all', cursor: 'pointer' }}
+        style={{ pointerEvents: 'all' }}
         onPointerDown={(event) => { if (!beginHandle(mark, event)) beginGesture(mark, event) }}
         onDoubleClick={(event) => { event.stopPropagation(); props.onEdit(mark.id) }} />
     )
@@ -790,15 +952,15 @@ export function Canvas(props: CanvasProps): ReactNode {
               strokeLinecap="round" strokeLinejoin="round" />
             {isDraft ? null : (
               <path d={path} fill="none" stroke="transparent" strokeWidth={HIT_WIDTH * unit}
-                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                style={{ pointerEvents: 'stroke' }}
                 onPointerDown={(event) => { if (!beginHandle(mark, event)) beginGesture(mark, event) }}
                 onDoubleClick={(event) => { event.stopPropagation(); props.onEdit(mark.id) }} />
             )}
           </g>
         )}
         {hitArea}
-        {selected && !isDraft && isPoint ? renderPointFrame(shown) : null}
-        {selected && !isDraft && !isPoint ? renderHandles(shown) : null}
+        {selected && !isDraft && isPoint ? renderFixedFrame(pointMarkBox(shown, unit)) : null}
+        {selected && !isDraft && !hasFixedExtent(mark.kind) ? renderHandles(shown) : null}
       </g>
     )
   }
@@ -820,6 +982,20 @@ export function Canvas(props: CanvasProps): ReactNode {
       onPointerMove={move}
       onPointerUp={finish}
       onPointerCancel={finish}
+      // Leaving the surface is the one move that is not a move: the picker has no
+      // element under it any more, so the highlight goes rather than staying lit on
+      // whatever the pointer last crossed.
+      onPointerLeave={() => { setHover(null) }}
+      onDoubleClick={(event) => {
+        // An element mark paints nothing, so it has no shape to carry its own
+        // double-click: the press is answered here, from the same question a press
+        // asks. Opening one for editing is the only thing a double-click on it means.
+        if (tool !== 'select') return
+        const over = elementMarkAt(event, toFigure(event))
+        if (over === undefined) return
+        event.stopPropagation()
+        props.onEdit(over.id)
+      }}
       onClick={(event) => {
         // Only a click on the surface itself is a click on nothing; one that
         // landed on a mark's hit area must leave that mark selected, which is

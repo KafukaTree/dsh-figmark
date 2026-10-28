@@ -31,8 +31,15 @@ export const ANNOTATION_VERSION_V2 = 2
  * no arrow, no lettering. It exists for the case the other four cannot express —
  * "right here, change this" — where drawing a shape would be a claim about extent
  * that the reader never made.
+ *
+ * `element` is a box the reader did not draw: they pointed at one element of a
+ * vector surface and the annotator took that element's own outline. Its geometry is
+ * the element's box, so everything that measures or exports a box treats it as one;
+ * what separates it from a `rect` is the claim it makes — a drawn box says "look in
+ * here", an element says "this thing, the one with this name". That claim is the
+ * {@link AnnotationMark.anchor}, and the box is only there to hold the number.
  */
-export type MarkKind = 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point'
+export type MarkKind = 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point' | 'element'
 
 /** One point in figure pixel coordinates. */
 export type FigurePoint = readonly [number, number]
@@ -381,6 +388,12 @@ function describeShape(mark: AnnotationMark, locale: SummaryLocale): string {
       return first !== undefined
         ? (zh ? `单点位于 (${round(first[0])},${round(first[1])})` : `at (${round(first[0])},${round(first[1])})`)
         : (zh ? '单点' : 'a point')
+    case 'element':
+      // The box is carried so the mark can be found on the picture, but it is not
+      // what the mark is about: the anchor that follows this phrase names the
+      // element, and naming the box first would invite the agent to read a region
+      // where the reader meant a thing.
+      return `${zh ? '选中元素' : 'element'}${extents(first, second)}`
   }
 }
 

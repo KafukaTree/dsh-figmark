@@ -42,7 +42,7 @@ export const MAX_REVIEW_BYTES = 24 * 1024 * 1024
 const MAX_SELECTOR_CHARS = 400
 
 /** Kinds a mark may declare. */
-const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'point']
+const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'point', 'element']
 
 /** Content hash of one file. */
 export async function fileDigest(path: string): Promise<string> {
