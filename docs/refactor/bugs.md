@@ -1099,6 +1099,15 @@ Recorded so the next reader does not re-investigate them.
 
 Found while auditing the same files; none of them changes what the plugin does.
 
+- **`src/client/locales.ts:78,80,117-119`** — five keys are defined in both
+  languages and referenced nowhere: `pageOf`, `sendNone`, `detailHint`,
+  `detailUnset`, `detailIdle`. Checked by extracting every key from the `zh`
+  object and searching `src/` and `tests/` for each as a string literal; the other
+  five the rough scan flagged (`revealMark`, `dock`, `documentScope`, `collapse`,
+  `expand`) do resolve through `t('…')`. Not a defect in itself — dead strings cost
+  bytes, not behaviour — but `pageOf` and `sendNone` read like the copy for a page
+  counter and an empty-hand-off state, which is exactly the kind of thing that
+  looks implemented when it is only written down.
 - **`src/client/figure-dom.ts:32-41`** — the comment on `REMOTE_STYLE_RULES` says
   a remote `url(…)` "inside `style` is caught by the same check its markup
   equivalent is". Neither half holds. `stripRemoteStyleRules` rewrites only the
