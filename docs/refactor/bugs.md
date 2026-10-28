@@ -38,6 +38,13 @@ message says a copy is attached before an attachment has been offered (42); the
 send button is pressable and silent while there is nothing to send, under a
 comment claiming it explains the reason (41).
 
+A seventh, from auditing the stylesheet rather than the code: **a rule that
+matches an element and still never applies.** Finding 48 is the whole block of
+`.da-tool` styling that a more specific palette rule overrides, and finding 58 is
+a class name in the markup with no rule at all. Both are invisible to a sweep
+that asks only "does this selector find an element" — the check has to ask which
+declaration wins.
+
 ## Open
 
 ### 1. Clearing or delivering an annotation does not always make it stay gone
@@ -1012,6 +1019,234 @@ boundary and the boundary is not there.
 Shown: mounted with a 420-character summary, the counter reads `420/300`,
 `getAttribute('maxlength')` is `null`, `HTMLTextAreaElement.maxLength` is `-1`,
 and the field's value is the full 420 characters.
+
+### 46. Undo on a second figure brings back the first figure's marks
+
+`replaceMarks` (`annotator/history.ts:74-76`) is documented as "loading a document
+is not an edit": it swaps `marks` and leaves `past` and `future` untouched. That
+is right when the same document is re-read — a reload should not make the
+reader's own edits vanish — and wrong when the body is pointed at a *different*
+document, which the load effect does on an `address` change
+(`AnnotatorBody.tsx:644-667`). `replace` is the only thing that runs there, so the
+previous figure's undo trail survives into the new one.
+
+Reader impact: open figure A, edit it (any commit does it — a delete, a draw, a
+property change), then open figure B. The undo button is live on B, and pressing
+it once puts A's marks on B's surface. They are in `marks` now, so the autosave
+signature differs from what B has on disk and the write stores them under B's
+address — B's sidecar ends up describing a figure the marks were never drawn on.
+Redo then walks out of that state again, so the two documents share one trail.
+
+Shown: with figure A's sidecar holding two marks, one delete on A (which commits
+and leaves `past` with one entry), then switching the body to figure B whose
+sidecar is empty — the undo button on B reports `disabled: false`, and after one
+press the DOM carries `['a1', 'a2']`, A's two original marks. Distinct from
+finding 19, which is about `annotation === null` leaving the *current* values
+alone; this one happens even when B loads its own (empty) document successfully,
+because the stacks are separate from the marks.
+### 47. The weight rail is ten pixels wider than it looks, and the extra is over the paper
+
+`.da-weight-input` (`src/client/styles.ts:136`) is a native range rotated upright: it is
+`width:200px;height:30px` and `transform: rotate(-90deg)`, so the *height* becomes the
+horizontal extent. The visible rail (`.da-weight[data-...]`, `:96`) is seven pixels wide,
+so the input sticks out `(30 - 7) / 2 = 11.5px` on each side. It is `opacity:0` but not
+`pointer-events:none`, so the whole thirty pixels take presses.
+
+At fit-to-width the paper's left edge lands at the stage's padding, `x = 14`
+(`src/client/styles.ts:230`), while the input's right edge is at `x = 24.5` — so the
+leftmost `10.5px` of the drawing surface is a stroke-thickness control that looks like
+paper. Measured in Chromium: `elementFromPoint` returns `da-weight-input` for twelve
+consecutive x positions inside the paper, and a press at `x = 16` with a 40px drag moved
+the value from `2` to `2.4` instead of starting a mark.
+
+The rail is on screen whenever a mark is selected or a weight-bearing tool is armed
+(`src/client/annotator/geometry.ts:67`), which is the state a reader draws in.
+
+Not shown: whether the reader notices. There is no visual cue in the eaten strip — the
+rail's own seven pixels are the only sign the control is there.
+
+### 48. Two thirds of the tool tile's styling is written, matches a real element, and loses every time
+
+`src/client/styles.ts` styles `.da-tool` twice. The general block at `:189-197` gives it
+`width:40px;height:34px;border-radius:9px`, a 14px icon with `stroke-width:2.05`, a label
+line, and an armed state that thickens the stroke to `2.4` and paints the tile with
+`--da-accent-soft`. The palette block at `:80-84` then says
+`.da-palette .da-tool .da-tool-icon svg{...stroke-width:1.7}`.
+
+Every `.da-tool` in the tree is rendered inside `.da-palette` (`src/client/annotator/chrome.tsx:82`
+wraps the row at `:94`), so the more specific selector always wins. Measured in Chromium
+with the real stylesheet: the armed tile and the idle tile both render `stroke-width:
+1.7px`, both 32x32, both `border-radius:50%`, and the armed tile's background is the
+dark strip's own `rgb(23,109,242)` rather than the soft tint. The armed state is still
+legible, but by a rule that was never meant to carry it; the `:189-197` block is dead
+weight that a reader will take for live code, and its comment ("it is the only tile with
+a fill, and the only label in the brand colour") describes styling that does not happen.
+
+Why the earlier dead-rule sweep missed it: every selector matches an element. What it
+lacks is the cascade. A rule that matches and loses is invisible to a "does this class
+appear in the markup" check — the check has to compare the winning declaration for the
+properties a rule sets.
+
+### 49. At the panel heights the side rail allows, the last tools are clipped and unreachable
+
+`.da-palette` (`src/client/styles.ts:57`) has no `max-height` and no scroll of its own, and
+`.da-root` is `overflow:hidden` (`:32`). The palette is absolutely positioned, so it is not
+inside the one child that does scroll (`.da-stage`, `:230`). When the panel is shorter than
+the tool column, the bottom tiles are painted outside `.da-root` and cut off, and nothing
+can bring them back.
+
+Measured in Chromium with the real stylesheet, seven tiles:
+
+| panel height | palette overflow past root | tiles reachable by a click |
+|---|---|---|
+| 560px | none | 7 / 7 |
+| 320px | none | 7 / 7 |
+| 240px | 7px | 6 / 7 |
+| 200px | 47px | 5 / 7 |
+
+`elementFromPoint` at the centre of the `element` tool returns nothing at 240px and below,
+so the tool cannot be armed at all. The dock in the sidebar can be dragged this short; the
+figure is then partly visible and fully un-annotatable with the missing tools.
+
+### 50. A palette dragged to the top corner is pinned there by the bar
+
+Both the palette and the bar are `position:absolute; z-index:8`
+(`src/client/styles.ts:57` and `:143`). Moving a strip is clamped so its top can reach `0`
+(`draggedSpot`), and the bar is rendered after the palette in the DOM
+(`src/client/AnnotatorBody.tsx:1643` before `:1651`), so at equal `z-index` the bar paints
+over the palette. The palette's only handle is the grip strip above its tiles
+(`src/client/annotator/chrome.tsx:86`).
+
+Measured in Chromium with both strips parked at the origin: the grip occupies
+`x 8-34, y 6-23`, the bar occupies `x 0-63, y 0-34`, and `elementFromPoint` at the grip's
+centre returns `da-btn` — a button on the bar, not the grip. Once the palette is dragged
+there it cannot be dragged away again; the only recovery is a reload, which loses the
+placement anyway.
+
+Not shown: whether the reader ever drags the palette exactly there. The clamp permits it and
+there is no snap-back, so the state is reachable in one gesture.
+
+### 51. Body text in the secondary colour fails contrast in the light theme, and only there
+
+`--dsw-alias-label-tertiary` resolves to `#81858c` in the light theme. Measured ratios:
+`#81858c` on the panel's `#f2f3f5` is **3.34**, on white **3.71** — both under the 4.5 that
+WCAG AA asks of text below 18.66px. The rules that use it for 10-12px text are
+`src/client/styles.ts:420` (`.da-mark-page`), `:457` (`.da-mark-meta`), `:467` (`.da-count`),
+`:485` (`.da-empty-hint`), `:499` (`.da-hint`) and `:512` (the Markdown gutter).
+
+The same token in the dark theme is `#8b8f96` on `#1f2125` = **4.97**, which passes. So the
+light theme is the readable-by-default one and also the only one with this problem, which is
+the opposite of what a reader would guess from the two palettes.
+
+`src/client/styles.ts:494` separately sets `outline:none` on `.da-menu-item` and marks the
+focused row with `--da-accent-soft` over white: measured **1.20**, against the 3.0 that
+WCAG 1.4.11 asks of a focus indicator.
+
+### 52. An error and a loading note are the same grey sentence
+
+`src/client/AnnotatorBody.tsx:1542` renders the unsupported case, `:1543` the loading case
+and `:1544` the read failure — the last one with `role="alert"` for assistive technology but
+with **the same class**. All three are `<p className="da-hint">`, styled at
+`src/client/styles.ts:499` as 12px `--dsw-alias-label-tertiary` with no tone variant, so the
+failure to read the figure is painted in the same 3.34-contrast grey as "loading…".
+
+The same failures, when they arrive through `status`, are `data-tone="error"` and red
+(`:497`). So the panel has two ways of saying "this did not work", and the one that blocks
+the whole surface is the quieter one. A reader glancing at the panel cannot tell "still
+working" from "gave up" without reading the sentence.
+
+### 53. The figure menu is a `role="menu"` with no keyboard model, and its own size arithmetic is wrong
+
+`src/client/AnnotatorBody.tsx:1358` places the menu with
+`const height = menuItems.length * 27` and a fixed `width: 208`. With the real stylesheet
+(`src/client/styles.ts:488-491`) the menu is `padding:4px`, `gap:1px` per row, and each row
+is `height:27px` in a *content box* (there is no global `box-sizing` reset), so seven rows
+measure **216 x 203** against an assumed 208 x 189. The placement is fed a box 14px shorter
+than the real one, so `clampMenu` believes a menu fits that does not.
+
+Measured in Chromium at a 1200x640 viewport with a right-click at `y = 598`: the real menu
+extends to `bottom = 797`, i.e. 161px past the viewport. The last row is still *clickable*
+(this is a clip, not a dead zone), so this is a visual fault, not a broken affordance — the
+rows the reader cannot see are the ones they never learn are there.
+
+The keyboard half is the larger one: the card is `role="menu"` with `role="menuitem"` rows
+(`src/client/figure-menu-card.tsx:42`), but nothing moves focus into it on open, there is no
+Arrow/Home/End handling, no roving `tabindex` (all seven rows report `tabIndex: 0`), and
+closing does not return focus to the figure. A `role="menu"` promises the menu pattern; a
+screen-reader user who presses Enter on it gets a list they cannot navigate.
+
+### 54. One Escape closes the menu and drops the selection with it
+
+Two listeners both act on Escape and neither defers to the other. The menu's listener
+(`src/client/AnnotatorBody.tsx:1376-1378`) is on `document` and closes on any Escape; the
+panel's listener (`:1118-1124`) is on `window` and, when a mark is selected, calls
+`event.preventDefault()` and clears the selection. The menu's handler does not check
+`event.defaultPrevented`, and the panel's does not check whether a menu is open.
+
+Measured in jsdom: a saved mark selected (nine `[data-da-handle]` elements present), the
+figure menu open, then one `keydown` Escape on the document — afterwards the menu is closed
+**and** the handles are gone. The reader who meant "close this menu" also lost the mark they
+were working on, and on a dense figure finding it again is the work.
+
+### 55. A two-digit count badge covers a third of the icon it rides on
+
+`.da-dock-count` (`src/client/styles.ts:356`) is `min-width:14px` with `padding:0 3px` and
+`font-size:9px`, so its real width grows with the digits: measured **20px** for two digits,
+not the 14 the rule suggests. It is pinned at `top:-1px;right:-2px` over a 15x15 glyph, and
+the overlap measures **74.8px² against the glyph's 225px²** — **33.2%** of the icon sits under
+the badge.
+
+`records.tsx:106` is the only place a count is drawn, so this needs a figure with ten or more
+marks. That is not a rare figure; it is an annotated plot with a legend.
+
+### 56. Three rules that name a state the plugin no longer has
+
+- `src/client/styles.ts:256` `.da-overlay[data-mode="view"]{pointer-events:none}` — nothing
+  writes `data-mode`. `src/client/Canvas.tsx:63` sets `data-tool={tool}` and that is the only
+  attribute on the overlay. A reader who finds this rule will believe there is a viewing mode
+  in which marks cannot be moved; there is not, and `pointer-events:none` on the paper would
+  be a serious thing to apply by accident.
+- `src/client/styles.ts:315` `.da-toolbar .da-page{min-width:52px;...}` — the only `.da-page`
+  element is the PDF page button (`src/client/pdf/paging-controls.tsx:75`), and it is rendered
+  inside `.da-docbar-group`, never inside `.da-toolbar`. It also disagrees with the rule that
+  does apply to it (`:295`, `min-width:44px`), so the two together say 52 while the reader
+  gets 44.
+- `src/client/styles.ts:161` and `:82` hard-code `#176df2` for the pressed accent while
+  `:163` uses the token `var(--da-accent,#176df2)` for the dot beside them. In the dark theme
+  the token moves and the hard-coded pair does not, so two elements that are meant to read as
+  the same accent drift apart.
+
+None of the three can be reached by a test: there is nothing to open. That is the point of
+recording them — a rule that cannot run still teaches the next reader something false about
+the code.
+
+### 57. The Markdown editor is the one text field with no focus indication at all
+
+`src/client/styles.ts:508` gives `.da-md-editor` both `border:none` and `outline:none` and
+adds no `:focus` rule. Every other text field in the panel keeps a focus cue: the note
+textarea drops the outline but recolours its border
+(`src/client/styles.ts:412`, `.da-float textarea:focus{border-color:var(--da-accent)}`), the
+page field does the same (`:325`), and the page button draws a real ring
+(`:301`, `outline:2px solid`).
+
+So the surface a reader types a document edit into — the one whose text becomes a diff an
+agent applies — is the only one where a keyboard user cannot see that the keyboard is there.
+On a page whose whole subject is text, "which field has the caret" is not decorative.
+
+### 58. The mark count is styled like a word in the heading
+
+`src/client/annotator/records.tsx:106` puts `<span className="da-card-count">{props.marks.length}</span>`
+inside `.da-card-title`, and no rule anywhere defines `.da-card-count`
+(`grep -n 'da-card-count' src/client/styles.ts` finds nothing). It therefore inherits the
+title's `font-size:12px` and `font-weight:650` and reads as part of the sentence: the heading
+renders as **"标注清单 6"** rather than as a title with a count beside it.
+
+The panel has a counter style — `.da-count` (`src/client/styles.ts:420`, 10px,
+`tabular-nums`) — and the typo is one attribute away from using it. What makes this worth
+recording rather than fixing is that it shows the pattern: a class name that was never given
+a rule is invisible to both the test suite and the dead-selector sweep (the class *is* in the
+markup), the same blind spot as finding 48.
+
 
 ## Fixed during the refactor
 
