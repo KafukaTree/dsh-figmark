@@ -12,7 +12,7 @@
  */
 
 import type { AnnotationMark, MarkAnchor } from '../../shared/annotation'
-import { uprightBounds, type MarkBox } from '../mark-geometry'
+import { markBounds, type MarkBox } from '../mark-geometry'
 
 /** Hit width of an invisible selection stroke, in figure pixels. */
 export const HIT_WIDTH = 14
@@ -69,14 +69,22 @@ export function elementNamedBy(
 /**
  * The box a mark's control frame is drawn around.
  *
+ * The box is in the mark's own upright frame — un-rotated — because everything that
+ * reads it turns it: `handlesFor` and `tetherFor` rotate these corners by the mark's
+ * rotation, which is what puts the handles on the outline the overlay draws. Handing
+ * them `uprightBounds` meant turning twice: the extent was taken around the shape and
+ * then that extent was turned again, so at 90° the north-west grip sat 70.7 figure
+ * pixels off the corner it belonged to. At zero rotation the two turnings cancel
+ * exactly, which is why nothing noticed.
+ *
  * Only the resize-and-turn handles read this, and only shapes with an extent get
- * those: a `point` mark is highlighted by a ring instead, so it never reaches
- * here. Every kind that does carries at least one point, so there is always a
- * box — the fallback covers a mark whose points were emptied by a bad edit.
+ * those: a `point` mark is highlighted by a ring instead, so it never reaches here.
+ * Every kind that does carries at least one point, so there is always a box — the
+ * fallback covers a mark whose points were emptied by a bad edit.
  * @param mark - the mark to frame.
- * @returns the frame box.
+ * @returns the frame box, in the mark's own upright frame.
  */
 export function controlBox(mark: AnnotationMark): MarkBox {
   /* v8 ignore next -- a mark carries at least one point, which is a box. */
-  return uprightBounds(mark.points, mark.rotation ?? 0) ?? { x: 0, y: 0, width: 0, height: 0 }
+  return markBounds(mark.points) ?? { x: 0, y: 0, width: 0, height: 0 }
 }

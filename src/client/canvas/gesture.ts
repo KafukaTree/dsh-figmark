@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annotation'
 import { WEIGHT_DEFAULT } from '../../shared/annotation'
-import { handleAt, type HandleId } from '../handles'
+import { gripAt, type HandleId } from '../handles'
 import { controlSizes, type ControlSizes } from './controls'
 import { controlBox, elementNamedBy, sameAnchor } from './hit'
 import {
@@ -210,7 +210,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // Marks with a fixed extent are framed by a dashed box instead of handles: a
     // point has no extent to resize, and an element's box belongs to the element.
     if (hasFixedExtent(mark.kind)) return false
-    const grabbed = handleAt(
+    const grabbed = gripAt(
       controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * sizes.grip, sizes.grip,
     )
     if (grabbed === undefined) return false

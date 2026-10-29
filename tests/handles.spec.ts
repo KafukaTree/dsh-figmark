@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 /** The handle arithmetic: where handles sit, what a drag of each one asks for. */
 import { describe, expect, it } from 'vitest'
-import type { FigurePoint } from '../src/shared/annotation'
+import type { AnnotationMark, FigurePoint } from '../src/shared/annotation'
 import {
   HANDLE_IDS,
   HANDLE_SIZE,
   MIN_MARK_SIZE,
   ROTATE_ARM,
   cursorFor,
+  gripAt,
   handleAt,
   handlesFor,
   resizeBy,
@@ -16,6 +17,7 @@ import {
   type HandleId,
 } from '../src/client/handles'
 import { boxCentre, markBounds, type MarkBox } from '../src/client/mark-geometry'
+import { controlBox } from '../src/client/canvas/hit'
 
 /** A box from its corner and size, as the selection frame stores it. */
 const box = (x: number, y: number, width: number, height: number): MarkBox => ({ x, y, width, height })
@@ -150,6 +152,45 @@ describe('handleAt', () => {
     expect(handleAt(square, 90, turned, 6)).toBe('nw')
     // The upright position of that corner is no longer a handle.
     expect(handleAt(square, 90, [0, 0], 6)).not.toBe('nw')
+  })
+})
+
+describe('the frame the handles are drawn around', () => {
+  const turned: AnnotationMark = {
+    id: 'r1', kind: 'rect', color: '#1971c2', points: [[0, 0], [200, 100]], rotation: 90,
+  }
+
+  it('is the box in the mark own frame, so the handles are turned exactly once', () => {
+    // `controlBox` used to hand back `uprightBounds` — the extent *after* the turn —
+    // and `handlesFor` then turned that extent again. At 90° the north-west grip was
+    // 70.7 figure pixels from the corner it claimed to sit on.
+    const box = controlBox(turned)
+    expect(box).toEqual({ x: 0, y: 0, width: 200, height: 100 })
+    // Turned once from that box, the corners are the true rotated corners.
+    const nw = handlesFor(box, 90, 1).find(handle => handle.id === 'nw')
+    expect(nw?.point[0]).toBeCloseTo(150, 6)
+    expect(nw?.point[1]).toBeCloseTo(-50, 6)
+  })
+
+})
+
+describe('a grip that would swallow a small mark', () => {
+  // Every grip of a small mark overlaps the middle of it, so the reach alone made
+  // every press a resize and a tick label could never be dragged.
+  const small = markBounds([[0, 0], [12, 12]]) as MarkBox
+
+  it('gives a press near the middle to the shape, not to a corner', () => {
+    expect(gripAt(small, 0, [6, 6], 15.4, 7)).toBeUndefined()
+    // Aiming at the corner is still aiming at the corner.
+    expect(gripAt(small, 0, [0, 0], 15.4, 7)).toBe('nw')
+  })
+
+  it('leaves a large mark exactly as it was', () => {
+    const large = markBounds([[0, 0], [300, 200]]) as MarkBox
+    // Far from every corner: a move, as before.
+    expect(gripAt(large, 0, [150, 100], 15.4, 7)).toBeUndefined()
+    // A grip's reach still takes a press just inside the corner.
+    expect(gripAt(large, 0, [4, 4], 15.4, 7)).toBe('nw')
   })
 })
 

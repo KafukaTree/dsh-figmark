@@ -1147,6 +1147,23 @@ describe('the control frame around a selected mark', () => {
     expect(defined(onUpdate.mock.calls[0] as [string, MarkPatch] | undefined)[1].points?.[1]?.[0]).toBeCloseTo(260, 6)
   })
 
+  it('moves a small mark pressed in its middle instead of resizing it', () => {
+    // A small mark's eight grips overlap each other and cover the whole of it, so the
+    // grip reach alone decided every press was a resize: a tick label or a short arrow
+    // could be resized but never dragged, and a reader who pressed its middle got a
+    // resize they did not ask for. Aiming at the middle is aiming at the mark.
+    const onMove = vi.fn()
+    const onUpdate = vi.fn()
+    const tick: AnnotationMark = { id: 'm2', kind: 'rect', color: '#1971c2', points: [[40, 40], [52, 52]] }
+    mounted = mount({ tool: 'select', marks: [tick], selectedId: 'm2', onMove, onUpdate })
+    const hit = defined(mounted.svg.querySelector('path[stroke="transparent"]'))
+    pointer(hit, 'pointerdown', 46, 46)
+    pointer(mounted.svg, 'pointermove', 76, 66)
+    pointer(mounted.svg, 'pointerup', 76, 66)
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(onMove).toHaveBeenCalledTimes(1)
+  })
+
   it('resizes the mark under a drawing tool too, because a handle is a control', () => {
     // The frame is drawn only around the selected mark and shows a resize cursor,
     // so a press on a handle can only mean "resize this". Leaving it inert under a

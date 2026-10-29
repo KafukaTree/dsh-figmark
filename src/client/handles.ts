@@ -164,6 +164,40 @@ export function handleAt(
   return best
 }
 
+/**
+ * The handle a press may take, if the press was aimed at one.
+ *
+ * Two conditions, and the second is the one that matters for a small mark. A press
+ * within reach of a grip is a press on the grip only if it is nearer to that grip
+ * than to the middle of the shape: the grips of a small mark overlap each other and
+ * cover the whole of it, so reach alone turned every press on a small mark into a
+ * resize, and a tick label or a short arrow could never be dragged. Aiming at the
+ * middle is aiming at the mark; aiming nearer a corner is aiming at the corner.
+ * @param box - the mark's frame, in its own upright frame.
+ * @param rotation - the mark's rotation in degrees.
+ * @param at - where the press landed, in figure pixels.
+ * @param reach - how far from a grip the press still counts, in figure pixels.
+ * @param size - the grip's side, in figure pixels.
+ * @returns the handle the press took, or undefined to leave it to the shape.
+ */
+export function gripAt(
+  box: MarkBox,
+  rotation: number,
+  at: FigurePoint,
+  reach = HANDLE_SIZE,
+  size = HANDLE_SIZE,
+): HandleId | undefined {
+  const near = handleAt(box, rotation, at, reach, size)
+  if (near === undefined) return undefined
+  const centre = boxCentre(box)
+  const toCentre = Math.hypot(at[0] - centre[0], at[1] - centre[1])
+  const grip = handlesFor(box, rotation, size).find(handle => handle.id === near)
+  /* v8 ignore next -- `handleAt` only names a handle `handlesFor` just placed. */
+  if (grip === undefined) return undefined
+  const toGrip = Math.hypot(at[0] - grip.point[0], at[1] - grip.point[1])
+  return toGrip <= toCentre ? near : undefined
+}
+
 /** The change one handle drag asks for, before it is applied. */
 export interface ResizeRequest {
   /** The handle the drag is holding. */

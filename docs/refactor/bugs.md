@@ -1572,6 +1572,17 @@ shape too: each one is a place where the surface answered a question about the
   weight here and another there; and a turned box was measured by a turned diagonal
   instead of by the corners it sweeps.
 
+- **5.** The frame around a turned mark was turned twice: `controlBox` returned the
+  extent *after* rotation and `handlesFor` rotated that extent again, so at 90° the
+  north-west grip sat 70.7 figure pixels off its corner. `controlBox` now returns the
+  box in the mark's own upright frame, which is what its only two readers document
+  expecting. At zero rotation the two turnings cancelled, which is why nothing saw it.
+- **35.** A small mark could be resized but never moved: the grips of a mark smaller
+  than the grip's reach cover the whole of it, so every press near it caught a handle.
+  A press now takes a grip only if it is nearer that grip than the mark's middle —
+  aiming at the middle is aiming at the mark, aiming at a corner is aiming at the
+  corner. The reach is unchanged for a mark large enough to have a middle to aim at.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.
