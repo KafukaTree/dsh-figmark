@@ -18,6 +18,60 @@ export const MENU_EDGE = 8
 /** One row's height, mirrored from the stylesheet. */
 export const MENU_ROW = 27
 
+/** The menu's own padding, mirrored from the stylesheet. */
+const MENU_PADDING = 4
+
+/** The gap between two rows, mirrored from the stylesheet. */
+const MENU_GAP = 1
+
+/**
+ * The box a menu of this many rows actually lays out as.
+ *
+ * The placement used to assume `rows * MENU_ROW` by `MENU_WIDTH`, which is neither
+ * dimension the browser produces: the rows sit in a padded box with a gap between
+ * them, so a seven-row menu measured 216 x 203 against an assumed 208 x 189. Fed a
+ * box fourteen pixels too short, the clamp believed a menu fitted that did not, and
+ * the last rows were painted past the window edge — still clickable, but never seen,
+ * so the reader never learned they were there.
+ *
+ * The width is exact because the stylesheet gives the menu `box-sizing:border-box`;
+ * the height is the content the rows occupy plus the padding and the gaps between
+ * them (not after the last one).
+ * @param rows - how many rows the menu offers.
+ * @returns the box the menu occupies, in pixels.
+ */
+export function menuSize(rows: number): { readonly width: number; readonly height: number } {
+  const count = Math.max(0, rows)
+  const gaps = Math.max(0, count - 1) * MENU_GAP
+  return { width: MENU_WIDTH, height: count * MENU_ROW + gaps + MENU_PADDING * 2 }
+}
+
+/**
+ * Where a keyboard move inside the menu lands.
+ *
+ * A `role="menu"` promises the menu pattern: arrows move between rows, Home and End
+ * jump to the ends, and the list wraps rather than dead-ending. Without this the card
+ * was a list of buttons a screen-reader user could hear but not walk — every row
+ * reported `tabIndex: 0`, so Tab happened to visit them, but none of the keys a menu
+ * announces did anything.
+ *
+ * Wrapping is the part that makes the ends reachable without a second thought: Down on
+ * the last row goes to the first, which is what every menu does and what makes a
+ * seven-row menu behave the same as a two-row one.
+ * @param key - the key the reader pressed.
+ * @param from - the index the menu is on, or -1 when it is on none.
+ * @param count - how many rows there are.
+ * @returns the index to move to, or null when the key is not a menu key.
+ */
+export function menuStep(key: string, from: number, count: number): number | null {
+  if (count === 0) return null
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  if (key === 'ArrowDown') return from < 0 ? 0 : (from + 1) % count
+  if (key === 'ArrowUp') return from < 0 ? count - 1 : (from - 1 + count) % count
+  return null
+}
+
 /** A click, in viewport coordinates. */
 export interface MenuPoint {
   /** Viewport x. */

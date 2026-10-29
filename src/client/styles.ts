@@ -511,6 +511,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* The figure's context menu. Laid out at a fixed width because the placement
    maths needs one number; rows are the height that maths assumes. */
 .da-menu{position:fixed;z-index:40;display:flex;flex-direction:column;gap:1px;width:208px;
+  box-sizing:border-box;
   padding:4px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);
   box-shadow:0 8px 24px rgba(15,17,21,.16),0 0 0 1px var(--dsw-alias-border-l2,rgba(0,0,0,.1))}
 .da-menu-item{display:flex;align-items:center;height:27px;padding:0 8px;border:0;border-radius:6px;

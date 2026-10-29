@@ -11,6 +11,8 @@ import {
   clampMenu,
   copiedText,
   figureMenuItems,
+  menuSize,
+  menuStep,
   pressedInsideMenu,
   relativeTo,
   type FigureMenuLabels,
@@ -168,5 +170,54 @@ describe('the text a copy row puts down', () => {
 
   it('copies nothing for a relative row with no workspace to name one against', () => {
     expect(copiedText('copyRelative', '/w/figures/fig1.svg', null)).toBeNull()
+  })
+})
+
+describe('the box the menu occupies', () => {
+  it('counts the padding and the gaps between rows, not the rows alone', () => {
+    // Counting rows alone assumed 189 for seven rows, and the browser laid out 203:
+    // fed a box fourteen short, the clamp believed a menu fitted that did not, and
+    // the last rows were painted past the window edge.
+    expect(menuSize(7).height).toBe(7 * MENU_ROW + 6 + 8)
+    expect(menuSize(1).height).toBe(MENU_ROW + 8)
+    expect(menuSize(7).width).toBe(MENU_WIDTH)
+  })
+
+  it('has no gap to count for a menu with nothing in it', () => {
+    expect(menuSize(0).height).toBe(8)
+    expect(menuSize(-3).height).toBe(8)
+  })
+})
+
+describe('moving through the rows from the keyboard', () => {
+  it('starts at the first row whichever way the reader goes first', () => {
+    expect(menuStep('ArrowDown', -1, 7)).toBe(0)
+    expect(menuStep('ArrowUp', -1, 7)).toBe(6)
+  })
+
+  it('wraps at both ends, so a seven-row menu behaves like a two-row one', () => {
+    expect(menuStep('ArrowDown', 6, 7)).toBe(0)
+    expect(menuStep('ArrowUp', 0, 7)).toBe(6)
+  })
+
+  it('walks one row at a time in between', () => {
+    expect(menuStep('ArrowDown', 2, 7)).toBe(3)
+    expect(menuStep('ArrowUp', 2, 7)).toBe(1)
+  })
+
+  it('jumps to either end on Home and End', () => {
+    expect(menuStep('Home', 4, 7)).toBe(0)
+    expect(menuStep('End', 4, 7)).toBe(6)
+  })
+
+  it('leaves every other key to the rest of the page', () => {
+    for (const key of ['Enter', ' ', 'a', 'Tab', 'ArrowLeft']) {
+      expect(menuStep(key, 2, 7)).toBeNull()
+    }
+  })
+
+  it('has nowhere to go in a menu with no rows', () => {
+    expect(menuStep('ArrowDown', -1, 0)).toBeNull()
+    expect(menuStep('Home', 0, 0)).toBeNull()
   })
 })

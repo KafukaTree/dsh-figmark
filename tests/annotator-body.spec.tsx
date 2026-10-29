@@ -1521,6 +1521,98 @@ describe('the figure menu', () => {
     expect(host.querySelector('.da-menu')).not.toBeNull()
   })
 
+  it('closes on Escape without also dropping the selection it opened over', async () => {
+    // The menu opens on a press, and that press also selects the mark under it. One
+    // Escape used to be heard twice — once by the menu, once by the panel — so it
+    // closed the menu *and* let go of the selection, undoing two things at once.
+    const { host } = await svgBody({ annotation: saved }, { openPanel: 'list' })
+    await settle()
+    await click(defined(host.querySelector('.da-mark-text')))
+    expect(host.querySelector('.da-mark[data-selected="true"]')).not.toBeNull()
+    rightClick(host)
+    expect(host.querySelector('.da-menu')).not.toBeNull()
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.da-menu')).toBeNull()
+    expect(host.querySelector('.da-mark[data-selected="true"]')).not.toBeNull()
+  })
+
+  it('takes the keyboard when it opens, and moves through the rows with the arrows', async () => {
+    // `role="menu"` with no keyboard model is a promise the reader cannot reach: the
+    // keys every menu answers did nothing, and Tab walked one stop per row.
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    const rows = [...host.querySelectorAll('.da-menu-item')] as HTMLButtonElement[]
+    expect(rows.length).toBeGreaterThan(1)
+    expect(document.activeElement).toBe(rows[0])
+    await act(async () => {
+      rows[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(document.activeElement).toBe(rows[1])
+    // One roving tab stop: the menu owns the keyboard, so Tab has one place to go.
+    expect(rows.filter(row => row.tabIndex === 0)).toHaveLength(1)
+  })
+
+  it('closes itself when a row is chosen from the keyboard', async () => {
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    const rows = [...host.querySelectorAll('.da-menu-item')] as HTMLButtonElement[]
+    const at = rows.findIndex(row => row.textContent === zh.menuCopyAbsolute)
+    expect(at).toBeGreaterThan(-1)
+    // Walk to the row with the arrows, the way a reader would: the menu keeps its own
+    // place in the list, and Enter acts on that place rather than on whatever happens
+    // to hold focus.
+    for (let step = 0; step < at; step += 1) {
+      await act(async () => {
+        defined(document.activeElement).dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+        )
+        await Promise.resolve()
+      })
+    }
+    await act(async () => {
+      defined(document.activeElement).dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      )
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(host.querySelector('.da-menu')).toBeNull()
+    expect(written).toContain('/w/fig.svg')
+  })
+
+  it('acts on the space bar as well as Enter, the way a button does', async () => {
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    const { host } = await svgBody({ annotation: saved })
+    await settle()
+    rightClick(host)
+    const rows = [...host.querySelectorAll('.da-menu-item')] as HTMLButtonElement[]
+    const at = rows.findIndex(row => row.textContent === zh.menuCopyAbsolute)
+    for (let step = 0; step < at; step += 1) {
+      await act(async () => {
+        defined(document.activeElement).dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+        )
+        await Promise.resolve()
+      })
+    }
+    await act(async () => {
+      defined(document.activeElement).dispatchEvent(
+        new KeyboardEvent('keydown', { key: ' ', bubbles: true }),
+      )
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(host.querySelector('.da-menu')).toBeNull()
+    expect(written).toContain('/w/fig.svg')
+  })
+
   it('says so when the host refuses to open the figure', async () => {
     const remote: RemoteLike = {
       session: {

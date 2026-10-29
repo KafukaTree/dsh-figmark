@@ -33,7 +33,7 @@ import { anchorInDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
-  clampMenu, copiedText, figureMenuItems, pressedInsideMenu, relativeTo, type FigureMenuAction,
+  clampMenu, copiedText, figureMenuItems, menuSize, pressedInsideMenu, relativeTo, type FigureMenuAction,
 } from './figure-menu'
 import {
   copyImageToClipboard, desktopAvailable, openOnDesktop, revealOnDesktop,
@@ -1553,11 +1553,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     /* v8 ignore next -- nothing to act on until a figure loaded. */
     if (loaded === null) return
     event.preventDefault()
-    const height = menuItems.length * 27
+    // The box the menu will really occupy: the rows, the gaps between them, and the
+    // padding around them. Counting rows alone under-measured it, so the clamp let a
+    // menu through that then hung past the window edge.
     const placed = clampMenu(
       { x: event.clientX, y: event.clientY },
       { width: window.innerWidth, height: window.innerHeight },
-      { width: 208, height },
+      menuSize(menuItems.length),
     )
     setMenuAt({ ...placed, path: loaded.path, workspace: loaded.workspace })
   }, [loaded, menuItems])
@@ -1572,7 +1574,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       setMenuAt(null)
     }
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setMenuAt(null)
+      if (event.key !== 'Escape') return
+      // Escape dismisses one thing, and the menu is what it dismisses: the press that
+      // opened the menu also selected the mark under it, so letting the same key reach
+      // the panel's own handler closed the menu *and* dropped that selection. Two
+      // things undone by one Escape is not "dismiss the thing on top".
+      event.stopPropagation()
+      setMenuAt(null)
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey)

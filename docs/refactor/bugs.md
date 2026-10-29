@@ -1607,6 +1607,30 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### The menu
+
+- **53.** `.da-menu` is `role="menu"` with `role="menuitem"` rows, and announced a
+  keyboard model it did not have: every row was `tabIndex: 0`, so Tab walked out one
+  stop per row, and arrows, Home, End, Enter and Space did nothing. Separately, the
+  placement arithmetic assumed `rows * 27` by 208, which is neither dimension the
+  browser lays out: the rows sit in a padded box with a one-pixel gap, so seven rows
+  measure 216 x 203 against an assumed 208 x 189. Fourteen pixels short, the clamp
+  believed a menu fitted that did not, and the last rows were painted past the window
+  edge — clickable, but never seen. `menuSize` now derives the box from the same
+  constants the stylesheet uses (and the menu is `box-sizing:border-box`, so the width
+  is the width), and `menuStep` is the keyboard model the role promised: one roving tab
+  stop, arrows that wrap at both ends, Home and End. `tests/figure-menu.spec.ts` › "the
+  box the menu occupies", "moving through the rows from the keyboard";
+  `tests/annotator-body.spec.tsx` › "takes the keyboard when it opens, and moves through
+  the rows with the arrows", "closes itself when a row is chosen from the keyboard",
+  "acts on the space bar as well as Enter, the way a button does".
+- **54.** The press that opens the menu also selects the mark under it. Two keydown
+  listeners heard the same Escape — the menu's, on `document`, and the panel's, on
+  `window` — so one key closed the menu *and* dropped the selection it had just made.
+  Dismissing the thing on top is one action; the menu now stops the event there.
+  `tests/annotator-body.spec.tsx` › "closes on Escape without also dropping the
+  selection it opened over".
+
 ### The strips and the field
 
 - **49.** The tool palette had no `max-height` and no scroll of its own, and the panel
