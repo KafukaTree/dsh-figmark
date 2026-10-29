@@ -1617,6 +1617,23 @@ detail was allowed to stand in for the thing the reader meant.
   only whether there is anything to separate.
   `tests/composer.spec.ts` › "keeps the shape of the draft, not just its words".
 
+- **63.** `diffLines` gave up on the exact algorithm once `older.length *
+  newer.length` passed a million cells, and the fallback was one hunk replacing the
+  entire middle. The counts are of the *trimmed* middle, so a file edited near both its
+  first and last line has no common prefix or suffix and the middle is the whole
+  document: a two-line edit to 1001 lines cost 20,024 bytes against 296 for 1000, and
+  grew linearly after that (2.4MB at 20,000 lines). `fitDiff` could not help — coarse is
+  exactly one hunk, the first hunk is always kept, `hidden` is zero and no copy is
+  attached — so the message said "改动 1 处" and carried the file.
+  A line that appears exactly once on each side cannot be part of an ambiguous match, so
+  it is a safe place to cut; `scriptFor` now splits a too-large middle on the longest
+  in-order run of such anchors and diffs each block. Measured after the fix: 1001 lines
+  costs 306 bytes, 20,000 costs 316, both with two hunks and `coarse: false`. A middle
+  with nothing shared to cut on is still reported coarse, because it is.
+  `tests/text-diff.spec.ts` › "cuts a too-large middle on the lines both sides share
+  once", "still says it is coarse when the two sides share nothing to cut on", "cuts only
+  on lines that appear once on each side".
+
 - **59.** `deliverAnnotation` sends at most `MAX_PAGE_IMAGES` page images and, for the
   rest, advised "请看带批注 PDF" — advice written where the page count is known, while
   whether the PDF travels is decided where the upload is known. On a twelve-page

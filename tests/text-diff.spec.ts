@@ -214,6 +214,50 @@ describe('a middle too large for the exact algorithm', () => {
     expect(kinds.slice(3)).toEqual(['add', 'add', 'add'])
   })
 
+  it('cuts a too-large middle on the lines both sides share once', () => {
+    // Falling back to one replacement of the whole middle is what made a two-line edit
+    // to a thousand-line file cost twenty thousand bytes: with the changes near the
+    // first and last line there is no common prefix or suffix to cut, so the middle is
+    // the whole document, the table does not fit, and the fallback replaced all of it.
+    // One line past the budget cost sixty-eight times the bytes.
+    const lines = 1500
+    const base = Array.from({ length: lines }, (_value, n) => `line ${n + 1} of the document`)
+    const edited = [...base]
+    edited[0] = 'first line changed'
+    edited[lines - 1] = 'last line changed'
+    const diff = diffLines(base.join('\n') + '\n', edited.join('\n') + '\n')
+    expect(diff.coarse).toBe(false)
+    expect(diff.hunks).toHaveLength(2)
+    expect(diff.added).toBe(2)
+    expect(diff.removed).toBe(2)
+    // What the agent reads is the two lines that changed, not the document.
+    expect(formatUnifiedDiff('/w/notes.md', diff).length).toBeLessThan(600)
+  })
+
+  it('still says it is coarse when the two sides share nothing to cut on', () => {
+    // Every line differs and none appears once on both sides, so there is no safe
+    // anchor: the block is replaced whole and the caller warns about it.
+    const before = ['x', 'y', 'z'].join('\n')
+    const after = ['1', '2', '3'].join('\n')
+    const diff = diffLines(before, after, { maxCells: 0 })
+    expect(diff.coarse).toBe(true)
+    expect(diff.hunks).toHaveLength(1)
+  })
+
+  it('cuts only on lines that appear once on each side', () => {
+    // A line that repeats has no single place it belongs, so cutting on one would
+    // attribute the change to the wrong copy of it. `dup` appears twice on both sides
+    // and must not become an anchor; the unique lines on either side may.
+    const before = ['dup', 'a', 'dup', 'unique', 'dup', 'b', 'dup'].join('\n')
+    const after = ['dup', 'A', 'dup', 'unique', 'dup', 'B', 'dup'].join('\n')
+    const diff = diffLines(before, after, { maxCells: 0 })
+    expect(diff.added).toBe(2)
+    expect(diff.removed).toBe(2)
+    // `unique` survives as context rather than being replaced as part of the block.
+    const context = diff.hunks.flatMap(hunk => hunk.lines).filter(line => line.kind === 'context')
+    expect(context.map(line => line.text)).toContain('unique')
+  })
+
   it('still takes the exact path when trimming leaves nothing to compare', () => {
     const diff = diffLines('a\nb\nc', 'a\nb\nc', { maxCells: 0 })
     expect(diff).toEqual(EMPTY_DIFF)

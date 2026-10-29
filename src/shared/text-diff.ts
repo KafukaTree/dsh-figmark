@@ -203,6 +203,112 @@ function exactOps(older: readonly string[], newer: readonly string[], maxCells: 
   return ops
 }
 
+/** The edit script for one middle block, and whether any part of it gave up. */
+interface Script {
+  /** The operations, in the order they apply. */
+  readonly ops: readonly Op[]
+  /** Whether some part was too large and reads as one replacement block. */
+  readonly coarse: boolean
+}
+
+/**
+ * The edit script for one middle block, exact where the budget allows it.
+ *
+ * Falling back to one replacement of the whole middle is what made a two-line edit
+ * to a thousand-line file cost twenty thousand bytes: with the changes near the first
+ * and last line there is no common prefix or suffix to cut, so the whole document is
+ * the middle, the table does not fit, and the fallback replaced all of it. One line
+ * past the budget cost sixty-eight times the bytes, and the growth was linear in the
+ * file after that. `fitDiff` cannot help, because one hunk is one hunk: the first is
+ * always kept, `hidden` is zero, and no copy of the edited file is attached — so the
+ * message said "改动 1 处" and carried the document.
+ *
+ * A line that appears exactly once on each side of a middle is a line that cannot be
+ * part of an ambiguous match, so it is a safe place to cut: the diff of the block
+ * before it, the anchor as context, then the diff of the block after. Both halves are
+ * usually inside the budget even when the whole is not, and what the agent reads is
+ * the two lines that actually changed plus their context.
+ * @param older - older lines of the middle.
+ * @param newer - newer lines of the middle.
+ * @param maxCells - largest exact table the caller allows.
+ * @returns the script, and whether it is coarse anywhere.
+ */
+function scriptFor(older: readonly string[], newer: readonly string[], maxCells: number): Script {
+  const exact = exactOps(older, newer, maxCells)
+  if (exact !== undefined) return { ops: exact, coarse: false }
+  const anchors = anchorPairs(older, newer)
+  if (anchors.length === 0) {
+    // Nothing is shared that can be cut on, so there is nothing smaller to say: the
+    // block is replaced whole and the caller warns that it reads as one block.
+    return {
+      ops: [
+        ...older.map((text): Op => ({ kind: 'remove', text })),
+        ...newer.map((text): Op => ({ kind: 'add', text })),
+      ],
+      coarse: true,
+    }
+  }
+  const ops: Op[] = []
+  let coarse = false
+  let oldAt = 0
+  let newAt = 0
+  for (const anchor of anchors) {
+    const head = scriptFor(older.slice(oldAt, anchor.old), newer.slice(newAt, anchor.new), maxCells)
+    ops.push(...head.ops)
+    coarse = coarse || head.coarse
+    ops.push({ kind: 'equal', text: anchor.text })
+    oldAt = anchor.old + 1
+    newAt = anchor.new + 1
+  }
+  const tail = scriptFor(older.slice(oldAt), newer.slice(newAt), maxCells)
+  ops.push(...tail.ops)
+  return { ops, coarse: coarse || tail.coarse }
+}
+
+/** A line that appears exactly once on each side, and so can be cut on safely. */
+interface Anchor {
+  /** Where it sits in the older middle. */
+  readonly old: number
+  /** Where it sits in the newer middle. */
+  readonly new: number
+  /** The line's text. */
+  readonly text: string
+}
+
+/**
+ * The lines to cut a too-large middle on, in document order.
+ *
+ * Only lines that appear exactly once in each middle qualify: a line that repeats has
+ * no single place it belongs, and cutting on one would attribute the change to the
+ * wrong copy of it. The candidates are walked in older-side order and kept only while
+ * the newer-side position also rises, which is the longest in-order run of anchors —
+ * the same idea as patience diff, and enough to turn "the whole file changed" into the
+ * two lines that did.
+ * @param older - older lines of the middle.
+ * @param newer - newer lines of the middle.
+ * @returns the anchors, in document order.
+ */
+function anchorPairs(older: readonly string[], newer: readonly string[]): Anchor[] {
+  const inOlder = new Map<string, number>()
+  for (const text of older) inOlder.set(text, (inOlder.get(text) ?? 0) + 1)
+  const inNewer = new Map<string, number>()
+  for (const text of newer) inNewer.set(text, (inNewer.get(text) ?? 0) + 1)
+  const onNewer = new Map<string, number>()
+  newer.forEach((text, index) => {
+    if (inNewer.get(text) === 1) onNewer.set(text, index)
+  })
+  const anchors: Anchor[] = []
+  let lastNew = -1
+  older.forEach((text, index) => {
+    if (inOlder.get(text) !== 1) return
+    const at = onNewer.get(text)
+    if (at === undefined || at <= lastNew) return
+    anchors.push({ old: index, new: at, text })
+    lastNew = at
+  })
+  return anchors
+}
+
 /** One hunk's line range while it is still being widened. */
 interface HunkRange {
   /** First line of the hunk in the full script. */
@@ -276,11 +382,8 @@ export function diffLines(before: string, after: string, options: DiffOptions = 
   while (suffix < shared - prefix && older[older.length - 1 - suffix] === newer[newer.length - 1 - suffix]) suffix += 1
   const olderMiddle = older.slice(prefix, older.length - suffix)
   const newerMiddle = newer.slice(prefix, newer.length - suffix)
-  const exact = exactOps(olderMiddle, newerMiddle, maxCells)
-  const ops: readonly Op[] = exact ?? [
-    ...olderMiddle.map((text): Op => ({ kind: 'remove', text })),
-    ...newerMiddle.map((text): Op => ({ kind: 'add', text })),
-  ]
+  const script = scriptFor(olderMiddle, newerMiddle, maxCells)
+  const ops = script.ops
   const lines: DiffLine[] = []
   let oldLine = 1
   let newLine = 1
@@ -314,7 +417,7 @@ export function diffLines(before: string, after: string, options: DiffOptions = 
     added: terminator === null ? lines.filter(line => line.kind === 'add').length : 1,
     removed: terminator === null ? lines.filter(line => line.kind === 'remove').length : 1,
     changed: true,
-    coarse: exact === undefined,
+    coarse: script.coarse,
   }
 }
 
