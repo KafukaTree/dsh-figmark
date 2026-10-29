@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  DETAIL_HEIGHT, DETAIL_WIDTH, POPOVER_GAP, POPOVER_MARGIN,
-  measuredSize, placeAboveBar, placeCard, scaledBox, type PopoverBox,
+  DETAIL_HEIGHT, DETAIL_WIDTH, PALETTE_GAP, POPOVER_GAP, POPOVER_MARGIN,
+  measuredSize, obstacleBox, placeAboveBar, placeCard, scaledBox, type PopoverBox,
 } from '../src/client/popover'
 
 /** A box, written the short way. */
@@ -101,6 +101,56 @@ describe('choosing where the card goes', () => {
   it('takes a card of a size the caller names', () => {
     const at = placeCard(box(10, 10, 10, 10), 600, 600, { width: 100, height: 50 })
     expect(at).toEqual({ left: 10, top: 30 })
+  })
+})
+
+describe('keeping a card clear of a strip floating over the panel', () => {
+  const panel = { width: 500, height: 400 }
+  const card = { width: DETAIL_WIDTH, height: DETAIL_HEIGHT }
+  const anchor = box(150, 100, 20, 20)
+  const dockedRight = box(430, 0, 60, 400)
+  const dockedLeft = box(0, 0, 60, 400)
+
+  it('pushes the card out from under a strip docked on the right', () => {
+    // The palette floats above the panel, so a card placed in the panel's coordinates
+    // can end up underneath it. The card gives way and keeps its own gutter: the
+    // reader sees two surfaces, not one control.
+    const at = placeCard(anchor, panel.width, panel.height, card, dockedRight)
+    expect(at.left + card.width).toBeCloseTo(dockedRight.x - PALETTE_GAP, 6)
+    expect(at.top).toBe(100 + 20 + POPOVER_GAP)
+  })
+
+  it('leaves a card alone when its band does not reach the strip', () => {
+    const shortStrip = box(430, 0, 60, 40)
+    const at = placeCard(anchor, panel.width, panel.height, card, shortStrip)
+    // The anchor is at the same place, and the card sits below the strip's own band.
+    expect(at.left).toBe(150)
+  })
+
+  it('pushes the card out of a strip docked on the left', () => {
+    const at = placeCard(box(0, 100, 20, 20), panel.width, panel.height, card, dockedLeft)
+    expect(at.left).toBeCloseTo(dockedLeft.x + dockedLeft.width + PALETTE_GAP, 6)
+  })
+
+  it('treats a strip with no box as no obstacle', () => {
+    // Not laid out yet, or not drawn at all: an obstacle nobody can see must not
+    // move a card.
+    const at = placeCard(anchor, panel.width, panel.height, card, box(430, 0, 0, 0))
+    expect(at.left).toBe(150)
+  })
+
+  it('keeps the card on the panel when there is no room on either side', () => {
+    const narrow = { width: 200, height: 400 }
+    const at = placeCard(anchor, narrow.width, narrow.height, card, dockedLeft)
+    expect(at.left).toBe(POPOVER_MARGIN)
+    const wideCard = placeCard(anchor, 340, panel.height, card, box(300, 0, 40, 400))
+    expect(wideCard.left).toBe(POPOVER_MARGIN)
+  })
+
+  it('measures a strip against the panel, and answers nothing for no element', () => {
+    expect(obstacleBox(null, { left: 0, top: 0 })).toBeUndefined()
+    const element = { getBoundingClientRect: () => ({ left: 120, top: 40, width: 60, height: 400 }) }
+    expect(obstacleBox(element, { left: 20, top: 10 })).toEqual({ x: 100, y: 30, width: 60, height: 400 })
   })
 })
 

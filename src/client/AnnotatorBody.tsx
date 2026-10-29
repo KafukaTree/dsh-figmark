@@ -45,7 +45,7 @@ import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
 import { PINCH_SETTLE_DELAY_MS, anchoredScroll, clampZoom, wheelZoomFactor } from './zoom'
 import {
-  DETAIL_HEIGHT, DETAIL_WIDTH, measuredSize, placeAboveBar, placeCard, scaledBox,
+  DETAIL_HEIGHT, DETAIL_WIDTH, measuredSize, obstacleBox, placeAboveBar, placeCard, scaledBox,
   type RecordPlacement,
 } from './popover'
 import { markOutline } from './render'
@@ -862,6 +862,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // The pill's own size, not a constant: it grows with the sentence, and a
     // placement that assumed one line would push a long comment off the bottom.
     const pillSize = measuredSize(pillRef.current, { width: DETAIL_WIDTH, height: DETAIL_HEIGHT })
+    // The palette floats over the panel and the reader may park it anywhere, so the
+    // pill is placed around its measured box: two floating surfaces that touch read as
+    // one control, and the reader asked for a gutter between them.
+    const paletteBox = obstacleBox(paletteRef.current, { left: panel.left, top: panel.top })
     const at = placeCard(
       scaledBox(
         box,
@@ -872,6 +876,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       panel.width,
       panel.height,
       pillSize,
+      paletteBox,
     )
     // Only a moved card is news. Storing a fresh object every time would make the
     // effect its own trigger: a page body rebuilds `size` from its owner's surface,
@@ -880,7 +885,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // `marks` changes on every keystroke in the pill, which is also when the pill's own
     // height can change, so the re-measurement happens by itself. The write is
     // idempotent, so a measured height that did not move re-renders nothing.
-  }, [htmlHeight, liveMark, marks, scale, selectedId, size, unit])
+  }, [htmlHeight, liveMark, marks, palette, scale, selectedId, size, unit])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.

@@ -98,7 +98,10 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-palette .da-tool{width:32px;height:32px;padding:0;border:0;border-radius:50%;
   background:transparent;color:#fff;gap:0;flex:0 0 auto}
 .da-palette .da-tool:hover{background:rgba(255,255,255,.14)}
-.da-palette .da-tool[aria-pressed="true"]{background:var(--da-accent,#176df2);color:#fff}
+/* The armed tool is a grey chip, not the accent blue: the palette is the reader's
+   controls, and a headlight-blue disc on it competed with the marks on the figure for
+   the one thing colour means in this panel. Grey still says "this one", quietly. */
+.da-palette .da-tool[aria-pressed="true"]{background:rgba(255,255,255,.22);color:#fff}
 .da-palette .da-tool .da-tool-icon{height:auto}
 .da-palette .da-tool .da-tool-icon svg{width:17px;height:17px;stroke-width:1.7}
 

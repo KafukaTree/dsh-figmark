@@ -40,6 +40,16 @@ export const POPOVER_MARGIN = 8
 /** The gap a card keeps from the mark it belongs to, so it never sits on it. */
 export const POPOVER_GAP = 10
 
+/**
+ * The gap a card keeps from a floating strip it would otherwise run against.
+ *
+ * Wider than {@link POPOVER_GAP} because a strip is not a mark: the palette wears a
+ * 26px shadow, and a card two pixels clear of its box still reads as attached to it.
+ * The pill and the toolbar are two different surfaces — one is about the selected
+ * mark, the other is the reader's controls — and a gutter is what says so.
+ */
+export const PALETTE_GAP = 24
+
 /** How wide the records that hang off the bar are, in CSS pixels. */
 export const FLOAT_WIDTH = 330
 
@@ -114,6 +124,7 @@ export function placeCard(
   panelWidth: number,
   panelHeight: number,
   size: { readonly width: number; readonly height: number } = { width: DETAIL_WIDTH, height: DETAIL_HEIGHT },
+  obstacle?: PopoverBox,
 ): { readonly left: number; readonly top: number } {
   const below = anchor.y + anchor.height + POPOVER_GAP
   const above = anchor.y - size.height - POPOVER_GAP
@@ -128,10 +139,67 @@ export function placeCard(
       ? above
       : Math.max(POPOVER_MARGIN, roomAbove > roomBelow ? above : below)
   const widest = Math.max(POPOVER_MARGIN, panelWidth - size.width - POPOVER_MARGIN)
+  const left = Math.min(Math.max(POPOVER_MARGIN, anchor.x), widest)
   return {
-    left: Math.min(Math.max(POPOVER_MARGIN, anchor.x), widest),
+    left: obstacle === undefined ? left : clearOf(left, top, size, obstacle, panelWidth, widest),
     top,
   }
+}
+
+/**
+ * Move a card out of the way of a strip floating over the panel.
+ *
+ * The palette is the reader's, dragged wherever they want it, and it floats *above*
+ * the panel's content rather than beside it — so a card placed in the panel's own
+ * coordinates can end up underneath it. The card therefore gives way: its band is
+ * compared with the strip's, and a card whose band crosses it is pushed to the far
+ * side of the strip, whichever half of the panel the strip is docked on. Nothing moves
+ * when the strip has no box (it is not laid out yet, or not drawn at all), because an
+ * obstacle nobody can see must not push a card around.
+ * @param left - where the card would sit without the strip.
+ * @param top - where it would sit vertically.
+ * @param size - the card's size, in CSS pixels.
+ * @param obstacle - the strip's box, in the panel's coordinates.
+ * @param panelWidth - the panel's width, in CSS pixels.
+ * @param widest - the largest left edge the card may have.
+ * @returns the left edge to use.
+ */
+function clearOf(
+  left: number,
+  top: number,
+  size: { readonly width: number; readonly height: number },
+  obstacle: PopoverBox,
+  panelWidth: number,
+  widest: number,
+): number {
+  if (obstacle.width <= 0 || obstacle.height <= 0) return left
+  const crosses = top < obstacle.y + obstacle.height + PALETTE_GAP
+    && top + size.height + PALETTE_GAP > obstacle.y
+  if (!crosses) return left
+  const dockedRight = obstacle.x + obstacle.width / 2 > panelWidth / 2
+  const pushed = dockedRight
+    ? Math.min(left, obstacle.x - PALETTE_GAP - size.width)
+    : Math.max(left, obstacle.x + obstacle.width + PALETTE_GAP)
+  return Math.min(Math.max(POPOVER_MARGIN, pushed), widest)
+}
+
+/**
+ * A floating strip's box in the panel's own coordinates.
+ *
+ * Measured from the element rather than derived from the parked fractions: the strip
+ * is positioned by inline style and is clipped by the panel, so only its laid-out box
+ * says where it really is. A strip that is not rendered has no box, and no obstacle.
+ * @param element - the strip's element, when there is one.
+ * @param panel - the panel's box, in client coordinates.
+ * @returns the strip's box in the panel's coordinates, or undefined.
+ */
+export function obstacleBox(
+  element: { readonly getBoundingClientRect: () => { readonly left: number; readonly top: number; readonly width: number; readonly height: number } } | null,
+  panel: { readonly left: number; readonly top: number },
+): PopoverBox | undefined {
+  if (element === null) return undefined
+  const box = element.getBoundingClientRect()
+  return { x: box.left - panel.left, y: box.top - panel.top, width: box.width, height: box.height }
 }
 
 /** Where a record sits relative to the panel: a left edge plus one vertical side. */
