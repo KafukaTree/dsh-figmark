@@ -654,6 +654,15 @@ describe('paging', () => {
     expect(defined(seatState.saves[0]).input.marks).toEqual([{ id: 'pageless', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]], page: 1 }])
   })
 
+  it('says there is nothing to send rather than dropping the press in silence', async () => {
+    // The guard returned before any status line, so a live button did nothing at all —
+    // which reads as a broken button rather than as an empty document.
+    const { host } = await mount()
+    await click(button(host, zh.sendToAgent))
+    expect(host.textContent).toContain(zh.sendNothingToSend)
+    expect(seatState.saves).toEqual([])
+  })
+
   it('reads nothing, and saves nothing, without an address', async () => {
     const { host } = await mount({ resourceAddress: undefined })
     expect(seatState.loads).toEqual([])

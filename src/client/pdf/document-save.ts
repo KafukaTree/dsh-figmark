@@ -65,6 +65,8 @@ export interface SaveContext {
   readonly setBusy: (busy: boolean) => void
   /** The copy for the three outcomes of a hand-off. */
   readonly copy: {
+    /** "there is nothing marked yet" line. */
+    readonly nothingToSend: string
     /** "save failed" prefix. */
     readonly saveFailed: string
     /** "the document is not ready" line. */
@@ -153,7 +155,8 @@ export async function saveAndDeliver(
   only?: AnnotationMark,
 ): Promise<void> {
   // The only enforcement point: the toolbar buttons stay clickable so this guard is
-  // what decides, not a disabled attribute that hides the reason.
+  // what decides, not a disabled attribute that hides the reason — and "decides" has
+  // to mean "answers", or a live button that drops its press reads as a broken one.
   const collected = context.collect()
   if (collected === null) {
     context.fail(context.copy.notReady)
@@ -166,7 +169,20 @@ export async function saveAndDeliver(
     ? collected
     : { ...collected, marks: collected.marks.filter(mark => mark.id === only.id) }
   const { pdf, bytes } = context
-  if (input.marks.length === 0 || pdf === null || bytes === undefined) return
+  if (input.marks.length === 0) {
+    context.fail(context.copy.nothingToSend)
+    return
+  }
+  // A collected document always has both: `collectInput` answers null unless the figure
+  // and its page count are known, and the page count is read off this same `pdf`, which
+  // came from these same `bytes`. The guard is kept because the compiler cannot follow
+  // that argument, and it is narrowed to what it means: these two are known here.
+  /* v8 ignore start -- a collected document always carries both, for the reason above. */
+  if (pdf === null || bytes === undefined) {
+    context.fail(context.copy.notReady)
+    return
+  }
+  /* v8 ignore stop */
   context.setBusy(true)
   context.say(target === 'agent' ? context.copy.sending : context.copy.composing)
   try {

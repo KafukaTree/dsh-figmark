@@ -87,12 +87,30 @@ export async function loadAnnotation(
 }
 
 /**
- * Largest request a `keepalive` fetch may carry.
+ * Largest request a `keepalive` fetch may carry, in UTF-8 bytes.
  *
- * The browser silently refuses anything above this, and a refused save is worse
- * than a normal one: the caller believes the draft was written when it was not.
+ * The browser silently refuses anything above this, and a refused save is worse than a
+ * normal one: the caller believes the draft was written when it was not. The budget is
+ * counted in **bytes**, not in string length: Chrome shares 65536 bytes across every
+ * in-flight keepalive request and counts the method, URL and headers against the same
+ * budget, so the raw body has to stay well under it. `String.prototype.length` counts
+ * UTF-16 code units, which disagree with bytes by up to a factor of three on non-ASCII
+ * text — a body of 30 000 `图` characters is 30 000 units and 90 000 bytes, so a limit
+ * read against `.length` passes a request the browser then refuses outright.
  */
 const KEEPALIVE_LIMIT = 60_000
+
+/**
+ * How many bytes a string is once encoded as UTF-8.
+ *
+ * `TextEncoder` is the browser's own answer, so this cannot drift from what `fetch`
+ * will actually send. Counting `.length` is the mistake this exists to avoid.
+ * @param text - the payload about to be sent.
+ * @returns its size in bytes.
+ */
+function utf8Length(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
 
 /**
  * Persist one annotation document and its flattened review artifact.
@@ -127,7 +145,7 @@ export async function saveAnnotation(
     method: 'POST',
     headers: { [GUARD_HEADER]: '1', 'content-type': 'application/json' },
     body: payload,
-    ...(keepalive && payload.length <= KEEPALIVE_LIMIT ? { keepalive: true } : {}),
+    ...(keepalive && utf8Length(payload) <= KEEPALIVE_LIMIT ? { keepalive: true } : {}),
   })
   const body = await response.json() as {
     ok?: boolean

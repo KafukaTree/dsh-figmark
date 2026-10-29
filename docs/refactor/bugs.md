@@ -1607,6 +1607,29 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### The press that says nothing
+
+- **40.** An autosave decided whether it could use `keepalive` by comparing
+  `payload.length` to a 60 000 limit. `String.prototype.length` counts UTF-16 code
+  units; the browser's keepalive budget is counted in UTF-8 **bytes** and shared with
+  the method, URL and headers. For a note written in Chinese the two disagree by three
+  to one, so the guard passed a request the browser then refused outright — the save
+  that keeps the last edit of a closing tab, rejected with `TypeError: Failed to
+  fetch` into a handler on a component already being torn down. The limit is now
+  measured with `TextEncoder` (`utf8Length` in `client/host-api.ts`), which is the same
+  encoding `fetch` will use, so the two cannot drift.
+  `tests/annotator-body.spec.tsx` › "keeps the flush alive only for a body that is
+  small in bytes, not in length".
+- **41.** Both hand-off paths began with a guard that returned without a word, behind a
+  comment claiming the buttons stay clickable *so that the guard is what decides*. It
+  decided, but it never said why: the press was dropped before the busy state and
+  before any status line, so a reader who had written the figure-level note but drawn
+  no mark pressed send, watched nothing happen, and pressed again. The guard now
+  answers, and it tells the two refusals apart — an unmarked figure wants marks, an
+  unloaded one wants a moment (`handoffRefused`, `nothingToSend` on the PDF side).
+  `tests/annotator-body.spec.tsx` › "says there is nothing to send, rather than
+  dropping the press in silence"; `tests/pdf-body.spec.tsx` › the same name.
+
 ### What the message promises
 
 - **42.** The edit message told the agent "完整结果见随本消息发送的

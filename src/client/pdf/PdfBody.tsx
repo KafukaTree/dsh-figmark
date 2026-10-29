@@ -272,6 +272,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     copy: {
       saveFailed: t('saveError'),
       notReady: t('notReady'),
+      nothingToSend: t('sendNothingToSend'),
       sending: t('sending'),
       composing: t('composing'),
       composed: t('composed'),

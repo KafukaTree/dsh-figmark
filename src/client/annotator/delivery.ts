@@ -71,6 +71,22 @@ function describeFailure(t: Translate, error: unknown): string {
 }
 
 /**
+ * The line that says there was nothing to hand over.
+ *
+ * The toolbar's two buttons stay lit rather than going disabled, so that pressing one
+ * when there is nothing to send is answered rather than silently dropped: a live button
+ * that does nothing reads as a broken button. A surface with no marks — or one whose
+ * figure never finished decoding, so nothing could have been drawn on it — has nothing
+ * a sidecar could describe, and the reader is told which of the two it was.
+ * @param t - the translator seat.
+ * @param reason - why there is nothing to send.
+ * @returns the explanation.
+ */
+export function handoffRefused(t: Translate, reason: 'noMarks' | 'noFigure'): DeliveryStatus {
+  return { tone: 'error', text: t(reason === 'noMarks' ? 'sendNothingToSend' : 'sendNoFigure') }
+}
+
+/**
  * The line that says a hand-off has started.
  * @param t - the translator seat.
  * @param target - who is about to receive it.

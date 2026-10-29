@@ -2963,6 +2963,25 @@ describe('autosave', () => {
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
   })
 
+  it('says there is nothing to send, rather than dropping the press in silence', async () => {
+    // The guard used to return without a word, before any status line: a reader who
+    // had written the figure-level note but drawn no mark pressed send and watched
+    // nothing happen. The buttons stay lit on purpose, so the refusal has to be said.
+    mounted = await svgBody()
+    await click(button(document.body, zh.sendToAgent))
+    expect(document.querySelector('.da-status')?.textContent).toContain(zh.sendNothingToSend)
+  })
+
+  it('says the figure has not loaded, rather than that there is nothing marked', async () => {
+    // The two refusals ask for different things, so they are told apart: one wants a
+    // mark, the other wants a moment.
+    mounted = await svgBody()
+    await drawArrow(document.body)
+    await act(async () => { document.body.querySelector('.da-overlay')?.remove() })
+    await click(button(document.body, zh.sendToAgent))
+    expect(document.querySelector('.da-status')?.textContent).not.toContain(zh.sendNothingToSend)
+  })
+
   it('flushes a pending draft when the tab goes away', async () => {
     const result = await svgBody()
     mounted = result
@@ -2973,6 +2992,25 @@ describe('autosave', () => {
     expect(post).toBeDefined()
     // `keepalive` is what lets the request outlive the page that sent it.
     expect(post?.init?.keepalive).toBe(true)
+  })
+
+  it('keeps the flush alive only for a body that is small in bytes, not in length', async () => {
+    // The browser's keepalive budget is counted in UTF-8 bytes and shared with the
+    // method, URL and headers; `String.prototype.length` counts UTF-16 units. A note
+    // written in Chinese is three bytes a character, so a body the length guard called
+    // 30 000 was 90 000 bytes — passed by the guard, refused by the browser, and the
+    // reader's last edit was lost on close with nothing on screen to say so.
+    const result = await svgBody()
+    mounted = result
+    await drawArrow(document.body)
+    await selectFirstMark(document.body)
+    // Long enough in bytes to be over the limit, short enough in code units that the
+    // old guard would have let it through.
+    await type(detailBox(), '图'.repeat(25_000))
+    await act(async () => { window.dispatchEvent(new Event('pagehide')) })
+    const post = result.calls.find(call => call.init?.method === 'POST')
+    expect(post).toBeDefined()
+    expect(post?.init?.keepalive).toBeUndefined()
   })
 
   it('flushes a pending draft when the surface is unmounted', async () => {

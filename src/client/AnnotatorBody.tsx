@@ -67,7 +67,7 @@ import {
 import { buildAnnotationDocument } from './annotator/documents'
 import { DEFAULT_PALETTE, draggedSpot, placementStyle } from './annotator/placement'
 import {
-  clipStatus, failureStatus, handoffDelivered, handoffDeliveredOne, handoffStarted, hostGestureStatus,
+  clipStatus, failureStatus, handoffDelivered, handoffDeliveredOne, handoffRefused, handoffStarted, hostGestureStatus,
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
@@ -1386,12 +1386,26 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param only - the single mark being sent, or undefined to send them all.
    */
   const run = useCallback(async (target: 'agent' | 'composer', only?: AnnotationMark): Promise<void> => {
-    // The only enforcement point: the toolbar buttons stay clickable so this
-    // guard is what decides, not a disabled attribute that hides the reason.
-    // A surface with no height is one nothing could have been drawn on, and it is
-    // not a surface a marks file may describe.
+    // The only enforcement point: the toolbar buttons stay clickable so this guard
+    // is what decides, not a disabled attribute that hides the reason.
+    //
+    // "Decides" has to mean "answers". A guard that returned in silence dropped the
+    // press before the busy state and before any status line, so a reader who had
+    // written the figure-level note but drawn no mark pressed send, watched nothing
+    // happen, and pressed again — the panel looked broken while nothing on disk was.
+    // The two refusals are told apart because they ask for different things: an
+    // unmarked figure wants marks, an unloaded one wants a moment.
     const scope = only === undefined ? marks : [only]
-    if (scope.length === 0 || size === null || size.height <= 0) return
+    if (scope.length === 0) {
+      setStatus(handoffRefused(t, 'noMarks'))
+      return
+    }
+    // A surface with no height is one nothing could have been drawn on, and it is not a
+    // surface a marks file may describe.
+    if (size === null || size.height <= 0) {
+      setStatus(handoffRefused(t, 'noFigure'))
+      return
+    }
     setBusy('sending')
     setStatus(handoffStarted(t, target))
     try {
