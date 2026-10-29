@@ -1604,6 +1604,28 @@ of owning the same number the stylesheet does.
   to the unit floor. Absolute units are converted now; a percentage or viewport unit
   falls through to the viewBox rather than being guessed at.
 
+- **48.** `.da-tool` was styled twice, and the general block lost every declaration
+  to the palette's more specific selectors. Deleted: the tile has one style, where it
+  is rendered, and a reader is no longer told it is 40x34 with a word under it.
+- **50.** The palette and the bar shared a stacking layer, so a palette dragged to the
+  bar's corner went under it — and the palette's only handle is its own grip, so it
+  could not be moved out again short of a reload. The palette is one layer up.
+- **51.** Six rules set 10-12px metadata in the shell's tertiary token, which measures
+  3.34 on the light panel — under AA — while passing at 4.97 in the dark theme. They
+  use a local `--da-quiet` now, measured against the panel in both themes: 4.55 light,
+  5.6 dark.
+- **52.** The three notes about the figure's own state shared one quiet grey, so "the
+  figure could not be read" looked exactly like "still loading" — the quieter of the
+  panel's two ways of reporting a failure. The blocking one has a tone now.
+- **55.** A two-digit count badge covered a third of the icon it rides on; it sits off
+  the glyph's corner instead of on it.
+- **56.** Three rules naming states the plugin no longer has: `[data-mode="view"]`,
+  `.da-toolbar .da-page`, and a hard-coded accent beside a tokenised one. Removed, and
+  the accent is the token everywhere.
+- **58.** The list's count used `.da-card-count`, a class with no rule anywhere, so it
+  inherited the heading's weight and read as part of the sentence. It uses the panel's
+  counter style.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.

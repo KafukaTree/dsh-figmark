@@ -1682,7 +1682,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
   if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
-  if (figureError !== null) return <p className="da-hint" role="alert">{figureError}</p>
+  // A tone of its own, not the quiet grey a loading note gets: this one is the
+  // message that blocks the whole surface, and the panel has two ways of saying
+  // "this did not work" — this was the quieter of the two.
+  if (figureError !== null) return <p className="da-hint" data-tone="error" role="alert">{figureError}</p>
 
   /**
    * Press a row of the list: show that mark and put the pill beside it.

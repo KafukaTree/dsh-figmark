@@ -4,6 +4,36 @@ import { describe, expect, it } from 'vitest'
 import { STYLES, ensureStyles } from '../src/client/styles'
 
 describe('the annotator stylesheet', () => {
+  it('keeps the movable palette above the bar it can be parked under', () => {
+    // Both strips are draggable and both can reach the same corner. At equal stacking
+    // the later one in the DOM wins, which is the bar — and the palette's only handle
+    // is its own grip, so a palette under the bar could never be moved again.
+    expect(STYLES).toContain('.da-palette{position:absolute;z-index:9')
+    expect(STYLES).toContain('.da-bar{position:absolute;z-index:8')
+  })
+
+  it('paints the note that blocks the panel in a tone of its own', () => {
+    // The three notes about the figure's own state share one class, so the one saying
+    // the figure could not be read looked exactly like the one saying it is loading.
+    expect(STYLES).toContain('.da-hint[data-tone="error"]')
+  })
+
+  it('sets quiet text in a colour measured against the panel, not the shell token', () => {
+    // The shell's tertiary token measured 3.34 on the light panel at the 10-12px this
+    // uses — under AA — while the same token passed in the dark theme.
+    expect(STYLES).toContain('--da-quiet:#6b6f75')
+    expect(STYLES).toContain('body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}')
+    expect(STYLES).toContain('color:var(--da-quiet,var(--dsw-alias-label-tertiary')
+  })
+
+  it('takes the armed accent from the token rather than the light theme colour', () => {
+    // A hard-coded #176df2 stayed dark-blue in the dark theme while the dot beside it
+    // followed the token — two accents one rule apart.
+    const hardCoded = [...STYLES.matchAll(/(?<!var\(--da-accent,)#176df2/gu)]
+    // The two the palette block declares as its own defaults are the token's fallbacks.
+    expect(hardCoded.length).toBeLessThanOrEqual(2)
+  })
+
   it('lands in the document exactly once, however often the body mounts', () => {
     document.head.innerHTML = ''
     ensureStyles(document)

@@ -119,7 +119,11 @@ export function MarkList(props: MarkListProps): ReactNode {
       <div className="da-float-head">
         <span className="da-card-title">
           <ListIcon />{t('marks')}
-          <span className="da-card-count">{props.marks.length}</span>
+          {/* The panel already has a counter style, and a count that inherits the
+              title's weight reads as part of the sentence — "标注清单 6" rather than a
+              title with a count beside it. A class with no rule anywhere was the
+              quietest kind of wrong: it looked deliberate in the markup. */}
+          <span className="da-count">{props.marks.length}</span>
         </span>
         <button type="button" className="da-btn da-btn-quiet" disabled={props.marks.length === 0}
           onClick={() => { props.onClear() }}>{t('clear')}</button>
