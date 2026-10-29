@@ -59,6 +59,25 @@ export const MAX_SUMMARY_CHARS = 4000
  */
 export type MarkKind = 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point' | 'element'
 
+/**
+ * Whether a mark encloses an area rather than pointing at a place.
+ *
+ * A `rect`, an `ellipse` and a `pen` stroke say "look in here" — their geometry is a
+ * region, and a region has no one point the reader was aiming at: the last corner of
+ * a drag is simply where the hand stopped. The other three point: a `point` sits on a
+ * spot, an `arrow` points by its tip, and an `element` is the thing itself.
+ *
+ * The distinction decides whether an {@link AnnotationMark.anchor} means anything.
+ * An anchor names what the mark is about, and for a region the name would be whatever
+ * happened to be under the release point — a label the reader never asked for, sent
+ * to the agent as though it were part of the request.
+ * @param kind - the kind of mark.
+ * @returns true when the mark's geometry is a region rather than a place.
+ */
+export function describesARegion(kind: MarkKind): boolean {
+  return kind === 'rect' || kind === 'ellipse' || kind === 'pen'
+}
+
 /** One point in figure pixel coordinates. */
 export type FigurePoint = readonly [number, number]
 

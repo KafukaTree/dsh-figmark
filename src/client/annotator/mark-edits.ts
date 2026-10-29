@@ -139,6 +139,36 @@ export function removedMarks(
 }
 
 /**
+ * What the surface holds once a saved document arrives over a draft.
+ *
+ * A figure is drawable as soon as it decodes, which does not wait for the annotation
+ * read. A stroke drawn in that window was not in the draft the body was seeded with,
+ * so adopting the saved marks wholesale threw it away — silently, with no step to walk
+ * back to, and the reader watched a mark they had just drawn disappear.
+ *
+ * The file is still the record for everything the draft only guessed at. What survives
+ * is exactly what the reader drew while the answer was in flight: a mark the seed did
+ * not carry and the saved document does not name.
+ * @param saved - the marks the saved document holds.
+ * @param current - the marks on the surface now.
+ * @param seeded - the marks the surface opened with.
+ * @returns the saved marks followed by the ones drawn while the read was out.
+ */
+export function loadedMarks(
+  saved: readonly AnnotationMark[],
+  current: readonly AnnotationMark[],
+  seeded: readonly AnnotationMark[],
+): readonly AnnotationMark[] {
+  const seedIds = new Set(seeded.map(mark => mark.id))
+  const knownIds = new Set(saved.map(mark => mark.id))
+  const drawn = current.filter(mark => !seedIds.has(mark.id) && !knownIds.has(mark.id))
+  // Nothing was drawn in the window, so the answer is the document as saved — the
+  // ordinary case, and the one that must stay a plain adoption.
+  if (drawn.length === 0) return saved
+  return [...saved, ...drawn]
+}
+
+/**
  * The marks after a drag of one of them, or null when the drag did not move it.
  *
  * A drag that ends where it started is not an edit: the mark keeps the anchor it had,

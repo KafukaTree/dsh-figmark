@@ -1552,6 +1552,19 @@ detail was allowed to stand in for the thing the reader meant.
   number in"; `tests/render-export.spec.ts` › "places a stroke mark number clear of
   the mark".
 
+### What a mark points at
+
+- **A box was given an anchor, and a box points at nothing.** `anchorOf` ran for every
+  kind on release, so a `rect` drawn over three curves went to the agent as
+  `① 框选 (114,89)-(260,189)（id=axes_1，元素文字「2 4 6 8 Time (s) …」）` — the element
+  under the last corner, which is where the hand stopped, not what the reader asked
+  about. The same name showed in the panel's row. `describesARegion` (`shared/
+  annotation.ts`) now says which kinds enclose an area, and those kinds carry no
+  anchor — on the draw, on a drag, or in the message. `annotation.ts` already drew this
+  line: "a drawn box says look in here, an element says this thing".
+  `tests/canvas.spec.tsx` › "gives a region no anchor, because a region points at no
+  one thing", "anchors a finished arrow to the figure element under its tip".
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code

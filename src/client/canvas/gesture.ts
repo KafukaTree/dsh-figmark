@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annotation'
-import { WEIGHT_DEFAULT } from '../../shared/annotation'
+import { WEIGHT_DEFAULT, describesARegion } from '../../shared/annotation'
 import { gripAt, type HandleId } from '../handles'
 import { controlSizes, type ControlSizes } from './controls'
 import { controlBox, elementNamedBy, sameAnchor } from './hit'
@@ -346,17 +346,18 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       props.onLiveEdit?.(null)
       // A press that never moved is the selection the press itself performed.
       if (done === null) return
-      // A move is a statement about what the mark points at, so it re-anchors.
-      // A handle edits how the mark sits instead — a resize says nothing about
-      // what the mark points at, so it never re-anchors.
+      // A handle edits how the mark sits — a resize says nothing about what the mark
+      // points at, so it never re-anchors.
       if (press.handle === undefined) {
         // The mark is anchored by the point it ended up at, which is what the
-        // reader was aiming at when they dropped it.
+        // reader was aiming at when they dropped it. A region does not point at
+        // anything: its last corner is where the hand stopped, so asking what is
+        // under it would name an element the reader never asked about.
         /* v8 ignore next -- a move always carries the geometry it moved to. */
         const moved: readonly FigurePoint[] = done.points ?? press.origin
         /* v8 ignore next -- a move always carries at least one point. */
         const last = moved[moved.length - 1] ?? press.from
-        props.onMove(press.id, moved, anchorFor(event, last))
+        props.onMove(press.id, moved, describesARegion(press.kind) ? undefined : anchorFor(event, last))
         return
       }
       const patch: MarkPatch = patchFrom(done)
@@ -372,7 +373,10 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     }
     setDraft(null)
     if (!draftWorthCommitting(draft)) return
-    const anchor = anchorFor(event, draftAnchorPoint(draft))
+    // Only a mark that points at a place carries an anchor. A box says "look in
+    // here"; the element under its last corner is where the hand stopped, and the
+    // message would go on to name it as though the reader had asked about it.
+    const anchor = describesARegion(draft.kind) ? undefined : anchorFor(event, draftAnchorPoint(draft))
     const mark: AnnotationMark = { ...draft, ...(anchor === undefined ? {} : { anchor }) }
     props.onAdd(mark)
     // Selecting the new mark puts the note box on it, so the sentence that makes

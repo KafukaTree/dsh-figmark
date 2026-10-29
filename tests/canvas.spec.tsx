@@ -334,8 +334,10 @@ describe('drawing surface', () => {
   })
 
   it('reports no anchor when the figure is not inlined SVG', () => {
+    // An arrow, because it is a kind that would carry an anchor: a box never asks
+    // for one now, so a box here would pass whether the guard worked or not.
     const onAdd = vi.fn()
-    mounted = mount({ tool: 'rect', anchoring: false, onAdd })
+    mounted = mount({ tool: 'arrow', anchoring: false, onAdd })
     pointer(mounted.svg, 'pointerdown', 10, 10)
     pointer(mounted.svg, 'pointermove', 90, 90)
     pointer(mounted.svg, 'pointerup', 90, 90)
@@ -344,7 +346,7 @@ describe('drawing surface', () => {
 
   it('reports no anchor when there is no figure container to hit-test', () => {
     const onAdd = vi.fn()
-    mounted = mount({ tool: 'rect', anchoring: true, container: null, onAdd })
+    mounted = mount({ tool: 'arrow', anchoring: true, container: null, onAdd })
     pointer(mounted.svg, 'pointerdown', 10, 10)
     pointer(mounted.svg, 'pointermove', 90, 90)
     pointer(mounted.svg, 'pointerup', 90, 90)
@@ -353,7 +355,7 @@ describe('drawing surface', () => {
 
   it('keeps coordinates finite when the surface reports no area', () => {
     const onAdd = vi.fn()
-    mounted = mount({ tool: 'rect', anchoring: true, svgSize: { width: 0, height: 0 }, onAdd })
+    mounted = mount({ tool: 'arrow', anchoring: true, svgSize: { width: 0, height: 0 }, onAdd })
     pointer(mounted.svg, 'pointerdown', 10, 10)
     pointer(mounted.svg, 'pointermove', 90, 90)
     pointer(mounted.svg, 'pointerup', 90, 90)
@@ -379,9 +381,11 @@ describe('drawing surface', () => {
       .toMatchObject({ tag: 'g', id: 'node7' })
   })
 
-  it('anchors a finished drag to the figure element under the release point', () => {
+  it('anchors a finished arrow to the figure element under its tip', () => {
+    // An arrow points at something, so its anchor names the element its tip landed
+    // on — that name is what the agent resolves to find the thing the reader meant.
     const onAdd = vi.fn()
-    mounted = mount({ tool: 'rect', anchoring: true, onAdd })
+    mounted = mount({ tool: 'arrow', anchoring: true, onAdd })
     const inline = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
     const anchor = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     anchor.setAttribute('id', 'node102')
@@ -393,6 +397,29 @@ describe('drawing surface', () => {
     pointer(mounted.svg, 'pointermove', 25, 18)
     pointer(mounted.svg, 'pointerup', 30, 20)
     expect(defined(onAdd.mock.calls[0]?.[0] as AnnotationMark | undefined).anchor).toMatchObject({ tag: 'g', id: 'node102' })
+  })
+
+  it('gives a region no anchor, because a region points at no one thing', () => {
+    // A box says "look in here": its last corner is where the hand stopped, not what
+    // the reader aimed at. Carrying the element under that corner sent the agent a
+    // name the reader never asked about — `① 框选 (114,89)-(260,189)（id=axes_1 …）`
+    // for a box drawn over three curves.
+    for (const tool of ['rect', 'ellipse'] as const) {
+      const onAdd = vi.fn()
+      mounted = mount({ tool, anchoring: true, onAdd })
+      const inline = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      const under = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      under.setAttribute('id', 'node102')
+      inline.append(under)
+      mounted.figure.append(inline)
+      stubRect(mounted.figure, { left: 0, top: 0, width: 400, height: 300 })
+      stubRect(under, { left: 10, top: 10, width: 40, height: 20 })
+      pointer(mounted.svg, 'pointerdown', 20, 15)
+      pointer(mounted.svg, 'pointermove', 25, 18)
+      pointer(mounted.svg, 'pointerup', 30, 20)
+      expect(defined(onAdd.mock.calls[0]?.[0] as AnnotationMark | undefined).anchor).toBeUndefined()
+      mounted.root.unmount()
+    }
   })
 
   it('mints ids that do not repeat inside one session', () => {

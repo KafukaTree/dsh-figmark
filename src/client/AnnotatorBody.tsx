@@ -71,7 +71,7 @@ import {
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
-  appendedMarks, detailedMarks, movedMarks, patchedMarks, patchChangesNothing, removedMarks,
+  appendedMarks, detailedMarks, loadedMarks, movedMarks, patchedMarks, patchChangesNothing, removedMarks,
 } from './annotator/mark-edits'
 import { MarkList, SummaryRecord } from './annotator/records'
 import { collectLitSpots } from './annotator/spotlights'
@@ -660,6 +660,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const readFor = useRef<string | null>(null)
 
   /**
+   * The marks the surface opened with, for telling a stroke from a restored one.
+   *
+   * The read adopts the file over the draft, and the only marks that must survive that
+   * are the ones drawn while the answer was in flight: not the seeded draft, which the
+   * file supersedes, and not anything the file names. Kept in a ref so the read effect
+   * does not fetch again when a stroke changes the marks.
+   */
+  const seeded = useRef<readonly AnnotationMark[]>(props.draft?.marks ?? [])
+
+  /**
    * The selection setter, read at call time.
    *
    * `setSelectedId` is rebuilt when the selection changes, so depending on it in the
@@ -705,9 +715,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         } else if (first && saved !== null) {
           // The first read adopts what was saved over the draft this body was seeded
           // with — the file is the record, and the draft only filled the gap while
-          // the answer was in flight. Both stacks stay as they are: nothing came back
-          // that was not already there.
-          history.replace(saved.marks)
+          // the answer was in flight. A figure is drawable before the read lands, so a
+          // stroke drawn in that window is not in the draft and the file cannot name
+          // it; adopting the file wholesale threw it away with nothing to walk back
+          // to. Both stacks stay as they are: nothing came back that was not already
+          // there, and the marks that arrived over a stroke are that stroke's context.
+          history.replace(loadedMarks(saved.marks, live.current.marks, seeded.current))
           writeSummary(saved.summary ?? '')
           // The saved document's number style describes the picture on screen, so it
           // wins over the remembered preference: the annotation and its image have to

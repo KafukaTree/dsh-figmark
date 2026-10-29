@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  appendedMarks, detailedMarks, movedMarks, patchChangesNothing, patchedMarks, removedMarks,
+  appendedMarks, detailedMarks, loadedMarks, movedMarks, patchChangesNothing, patchedMarks, removedMarks,
 } from '../src/client/annotator/mark-edits'
 import type { AnnotationMark } from '../src/shared/annotation'
 
@@ -106,5 +106,33 @@ describe('the list helpers', () => {
   it('hands back the moved list when the drag went somewhere', () => {
     expect(movedMarks([rect, other], 'a', [[2, 2], [12, 12]], undefined)?.[0]?.points)
       .toEqual([[2, 2], [12, 12]])
+  })
+})
+
+describe('adopting a saved document', () => {
+  const drawn: AnnotationMark = { id: 'new', kind: 'arrow', color: '#e03131', points: [[1, 1], [9, 9]] }
+
+  it('takes the saved marks as they are when nothing was drawn in the gap', () => {
+    // The ordinary case: the answer arrives before the reader has drawn anything.
+    expect(loadedMarks([rect], [rect], [rect])).toEqual([rect])
+    expect(loadedMarks([], [], [])).toEqual([])
+  })
+
+  it('keeps a stroke drawn while the read was out', () => {
+    // The figure is drawable as soon as it decodes. A stroke drawn before the read
+    // landed was not in the draft, so adopting the file wholesale erased it with no
+    // undo step — the reader watched their arrow vanish a beat later.
+    expect(loadedMarks([rect], [rect, drawn], [rect])).toEqual([rect, drawn])
+  })
+
+  it('does not keep the draft the file supersedes', () => {
+    // A seeded mark the saved document does not carry was a guess the answer settled:
+    // the file is the record, and re-adding it would put back what the reader deleted
+    // in an earlier session.
+    expect(loadedMarks([], [rect], [rect])).toEqual([])
+  })
+
+  it('does not double a mark the saved document already names', () => {
+    expect(loadedMarks([drawn], [drawn], [])).toEqual([drawn])
   })
 })

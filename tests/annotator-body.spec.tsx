@@ -586,6 +586,22 @@ describe('saved annotations', () => {
     expect(document.querySelector('.da-status')).toBeNull()
   })
 
+  it('keeps a stroke drawn while the read was still out', async () => {
+    // The figure is drawable as soon as it decodes, which does not wait for the
+    // annotation read. A stroke drawn in that window was not in the draft the body was
+    // seeded with, so adopting the saved document wholesale erased it — silently, with
+    // no step to walk back to, while the reader watched it happen.
+    const pending = deferredFetch()
+    mounted = await mountBody({ content: { kind: 'bytes', data: svgBytes() }, resourceAddress: SVG_ADDRESS })
+    await drawArrow(document.body)
+    await openList(document.body)
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    pending.answer(hostPayload({ annotation: saved }))
+    await act(async () => { for (let turn = 0; turn < 4; turn += 1) await Promise.resolve() })
+    // The saved arrow, then the one the reader drew while the answer was in flight.
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(2)
+  })
+
   it('swallows a failure that arrives after the panel is gone', async () => {
     const pending = deferredFetch()
     const panel = await mountBody({ content: { kind: 'bytes', data: svgBytes() }, resourceAddress: SVG_ADDRESS })
