@@ -94,7 +94,7 @@ export function buildAnnotationMessage(
       : 'These marks are points only, so no annotated image was made: work from the coordinates and notes above against the original figure.']
     : []
   const summary = document.summary !== undefined && document.summary.trim() !== ''
-    ? [zh ? `这张图是：${document.summary.trim()}` : `the figure shows: ${document.summary.trim()}`, '']
+    ? [zh ? `目标：${document.summary.trim()}` : `goal: ${document.summary.trim()}`, '']
     : []
   // The closing line is one sentence, not a paragraph. The standing rules — read every
   // mark, answer mark by mark, edit the source rather than the bitmap — are already in

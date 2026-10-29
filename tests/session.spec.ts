@@ -475,7 +475,7 @@ describe('the message the agent reads', () => {
     expect(zh).toContain('（共 12 页，其中 2 页有标注，标注 3 处')
     expect(zh).toContain('第 1 页 箭头1 (1,1) → (2,2)，批注：第一页')
     expect(zh).toContain('第 3 页 矩形1 (3,3)-(4,4)')
-    expect(zh).toContain('这张图是：标号要往左')
+    expect(zh).toContain('目标：标号要往左')
     const en = buildAnnotationMessage(pagedDocument, pagedPaths, 'en')
     expect(en).toContain('(12 pages, 2 pages marked, 3 marks')
     expect(en).toContain('page 3 box')
@@ -493,7 +493,7 @@ describe('the message the agent reads', () => {
   it('leaves the overall note out when the user wrote none', () => {
     const withoutSummary: AnnotationDocument = { ...document_ }
     delete (withoutSummary as { summary?: string }).summary
-    expect(buildAnnotationMessage(withoutSummary, paths, 'zh')).not.toContain('这张图是')
+    expect(buildAnnotationMessage(withoutSummary, paths, 'zh')).not.toContain('目标：')
   })
 
   it('names a rendered document as one, with the locators that are its whole payload', () => {

@@ -642,7 +642,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
 describe('model-facing summary', () => {
   it('describes every mark kind with its geometry and note', () => {
     expect(describeMark(defined(document_.marks[0]), 1, 'zh'))
-      .toBe('箭头1 (300,225) → (100,66)（元素标题「102」，id=node102，元素文字「导柱」），批注：这个标号应指向滑套 34')
+      .toBe('箭头1 (300,225) → (100,66)（元素标题「102」，元素 id=node102，元素文字「导柱」），批注：这个标号应指向滑套 34')
     expect(describeMark(defined(document_.marks[1]), 1, 'zh')).toBe('手绘线1 (1,2)-(5,6)，（未写说明）')
     expect(describeMark(defined(document_.marks[2]), 1, 'zh')).toBe('椭圆1 (10,20)-(30,40)，批注：轮廓多余')
     expect(describeMark(defined(document_.marks[3]), 1, 'zh')).toBe('矩形1 (5,5)-(50,60)，（未写说明）')
@@ -761,8 +761,8 @@ describe('model-facing summary', () => {
     // The selector that is the id spelled again is the same name twice, so it is
     // dropped; the one that carries a path a source reader needs still travels.
     expect(describeMark(mark, 1, 'zh'))
-      .toBe('矩形1 (10,20)-(60,90)（id=lead，元素文字「第一段」），批注：这段要改')
-    expect(describeMark(mark, 1, 'en')).toContain('(id=lead, element text')
+      .toBe('矩形1 (10,20)-(60,90)（元素 id=lead，元素文字「第一段」），批注：这段要改')
+    expect(describeMark(mark, 1, 'en')).toContain('(element id=lead, element text')
     expect(describeMark(mark, 1, 'en')).not.toContain('selector')
     const pathed: AnnotationMark = {
       ...mark,
@@ -787,12 +787,12 @@ describe('model-facing summary', () => {
     // The phrase names the kind it is rather than a region that was drawn, and it is
     // numbered like every other mark so the reader can find its badge on the figure.
     expect(describeMark(mark, 1, 'zh'))
-      .toBe('元素1 (10,20)-(60,90)（id=line2d_10），批注：这条线要加粗')
+      .toBe('元素1 (10,20)-(60,90)（元素 id=line2d_10），批注：这条线要加粗')
     expect(describeMark(mark, 1, 'en')).toContain('element 1 (10,20)-(60,90)')
     // A half-recorded selection still says what it is, and says no box rather than
     // inventing one from the single corner it has.
     const one: AnnotationMark = { ...mark, points: [[10, 20]] }
-    expect(describeMark(one, 1, 'zh')).toBe('元素1（id=line2d_10），批注：这条线要加粗')
+    expect(describeMark(one, 1, 'zh')).toBe('元素1（元素 id=line2d_10），批注：这条线要加粗')
   })
 
   it('keeps an anchor to the names that still say something', () => {
@@ -807,7 +807,7 @@ describe('model-facing summary', () => {
     )
     const axesText = '2 4 6 8 Time (s) 0 20 40 60 80 Normalized intensity (%) Decay curves tau=1.0'
     expect(at({ tag: 'g', id: 'axes_1', bbox: [40, 40, 300, 200], text: axesText, selector: '#axes_1' }, document_.figure))
-      .toBe('矩形1 (0,0)-(1,1)（id=axes_1），（未写说明）')
+      .toBe('矩形1 (0,0)-(1,1)（元素 id=axes_1），（未写说明）')
     // A short text is a name, and stays.
     const label = 'x'.repeat(30)
     expect(at({ tag: 'text', bbox: [0, 0, 1, 1], text: label })).toContain('元素文字')
@@ -870,7 +870,7 @@ describe('model-facing summary', () => {
     const withAnchor = (anchor: AnnotationMark['anchor']): string =>
       describeMark({ id: 'a', kind: 'rect', color: '#000', points: [[0, 0], [1, 1]], ...(anchor === undefined ? {} : { anchor }) }, 1, 'zh')
     expect(withAnchor({ tag: 'g', bbox: [0, 0, 1, 1] })).toContain('（<g>）')
-    expect(withAnchor({ tag: 'g', id: 'n1', bbox: [0, 0, 1, 1] })).toContain('（id=n1）')
+    expect(withAnchor({ tag: 'g', id: 'n1', bbox: [0, 0, 1, 1] })).toContain('（元素 id=n1）')
     expect(withAnchor({ tag: 'text', text: '导柱', bbox: [0, 0, 1, 1] })).toContain('（元素文字「导柱」）')
     expect(withAnchor({ tag: 'g', title: '102', bbox: [0, 0, 1, 1] })).toContain('（元素标题「102」）')
     expect(withAnchor(undefined)).toBe('矩形1 (0,0)-(1,1)，（未写说明）')

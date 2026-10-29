@@ -57,6 +57,13 @@ ordinal and writes the name itself (`箭头1`, `矩形1`, `椭圆1`, `单点1 �
 `手绘线1`, `元素1`), so the sentence starts with exactly the words and digit the
 picture carries.
 
+**The identifiers are named, and the goal says it is a goal.** `id=axes_1` on its own
+was a token the reader had to reverse-engineer — every other part of the anchor already
+had a noun in front of it (`元素标题`, `元素文字`, `选择器`), so the id reads
+`元素 id=axes_1` now (en: `element id=…`). And the line carrying the document's own note
+opens with `目标：` instead of `这张图是：`: that field is the reader's answer to "this
+figure should become…", which is a goal, not a description of the picture.
+
 **A number on the picture is a place-marker's job.** Only a pin wears one: its filled
 head has room for the digit, and it is what a reader looks for when the list says
 "the second point". Every other kind is found by its own outline, so the discs that

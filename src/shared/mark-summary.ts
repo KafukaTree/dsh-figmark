@@ -274,7 +274,9 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale, figure?: An
   const selector = anchor.selector ?? ''
   const parts: string[] = []
   if (anchor.title !== undefined && anchor.title !== '') parts.push(zh ? `元素标题「${anchor.title}」` : `element title "${anchor.title}"`)
-  if (id !== '') parts.push(`id=${id}`)
+  // Named, not just dumped: `axes_1` on its own is an identifier the reader has to
+  // reverse-engineer, and the message is read by the person who drew the mark too.
+  if (id !== '') parts.push(zh ? `元素 id=${id}` : `element id=${id}`)
   if (text !== '' && text.length <= NAMEABLE_TEXT) parts.push(zh ? `元素文字「${text}」` : `element text "${text}"`)
   if (selector !== '' && selector !== `#${id}`) parts.push(zh ? `选择器 ${selector}` : `selector ${selector}`)
   if (parts.length === 0) parts.push(`<${anchor.tag}>`)
