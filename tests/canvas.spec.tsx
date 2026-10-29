@@ -1341,27 +1341,25 @@ describe('the control frame around a selected mark', () => {
     expect([...mounted.svg.querySelectorAll('text')].map(node => node.textContent)).toEqual(['4'])
   })
 
-  it('numbers every mark, in the shape each kind can carry a number in', () => {
-    // A pin holds its number inside its head. A stroke has no inside, so its number
-    // goes in a disc beside its corner. Both are drawn, because the message the agent
-    // reads is a numbered list: a picture with only the pins numbered leaves "the
-    // second one" to be found by counting arrows.
+  it('numbers the pins, and only the pins', () => {
+    // A number on the picture is a place-marker's job: the pin has a filled head to
+    // hold it, and a reader looking for "the second point" needs it. A shape is found
+    // by its own outline — a 1 beside an arrow says nothing the arrow does not — so a
+    // disc beside every stroke was lettering the figure never needed.
     mounted = mount({
       tool: 'select',
       marks: [
         { id: 'm1', kind: 'arrow', color: '#e03131', points: [[20, 20], [80, 20]] },
         { id: 'm2', kind: 'rect', color: '#0f0', points: [[20, 100], [80, 140]] },
         { id: 'm3', kind: 'point', color: '#1971c2', points: [[40, 60]] },
-        { id: 'm4', kind: 'arrow', color: '#f08c00', points: [[100, 20], [160, 20]] },
+        { id: 'm4', kind: 'point', color: '#f08c00', points: [[140, 60]] },
       ],
     })
-    // The numbers count inside each kind, so the second arrow is "2" beside the first
-    // arrow's "1" — the shape says which kind, the digit says which one of it.
+    // Pins count inside their own kind, so the second point is "2".
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['1', '1', '1', '2'])
-    // Three discs, for the two arrows and the box; the pin's number lives inside its
-    // head and needs none.
-    expect(mounted.svg.querySelectorAll('circle').length).toBe(3)
+    expect(letters).toEqual(['1', '2'])
+    // No disc beside the stroke marks.
+    expect(mounted.svg.querySelectorAll('circle').length).toBe(0)
   })
 
   it('draws no lettering for any mark, however much it has to say', () => {
@@ -1375,7 +1373,7 @@ describe('the control frame around a selected mark', () => {
     // list say "②" and have the figure mean the same thing. The sentences themselves
     // are what the agent reads, and painting them would bury the line work.
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['1', '1'])
+    expect(letters).toEqual(['1'])
     expect(mounted.svg.querySelectorAll('tspan')).toHaveLength(0)
     expect(mounted.svg.textContent).not.toContain('缺图形')
     expect(mounted.svg.textContent).not.toContain('刻度标错')

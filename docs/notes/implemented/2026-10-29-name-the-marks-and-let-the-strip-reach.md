@@ -14,6 +14,14 @@ numbered pins by the same global count and *not* element marks at all. A reader 
 only at the figure had no "3" to find. The element mark was just a light on the curve,
 so nothing on the picture said which list line it belonged to.
 
+Asked whether the element's missing number was the second problem, the reader drew the
+line:
+
+> 我的意思是除了地标的123在图上显示，其他的都没必要在图上标出123
+
+The picture carries digits for *places* — the pins — and for nothing else. A shape is
+found by its own outline; a 1 beside an arrow is lettering the figure never needed.
+
 The same message quoted this, twice:
 
 > id=figure_1，元素文字「2 4 6 8 Time (s) 0 20 40 60 80 Normalized intensity (%) Decay
@@ -49,11 +57,14 @@ ordinal and writes the name itself (`箭头1`, `矩形1`, `椭圆1`, `单点1 �
 `手绘线1`, `元素1`), so the sentence starts with exactly the words and digit the
 picture carries.
 
-**Element marks wear their number too.** `badgeGeometry` returns a disc for `element`
-instead of `undefined`, placed *inside* the element's own top-left corner: the light
-paints no outline to stand beside, and an element's box may be the figure's own edge, so
-a disc outside the paper would be a disc nobody sees. The one kind of mark whose point
-is a name is no longer the one kind a reader cannot find by number.
+**A number on the picture is a place-marker's job.** Only a pin wears one: its filled
+head has room for the digit, and it is what a reader looks for when the list says
+"the second point". Every other kind is found by its own outline, so the discs that
+stroke marks used to wear — and the badge this batch first added for the element mark —
+are gone. `badgeGeometry` and the `Badge` component went with them; `markSvg` in the
+export no longer draws a disc either. The pins still count inside their kind, which for
+pins is the same as counting points in the document, and the message still names every
+mark by kind and number (`箭头1`, `元素1`) because that is the list's own index.
 
 **An anchor keeps only the names that still say something.** Element text longer than
 30 characters is a passage, not a name, and is dropped (the id or selector already
@@ -82,11 +93,11 @@ dragged down reaches 8px from the bottom.
 
 ## Alternatives considered
 
-- **Keep global numbering and add a badge for element marks.** That was the smaller
-  change, and it leaves ①②③④⑤ as the language: a circled 3 on the picture and a ③ in
-  the message would agree, but a reader still has to count arrows to find "the second
-  arrow" among five marks. Numbering inside the kind is what the reader asked for, and
-  it makes the digit short enough for a 9px pin head.
+- **Give every mark a number on the picture (what this batch first built).** Element
+  marks got a disc inside their box and stroke marks kept the one beside them, so a
+  circled 3 always had something to point at. The reader does not want that: the figure
+  is their own drawing, and a digit beside every arrow is lettering that is read once
+  and covered the line work ever after. A number belongs where the mark *is* a place.
 - **Number by kind but keep one running count in the list panel.** The list would then
   disagree with both the message and the picture. One function feeds all of them.
 - **Print the element text but truncate it with an ellipsis.** The first 30 characters
@@ -94,9 +105,10 @@ dragged down reaches 8px from the bottom.
 - **Drop the whole anchor when it covers the figure, including for `element`.** An
   element mark's anchor *is* the mark — its selector is how the light is found again —
   so it is the one kind that keeps it.
-- **Draw the element's number outside its box, like a stroke's.** A full-width element's
-  box is the figure's edge, and its disc would land on the paper margin where the export
-  clips it. Inside the corner is on the element itself, which is what the number names.
+- **Keep the element badge and drop only the stroke marks'.** The element mark's whole
+  point is a name, so a disc sounds right — but it sits on the very curve it names, and
+  the reader's rule is about the picture, not the kind: pins carry digits, shapes do not.
+
 - **Keep eight handles for arrows and just hide the turn grip.** Four of the eight are
   still corners of a rectangle the arrow never draws, and "resize" a line has no meaning.
 - **Let the strip reach the exact edge instead of 8px short.** A strip whose own edge

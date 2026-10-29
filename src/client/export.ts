@@ -7,9 +7,9 @@
  * @module dsh-figmark/client/export
  */
 
-import { markOrdinals, type AnnotationMark, type FigurePoint } from '../shared/annotation'
+import { markOrdinals, type AnnotationMark } from '../shared/annotation'
 import {
-  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, badgeGeometry, markPathData, markTransform,
+  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, markPathData, markTransform,
   pinFontSizeOf, pinNumberCentre, pinPathData, strokeWidthOf,
 } from './render'
 import { figureUnit } from './scale'
@@ -91,42 +91,7 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
       )
     }
   }
-  // A stroke mark has nowhere inside itself to keep a number, so it wears one beside
-  // it. Without this the message reads as a numbered list and the picture carries no
-  // numbers at all except the pins', and "the second one" has to be found by counting.
-  if (number !== undefined) {
-    const badge = badgeGeometry(mark, unit)
-    if (badge !== undefined) pushBadge(parts, mark, unit, badge, number)
-  }
   return parts.join('')
-}
-
-/**
- * Draw the disc a stroke mark's number sits in, and the number in it.
- *
- * The same two shapes the panel draws, from the same geometry: a disc in the mark's
- * colour with a white rim so it reads against the figure, and the digit in white.
- * @param parts - the mark's elements, appended to.
- * @param mark - the mark being numbered, for its colour.
- * @param unit - the figure's size multiple.
- * @param badge - where the disc goes and how big it is.
- * @param number - the number to draw.
- * @returns nothing; `parts` is appended to.
- */
-function pushBadge(
-  parts: string[],
-  mark: AnnotationMark,
-  unit: number,
-  badge: { readonly centre: FigurePoint; readonly radius: number },
-  number: number,
-): void {
-  parts.push(
-    `<circle cx="${hair9(badge.centre[0])}" cy="${hair9(badge.centre[1])}" r="${hair9(badge.radius)}"`
-    + ` fill="${mark.color}" stroke="#ffffff" stroke-width="${hair9(1.5 * unit)}"/>`,
-    `<text x="${hair9(badge.centre[0])}" y="${hair9(badge.centre[1])}" font-family="${PIN_FONT_FAMILY}"`
-    + ` font-size="${pinFontSizeOf(unit)}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
-    + ` text-anchor="middle" dominant-baseline="central">${number}</text>`,
-  )
 }
 
 /**
