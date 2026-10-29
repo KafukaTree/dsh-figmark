@@ -24,7 +24,7 @@ import type { DocumentSeat, PagedAnnotationInput } from '../document-seat'
 import type { Autosave, AutosaveDeps } from '../autosave'
 import { useDocumentAutosave } from './document-autosave'
 import { useOpenedDocument, useSavedAnnotation, type FigureFacts } from './document-lifecycle'
-import { messageOf, saveAndDeliver } from './document-save'
+import { discardDocument, messageOf, saveAndDeliver } from './document-save'
 import { annotateDocument, reviewPages } from './export-pages'
 import { allMarks, collectInput, groupByPage, numberingOf, withPageMarks, withoutMark, type MarksByPage } from './page-marks'
 import { PagingControls } from './paging-controls'
@@ -275,7 +275,9 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
       sending: t('sending'),
       composing: t('composing'),
       composed: t('composed'),
+      composedOne: t('composedOne'),
       sent: t('sent'),
+      sentOne: t('sentOne'),
       clearFailed: t('clearError'),
     },
     cleared: useCallback(() => {
@@ -288,6 +290,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
       // remounts it against the empty draft.
       setGeneration(current => current + 1)
     }, []),
+    dropped: useCallback((id: string) => { setMarks(current => withoutMark(current, id)) }, []),
     setCreatedAt,
     setStale,
   }
@@ -300,6 +303,22 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
 
   const run = useCallback((target: 'agent' | 'composer'): void => {
     void saveAndDeliver(contextRef.current, target)
+  }, [])
+
+  // The pill's own two buttons mean "this mark", and this is the only place that
+  // can honour that: the page body has no seat for the document's files, and the
+  // document is what knows the rest of the marks it is keeping. Handing the mark
+  // down as an argument is what keeps the two cases from being one call whose
+  // meaning depends on who made it.
+  const runOne = useCallback((mark: AnnotationMark, target: 'agent' | 'composer'): void => {
+    void saveAndDeliver(contextRef.current, target, mark)
+  }, [])
+
+  // Clearing is the document's act for the same reason sending is: one sidecar
+  // serves every page, so a page that deleted it while leaving the other pages'
+  // rows standing would half-clear a document and damage the file doing it.
+  const clearDocument = useCallback((): void => {
+    void discardDocument(contextRef.current)
   }, [])
 
   // --- render ---------------------------------------------------------------
@@ -372,6 +391,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
           chromeHost={pane.host}
           pagingSlot={pagingSlot}
           onSend={run}
+          onSendMark={runOne}
           // The factor is handed down rather than kept by the body: paging away and
           // back has to come back to the same size, and a body that owned it would
           // start every page at fit.
@@ -379,6 +399,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
           onZoom={setZoom}
           documentMarks={allMarks(marks)}
           onDocumentRemove={removeAnyMark}
+          onDocumentClear={clearDocument}
         />
       )}
     </div>

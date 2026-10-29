@@ -14,7 +14,7 @@
  */
 import type { AnnotationMark } from '../../shared/annotation'
 import type { DocumentSeat, PageImage, PagedAnnotationInput } from '../document-seat'
-import { markedPages, type MarksByPage } from './page-marks'
+import { groupByPage, markedPages, type MarksByPage } from './page-marks'
 import type { PdfDocument } from './runtime'
 
 /** Where a hand-off goes. */
@@ -75,13 +75,29 @@ export interface SaveContext {
     readonly composing: string
     /** "it is in the composer" line. */
     readonly composed: string
+    /** "that one is in the composer" line. */
+    readonly composedOne: string
     /** "it was sent" line. */
     readonly sent: string
+    /** "that one was sent" line. */
+    readonly sentOne: string
     /** "clearing failed" prefix. */
     readonly clearFailed: string
   }
   /** The document's state after a clear. */
   readonly cleared: () => void
+  /**
+   * Take one mark out of the document, leaving the rest.
+   *
+   * A per-mark hand-off delivers one mark, so the document keeps the others — and
+   * the sidecar has to follow, which it does on its own: dropping the mark changes
+   * what the next collect describes, and the background writer reconciles disk with
+   * that. The one thing it cannot know is that the disk now holds a document of one
+   * mark rather than of all of them, so the caller forgets the written signature
+   * first, and the next pass writes the survivors instead of skipping them.
+   * @param id - the mark that was delivered.
+   */
+  readonly dropped: (id: string) => void
   /** Creation time of the document this save produced. @param at - its timestamp. */
   readonly setCreatedAt: (at: string) => void
   /** Whether the file on disk is not the one the marks were drawn on. @param stale - new value. */
@@ -119,25 +135,42 @@ export async function discardDocument(context: SaveContext): Promise<void> {
 }
 
 /**
- * Save the document's annotation and hand it to the agent, or into the draft.
+ * Write and hand off the document, or one mark of it, and clear what was sent.
+ *
+ * What is cleared follows what was sent. A whole-document hand-off has delivered
+ * everything the sidecar described, so the sidecars go and the document empties. A
+ * hand-off of one mark has delivered that mark only, so that mark leaves the
+ * document and everything else stays — along with the rest of the reader's work,
+ * which they cannot see from the pill they pressed.
  *
  * @param context - the document being saved.
  * @param target - who receives the annotation.
+ * @param only - the single mark being sent, or undefined to send the document.
  */
-export async function saveAndDeliver(context: SaveContext, target: DeliveryTarget): Promise<void> {
+export async function saveAndDeliver(
+  context: SaveContext,
+  target: DeliveryTarget,
+  only?: AnnotationMark,
+): Promise<void> {
   // The only enforcement point: the toolbar buttons stay clickable so this guard is
   // what decides, not a disabled attribute that hides the reason.
-  const input = context.collect()
-  if (input === null) {
+  const collected = context.collect()
+  if (collected === null) {
     context.fail(context.copy.notReady)
     return
   }
+  // One mark is sent as a document of one mark: the message, the sidecar and the
+  // drawn copy all describe what is being sent, and each of them reads the marks
+  // from this one input rather than consulting the document again.
+  const input = only === undefined
+    ? collected
+    : { ...collected, marks: collected.marks.filter(mark => mark.id === only.id) }
   const { pdf, bytes } = context
   if (input.marks.length === 0 || pdf === null || bytes === undefined) return
   context.setBusy(true)
   context.say(target === 'agent' ? context.copy.sending : context.copy.composing)
   try {
-    const pages = markedPages(context.marks)
+    const pages = markedPages(groupByPage(input.marks))
     const annotatedPdf = await context.annotate(bytes, pdf, pages, context.figureUnit)
     const saved = await context.seat.save(context.address, input, annotatedPdf)
     context.autosave.cancel()
@@ -147,14 +180,25 @@ export async function saveAndDeliver(context: SaveContext, target: DeliveryTarge
     const pageImages = await context.review(pdf, pages)
     if (target === 'composer') {
       await context.seat.compose(input, saved, pageImages, annotatedPdf)
-      context.say(context.copy.composed)
+      context.say(only === undefined ? context.copy.composed : context.copy.composedOne)
+    } else {
+      const warnings = await context.seat.send(input, saved, pageImages, annotatedPdf)
+      const delivered = only === undefined ? context.copy.sent : context.copy.sentOne
+      context.say(`${delivered}${warnings.length === 0 ? '' : ` ${warnings.join(' ')}`}`)
+    }
+    if (only === undefined) {
       await discardDocument(context)
       return
     }
-    const warnings = await context.seat.send(input, saved, pageImages, annotatedPdf)
-    const text = `${context.copy.sent}${warnings.length === 0 ? '' : ` ${warnings.join(' ')}`}`
-    context.say(text)
-    await discardDocument(context)
+    // The sidecar on disk holds the one mark that was sent, so the survivors have to
+    // be written back over it: left alone it would deliver that mark again on the
+    // next open, under a document that no longer carries it. Forgetting what was
+    // written is what makes that rewrite happen rather than look like a no-op, and
+    // dropping the mark is what gives it the survivors to write — if there are none,
+    // the same pass deletes the sidecar, which is the right end state for a
+    // document whose last mark has been sent.
+    context.autosave.forget()
+    context.dropped(only.id)
   } catch (cause) {
     context.fail(`${context.copy.saveFailed}${messageOf(cause)}`)
   } finally {

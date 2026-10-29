@@ -178,7 +178,7 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
   // The running gesture is the mark's geometry until it is dropped, so the stroke
   // follows the pointer without the parent re-rendering the stored mark.
   const shown = shownMark(mark, props.press)
-  const path = markPathData(shown)
+  const path = markPathData(shown, unit)
   const selected = selectedId === mark.id
   const transform = markTransform(shown)
   const isPoint = mark.kind === 'point'

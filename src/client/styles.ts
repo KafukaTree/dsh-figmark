@@ -94,11 +94,11 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
    drawing. The drawn parts never take the pointer, or grabbing the knob would grab
    the knob instead of the slider. */
 .da-weight{position:absolute;z-index:7;left:6px;top:50%;transform:translateY(-50%);
-  --da-track-inset:10px;--da-knob-size:11px;
-  display:flex;align-items:center;justify-content:center;width:7px;height:200px;
+  --da-track-inset:10px;--da-knob-size:11px;--da-rail-width:7px;
+  display:flex;align-items:center;justify-content:center;width:var(--da-rail-width);height:200px;
   border-radius:999px;background:var(--dsw-alias-border-l2,rgba(127,127,127,.22));
   cursor:ns-resize;transition:width .16s ease,background .16s ease,box-shadow .16s ease}
-.da-weight:hover,.da-weight:focus-within{width:30px;background:var(--dsw-alias-bg-layer-2,#fff);
+.da-weight:hover,.da-weight:focus-within{--da-rail-width:30px;background:var(--dsw-alias-bg-layer-2,#fff);
   box-shadow:0 5px 18px rgba(20,40,80,.16),0 0 0 0.5px var(--dsw-alias-border-l2,currentColor)}
 /* The track is an svg in the body: a hairline at the bottom that opens into a rounded
    shoulder at the top. It is not a clip-path polygon because a polygon has no rounded
@@ -130,10 +130,15 @@ body[data-ds-dark-theme] .da-root{--da-accent:#4c8dff;--da-accent-soft:rgba(76,1
 .da-weight:hover .da-weight-knob,.da-weight:focus-within .da-weight-knob{
   background:var(--da-accent,#176df2);
   box-shadow:0 2px 7px rgba(20,40,80,.3)}
-/* The browser's own range, rotated upright and made transparent. It spans the whole
-   rail so a press anywhere on it lands on the slider — including on the knob, which
-   is why the knob is pointer-transparent. */
-.da-weight-input{position:absolute;left:50%;top:50%;width:200px;height:30px;margin:0;opacity:0;
+/* The browser's own range, rotated upright and made transparent. It spans the rail so
+   a press anywhere on it lands on the slider — including on the knob, which is why
+   the knob is pointer-transparent.
+   Its horizontal extent is the rail's own width, not a fixed 30px. Rotated a quarter
+   turn, the input's height is what reaches sideways, so a fixed 30px made an invisible
+   fourteen-pixel-wide strip of control stick out past a seven-pixel rail — over the
+   paper, in the state a reader draws in, where a press that was meant to start a mark
+   moved the stroke weight instead. */
+.da-weight-input{position:absolute;left:50%;top:50%;width:200px;height:var(--da-rail-width);margin:0;opacity:0;
   transform:translate(-50%,-50%) rotate(-90deg);cursor:ns-resize;appearance:none;background:transparent}
 
 /* --- the floating bar ---------------------------------------------------- */

@@ -152,6 +152,22 @@ describe('mark geometry', () => {
     expect(arrowBarbs([])).toEqual([])
   })
 
+  it('draws an arrow head at the size it is measured at, on any figure', () => {
+    // One unit for both: a head that kept its coordinate size while the shaft scaled
+    // drew a different arrow from the one the outline reserved room for, so a large
+    // figure got a blunt dart and a margin nothing reached into.
+    const mark: AnnotationMark = { id: 'a', kind: 'arrow', color: '#000', points: [[0, 0], [100, 0]] }
+    const [, , left, right] = arrowBarbs(mark.points, 1, 5)
+    // The painted barbs are the measured barbs, in the same coordinates — rounded to
+    // the one decimal the path writes them at.
+    const at = (point: readonly [number, number]): string =>
+      `${Math.round(point[0] * 10) / 10} ${Math.round(point[1] * 10) / 10}`
+    expect(defined(markPathData(mark, 5)))
+      .toBe(`M 0 0 L 100 0 M ${at(defined(left))} L 100 0 L ${at(defined(right))}`)
+    // And the outline reaches as far as the paint, so no margin is reserved in vain.
+    expect(defined(markOutline(mark, 5)).width).toBeGreaterThan(defined(markOutline(mark, 1)).width)
+  })
+
   it('has no path when a mark carries no point', () => {
     expect(markPathData({ id: 'x', kind: 'arrow', color: '#000', points: [] })).toBeUndefined()
   })

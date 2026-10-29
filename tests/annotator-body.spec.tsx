@@ -1851,6 +1851,93 @@ describe('repainting a mark that is already there', () => {
   })
 })
 
+describe('moving to a different figure', () => {
+  const OTHER = 'dsh-resource://file/session/s1/other.svg'
+
+  /** A saved annotation for the second figure, with a mark and a sentence of its own. */
+  const elsewhere: AnnotationDocument = {
+    ...saved,
+    figure: { ...saved.figure, address: OTHER, path: '/w/other.svg' },
+    summary: '第二张图的整体说明',
+    marks: [{ id: 's1', kind: 'ellipse', color: '#2f9e44', points: [[5, 5], [25, 25]], detail: '第二张的标注' }],
+  }
+
+  /**
+   * Answer the Host per address, so a change of document gets a different document.
+   * @param forOther - what the second address answers with.
+   */
+  function stubByAddress(forOther: AnnotationDocument | null): void {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const body = url.includes('other.svg')
+        ? hostPayload({ annotation: forOther })
+        : hostPayload({ annotation: saved })
+      return { json: async () => body, status: 200 }
+    }))
+  }
+
+  /**
+   * Hand the mounted body a different document.
+   *
+   * The panel is registered once, not once per figure, so this is an ordinary event:
+   * the same component sees one address and then another, and everything it kept for
+   * the first one has to go.
+   */
+  async function moveTo(result: { readonly root: Root }): Promise<void> {
+    await act(async () => {
+      result.root.render(
+        <AnnotatorBody content={{ kind: 'bytes', data: svgBytes() }} resourceAddress={OTHER} />,
+      )
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+  }
+
+  it('carries nothing from the figure it left, including what it could undo', async () => {
+    // The undo trail describes edits to *that* document. Kept across a change of
+    // document it walks back into a file the reader is no longer looking at, and
+    // pressing undo on a clean figure would put another figure's marks on it.
+    mounted = await svgBody({ annotation: saved })
+    await openList(document.body)
+    await click(defined(document.querySelector('.da-mark-del')))
+    // One step to walk back, so the trail is not empty when the figure changes.
+    expect(button(document.body, zh.undo).disabled).toBe(false)
+    stubByAddress(null)
+    await moveTo(mounted)
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(0)
+    // Nothing to walk back to, and nothing to walk forward to either.
+    expect(button(document.body, zh.undo).disabled).toBe(true)
+    expect(button(document.body, zh.redo).disabled).toBe(true)
+  })
+
+  it('forgets the sentence the old figure carried, and its timestamp with it', async () => {
+    // The overall note describes the figure it was written about. Kept across a
+    // change of document it becomes a sentence about a picture nobody is looking at,
+    // and it would be saved under the new figure's name on the next edit.
+    mounted = await svgBody({ annotation: saved })
+    expect((await openGoal(document.body)).value).toBe('改标号')
+    stubByAddress(null)
+    await moveTo(mounted)
+    expect((await openGoal(document.body)).value).toBe('')
+  })
+
+  it('shows what the new figure was saved with, instead of a blank sheet', async () => {
+    // A clean sheet is right only for a figure with no sidecar. One that was already
+    // annotated has to come back with its own marks and its own sentence.
+    mounted = await svgBody({ annotation: saved })
+    await openList(document.body)
+    await click(defined(document.querySelector('.da-mark-del')))
+    stubByAddress(elsewhere)
+    await moveTo(mounted)
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    await openList(document.body)
+    expect(document.body.textContent).toContain('第二张的标注')
+    expect(document.body.textContent).not.toContain('标号指错了')
+    expect((await openGoal(document.body)).value).toBe('第二张图的整体说明')
+    // The trail still starts clean: the loaded marks are where this document opens,
+    // not something the reader typed on it.
+    expect(button(document.body, zh.undo).disabled).toBe(true)
+  })
+})
+
 describe('the hand-off inside the comment', () => {
   it('offers the two ways out once the comment says something, and neither before', async () => {
     mounted = await svgBody()
@@ -1903,6 +1990,78 @@ describe('the hand-off inside the comment', () => {
     expect(body).not.toContain('第一条')
   })
 })
+
+  it('keeps the marks it did not send, and their sidecar, after a one-mark hand-off', async () => {
+    // The pill's buttons sit beside one sentence, so they mean that sentence. Taking
+    // the rest of the figure with them would lose work the reader never pointed at,
+    // and the delete is on disk, so nothing would bring it back.
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
+    mounted = result
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '第一条')
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '第二条')
+    await click(defined(result.host.querySelector('.da-comment-send-primary')))
+    // The survivor is what the sidecar has to describe next, and the write that
+    // puts it there is the ordinary autosave — the one that also deletes the file
+    // when nothing is left, so a last mark sent leaves no sidecar behind.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
+    // One mark left on the surface, and the file was rewritten rather than deleted.
+    expect(result.host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(result.calls.filter(call => call.init?.method === 'DELETE')).toHaveLength(0)
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const last = JSON.stringify(postBody(writes[writes.length - 1]))
+    expect(last).toContain('第一条')
+    expect(last).not.toContain('第二条')
+  })
+
+  it('says the rest stayed, so the reader is not left counting', async () => {
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
+    mounted = result
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '第一条')
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '第二条')
+    await click(defined(result.host.querySelector('.da-comment-send-primary')))
+    // The whole-figure copy says the panel was cleared. Saying that here would be
+    // false, and a reader who trusted it would not look for the mark they kept.
+    expect(defined(document.querySelector('.da-status')).textContent).toBe(zh.sentOne)
+  })
+
+  it('hands the mark to its owner instead of sending for itself, when it has one', async () => {
+    // A page of a document has no seat of its own: its save is the document's, and a
+    // body that ran its own hand-off failed every time (the page never reads a
+    // sidecar, so it has no document to build).
+    const handed: { readonly id: string; readonly target: string }[] = []
+    const result = await svgBody({}, {
+      onSendMark: (mark, target) => { handed.push({ id: mark.id, target }) },
+    })
+    mounted = result
+    await drawArrow(result.host)
+    await type(detailBox(result.host), '交给文档')
+    await click(defined(result.host.querySelector('.da-comment-send-primary')))
+    expect(handed).toHaveLength(1)
+    expect(defined(handed[0]).target).toBe('agent')
+    // Nothing was posted from here: the document does the saving, and a second write
+    // from the page would describe one page as if it were the whole file.
+    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
+  })
+
+  it('leaves the other pages alone when one page is told to clear', async () => {
+    // Clearing a paged document is the document's act: one sidecar serves every page,
+    // so a page that deleted it while the other pages kept their rows would damage
+    // the file and half-clear the document.
+    let cleared = 0
+    const result = await svgBody({}, { onDocumentClear: () => { cleared += 1 } })
+    mounted = result
+    await drawArrow(result.host)
+    await openList(result.host)
+    await click(button(result.host, zh.clear))
+    expect(cleared).toBe(1)
+    expect(result.calls.filter(call => call.init?.method === 'DELETE')).toHaveLength(0)
+  })
 
 describe('the weight of the pen', () => {
   /** The stroke width one drawn mark carries on the surface. */

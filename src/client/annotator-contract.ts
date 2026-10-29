@@ -159,6 +159,16 @@ export interface AnnotatorBodyProps {
   /** Removes a mark by id, including one drawn on another page of the document. */
   readonly onDocumentRemove?: ((id: string) => void) | undefined
   /**
+   * Forgets the whole document's annotation, on screen and on disk.
+   *
+   * Clearing means different things to a page and to a document. A page body's own
+   * clear can only reach its own draft and the document's single sidecar, which
+   * leaves the other pages holding marks whose file is gone — the delete belongs to
+   * whoever owns the pages, exactly as the save does. Absent for a whole-figure
+   * body, which is its own document.
+   */
+  readonly onDocumentClear?: (() => void) | undefined
+  /**
    * Turns to the page a mark is on, when this body is one page of a document.
    *
    * The list a reader checks their work against is the document's, so a row in it
@@ -175,8 +185,23 @@ export interface AnnotatorBodyProps {
    * A page body has no seat of its own — the document that owns the pages is the
    * one that saves and delivers — so the offer travels up as a callback. It draws
    * the two rows on its own bar unless its owner has taken the bar over.
+   *
+   * The callback takes no mark: a page body is one surface of a document whose save
+   * and delivery are the document's, and the document is what knows which marks it
+   * is sending. A per-mark send from here would hand the owner a subset it has no
+   * way to tell from a whole-document one.
    */
   readonly onSend?: ((target: 'agent' | 'composer') => void) | undefined
+  /**
+   * Hand one mark to someone else, when this body has no seat for its own marks.
+   *
+   * The pill's two buttons exist only once a mark carries a sentence, and pressing
+   * one means "this sentence", not "the document". A page body cannot honour that
+   * by itself — its save is the document's — so the mark travels up as an argument
+   * rather than as a body's whole state. Distinct from {@link onSend} for exactly
+   * that reason: a target that receives a mark cannot mistake it for the document.
+   */
+  readonly onSendMark?: ((mark: AnnotationMark, target: 'agent' | 'composer') => void) | undefined
   /** Marks this surface had before it mounted; a saved document still wins over them. */
   readonly draft?: SurfaceDraft | undefined
   /** Reports every edit, so an owner that unmounts surfaces loses no unsaved work. */

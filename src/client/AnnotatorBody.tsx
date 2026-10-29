@@ -67,7 +67,7 @@ import {
 import { buildAnnotationDocument } from './annotator/documents'
 import { DEFAULT_PALETTE, draggedSpot, placementStyle } from './annotator/placement'
 import {
-  clipStatus, failureStatus, handoffDelivered, handoffStarted, hostGestureStatus,
+  clipStatus, failureStatus, handoffDelivered, handoffDeliveredOne, handoffStarted, hostGestureStatus,
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
@@ -636,6 +636,28 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   // --- host annotation ------------------------------------------------------
 
+  /**
+   * The address this body last read an annotation for.
+   *
+   * The panel is registered once and not remounted per document, so this body can
+   * outlive the figure it was opened on. Reading for a new address is therefore not
+   * the same event as reading for the first time: the first read adopts what was
+   * saved over whatever draft this body was seeded with, while a read for a
+   * *different* document has to throw the previous one's state away first. Null
+   * means "no read yet", which no address can be.
+   */
+  const readFor = useRef<string | null>(null)
+
+  /**
+   * The selection setter, read at call time.
+   *
+   * `setSelectedId` is rebuilt when the selection changes, so depending on it in the
+   * read effect would fetch the annotation again on every press. The effect wants the
+   * current setter, not the one it closed over.
+   */
+  const selectRef = useRef(setSelectedId)
+  selectRef.current = setSelectedId
+
   useEffect(() => {
     // A page body is one page of a document its owner persists, and the owner has
     // already read the whole sidecar: reading it here would put every page's marks
@@ -647,17 +669,44 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       try {
         const result = await loadAnnotation(address, controller.signal)
         if (controller.signal.aborted) return
+        // Read before the assignment below: this is the only place that can tell a
+        // first read from a change of document, and a change of document from the
+        // same one being read again.
+        const first = readFor.current === null
+        const replaces = readFor.current !== null && readFor.current !== address
+        readFor.current = address
         setLoaded(result)
         setHostError(null)
-        if (result.annotation !== null) {
-          history.replace(result.annotation.marks)
-          writeSummary(result.annotation.summary ?? '')
+        const saved = result.annotation
+        if (replaces) {
+          // A different document's state is whatever it was saved with, and nothing
+          // of this body's previous document survives: not its marks, not its
+          // sentence, not its timestamp, and not its place on the undo trail. The
+          // empty values matter as much as the loaded ones — a figure that was never
+          // annotated has to come out clean rather than wearing the last one's marks.
+          history.reset(saved?.marks ?? [])
+          writeSummary(saved?.summary ?? '')
+          setCreatedAt(saved?.createdAt ?? null)
+          selectRef.current(null)
+          // What was just read is now the baseline: a signature left over from the
+          // previous document describes a file that is not this one.
+          writtenSignature.current = null
+        } else if (first && saved !== null) {
+          // The first read adopts what was saved over the draft this body was seeded
+          // with — the file is the record, and the draft only filled the gap while
+          // the answer was in flight. Both stacks stay as they are: nothing came back
+          // that was not already there.
+          history.replace(saved.marks)
+          writeSummary(saved.summary ?? '')
           // The saved document's number style describes the picture on screen, so it
           // wins over the remembered preference: the annotation and its image have to
           // agree. A document that never recorded one leaves the preference in place.
-          setCreatedAt(result.annotation.createdAt)
-          setStale(result.annotation.figure.sha256 !== result.sha256)
+          setCreatedAt(saved.createdAt)
         }
+        // Reading the same document again is a re-check of the file's identity, not a
+        // second load: the marks on screen are the reader's, and the answer that just
+        // arrived has nothing newer to say about them.
+        setStale(saved === null ? false : saved.figure.sha256 !== result.sha256)
       } catch (error) {
         if (controller.signal.aborted) return
         setHostError(error instanceof AnnotatorHostError ? error.message : String(error))
@@ -1237,14 +1286,37 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [address, commit, t, writeSummary])
 
   /**
+   * Clear this surface's annotation — or, on one page of a document, the document's.
+   *
+   * A page body cannot clear by itself. Its `discard` reaches one sidecar and one
+   * draft, which on a paged document is the file all the pages share: emptying the
+   * page in view while the other pages keep rows in the list, with their sidecar
+   * deleted underneath them. The owner keeps the pages, so the owner decides what
+   * clearing means — the same reason the send goes up rather than running here.
+   */
+  const clearAnnotation = useCallback(async (): Promise<void> => {
+    if (props.onDocumentClear !== undefined) {
+      props.onDocumentClear()
+      return
+    }
+    await discard()
+  }, [discard, props.onDocumentClear])
+
+
+  /**
    * Save the annotation and hand it somewhere: to the agent, or into the draft.
    *
    * The Host writes `<name>.annot.json` and a derived `<name>.annotated.png` beside
-   * the figure, and the reader's original stays as it was. Once the hand-off has
-   * succeeded the sidecars are deleted and the marks are cleared from the surface:
-   * a delivered annotation has done its job, and leaving it on screen (or on disk)
-   * would make the reader clear it twice.
+   * the figure, and the reader's original stays as it was.
+   *
+   * What happens to the marks afterwards depends on what was sent. A whole-figure
+   * hand-off has delivered everything the sidecar described, so the sidecars are
+   * deleted and the surface cleared: leaving them would make the reader clear the
+   * same work twice. A hand-off of *one* mark has delivered that mark only, so it
+   * leaves the surface and the sidecar holding the rest — the reader pressed a
+   * button beside one sentence, and one sentence is what it meant.
    * @param target - who receives the annotation.
+   * @param only - the single mark being sent, or undefined to send them all.
    */
   const run = useCallback(async (target: 'agent' | 'composer', only?: AnnotationMark): Promise<void> => {
     // The only enforcement point: the toolbar buttons stay clickable so this
@@ -1282,31 +1354,63 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
           locale,
         })
-        setStatus(handoffDelivered(t, 'composer'))
+      } else {
+        if (props.sessions === undefined) throw new Error('the sessions service is unavailable')
+        await deliverAnnotation({
+          sessions: props.sessions,
+          // A single-surface figure is reviewed as the picture it is, which travels
+          // as an image part and not as an attached file.
+          fileUpload: undefined,
+          sessionId,
+          document: document_,
+          paths: saved,
+          pageImages,
+          annotatedPdf: undefined,
+          locale,
+        })
+      }
+      if (only === undefined) {
+        setStatus(handoffDelivered(t, target))
         await discard()
         return
       }
-      if (props.sessions === undefined) throw new Error('the sessions service is unavailable')
-      await deliverAnnotation({
-        sessions: props.sessions,
-        // A single-surface figure is reviewed as the picture it is, which travels
-        // as an image part and not as an attached file.
-        fileUpload: undefined,
-        sessionId,
-        document: document_,
-        paths: saved,
-        pageImages,
-        annotatedPdf: undefined,
-        locale,
-      })
-      setStatus(handoffDelivered(t, 'agent'))
-      await discard()
+      // Only the mark that was sent leaves. The sidecar on disk describes that one
+      // mark, so it has to be rewritten from the survivors — letting the autosave
+      // notice the change does that, because the signature recorded above still
+      // names the delivered document.
+      commit(removedMarks(marks, only.id))
+      // The mark that was sent is gone, so it cannot stay selected: the pill would be
+      // showing a sentence for a mark that is no longer on the figure.
+      setSelectedId(null)
+      autosave.current?.schedule()
+      setStatus(handoffDeliveredOne(t, target))
     } catch (error) {
       setStatus(failureStatus(t, 'saveError', error))
     } finally {
       setBusy(null)
     }
-  }, [address, buildDocument, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, size, t])
+  }, [address, buildDocument, commit, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, t])
+
+  /**
+   * Hand the sentence beside one mark to someone.
+   *
+   * The pill's two buttons are the only gesture that means one mark rather than the
+   * document, and they mean it on every surface. A body that owns its own save says
+   * so itself; a page body's save belongs to the document, which is the only half
+   * that can write a sidecar holding the other pages, so the mark travels up. What
+   * must not happen — and did — is the page body running its own whole-document path
+   * and failing on a figure it never loaded.
+   * @param mark - the mark whose sentence is being sent.
+   * @param target - who receives it.
+   */
+  const sendOne = useCallback(async (mark: AnnotationMark, target: 'agent' | 'composer'): Promise<void> => {
+    if (props.onSendMark !== undefined) {
+      props.onSendMark(mark, target)
+      return
+    }
+    await run(target, mark)
+  }, [props.onSendMark, run])
+
 
   /**
    * Probe the Host once, so the menu can offer the gestures it can perform.
@@ -1782,7 +1886,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           selectedId={selectedId}
           onReveal={reveal}
           onRemove={removeMark}
-          onClear={() => { void discard() }}
+          onClear={() => { void clearAnnotation() }}
           onClose={() => { setOpenPanel(null) }}
           t={t}
         />
@@ -1799,8 +1903,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           at={{ left: detailAt.left, top: detailAt.top }}
           mark={selected}
           onWrite={(value) => { setMarkDetail(selected.id, value) }}
-          onSendToAgent={() => { void run('agent', selected) }}
-          onSendToComposer={() => { void run('composer', selected) }}
+          onSendToAgent={() => { void sendOne(selected, 'agent') }}
+          onSendToComposer={() => { void sendOne(selected, 'composer') }}
           busy={busy !== null}
           t={t}
         />

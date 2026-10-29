@@ -69,6 +69,22 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('.da-weight-fill{position:absolute;left:50%;bottom:var(--da-track-inset)')
   })
 
+  it('gives the weight slider no reach the rail does not show', () => {
+    // A native range turned a quarter turn reaches sideways by its *height*. Pinned at
+    // 30px under a 7px rail, it reached 11.5px past each edge with `opacity:0`, over
+    // the paper — and the rail is up whenever a mark is picked or a weight-bearing
+    // tool is armed, which is the state a reader draws in. A press meant to start a
+    // mark moved the stroke weight instead, with nothing on screen to explain it.
+    const rail = /\.da-weight\{[^}]*\}/u.exec(STYLES)?.[0] ?? ''
+    expect(rail).toContain('--da-rail-width:7px')
+    // The reach follows the same variable the visible rail is drawn at, so the two
+    // cannot drift: an open rail is wider on screen and may be wider under the finger.
+    expect(STYLES).toContain('width:var(--da-rail-width);height:200px')
+    const input = /\.da-weight-input\{[^}]*\}/u.exec(STYLES)?.[0] ?? ''
+    expect(input).toContain('height:var(--da-rail-width)')
+    expect(input).not.toContain('height:30px')
+  })
+
   it('leaves the margin transparent and puts the white on the figure itself', () => {
     // The paper grows when a mark reaches past the figure. Filling that grown margin
     // white made the margin look like more of the figure — the reader asked for the

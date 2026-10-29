@@ -199,18 +199,29 @@ export function arrowBarbs(points: readonly FigurePoint[], weight = 1, unit = 1)
 
 /**
  * SVG path data for one mark's stroke.
+ *
+ * The path is in figure coordinates, so anything it sizes — the arrow's barbs — has
+ * to be multiplied by the figure's unit here rather than left to the caller: strokes
+ * are given their width in screen pixels by the caller, but a barb is a coordinate,
+ * and a coordinate that ignored the unit drew one head on every figure. A head that
+ * did not grow with the shaft read as a blunt dart on anything larger than a plot at
+ * unit 1, and the outline that measured it reserved a head sixty pixels wide on a
+ * tip that only had fourteen.
+ *
  * @param mark - the mark to render.
+ * @param unit - the figure's size multiple.
  * @returns path data, or undefined for a `point` mark (which draws as a pin).
  */
-export function markPathData(mark: AnnotationMark): string | undefined {
+export function markPathData(mark: AnnotationMark, unit = 1): string | undefined {
   const [first, second] = mark.points
   if (first === undefined) return undefined
   switch (mark.kind) {
     case 'arrow': {
       if (second === undefined) return undefined
-      // The barbs are drawn from the same function that measures them, so the
-      // picture and the outline of the arrow cannot disagree about how far it reaches.
-      const [left, right] = arrowBarbs(mark.points, mark.weight ?? 1).slice(2) as [FigurePoint, FigurePoint]
+      // The barbs are drawn from the same function that measures them, and with the
+      // same unit, so the picture and the outline of the arrow cannot disagree about
+      // how far it reaches.
+      const [left, right] = arrowBarbs(mark.points, mark.weight ?? 1, unit).slice(2) as [FigurePoint, FigurePoint]
       return `M ${n(first[0])} ${n(first[1])} L ${n(second[0])} ${n(second[1])}`
         + ` M ${n(left[0])} ${n(left[1])} L ${n(second[0])} ${n(second[1])}`
         + ` L ${n(right[0])} ${n(right[1])}`

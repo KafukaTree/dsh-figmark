@@ -51,7 +51,7 @@ export type FigureLayer =
  * @returns the mark's elements.
  */
 function markSvg(mark: AnnotationMark, number: number | undefined, unit: number): string {
-  const path = markPathData(mark)
+  const path = markPathData(mark, unit)
   const parts: string[] = []
   if (path !== undefined) {
     parts.push(

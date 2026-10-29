@@ -79,6 +79,24 @@ export function replaceMarks(history: EditHistory, next: readonly AnnotationMark
 }
 
 /**
+ * Start over on a different document.
+ *
+ * A different document is not an earlier state of this one: its marks were never on
+ * this surface, so no gesture here produced them and no press can walk back to them.
+ * {@link replaceMarks} keeps both stacks, which is right for re-reading *the same*
+ * document — applying it to a new address is what let a redo on figure B restore
+ * figure A's marks, because the stacks described work that belonged to another
+ * picture.
+ * @param history - the state of the document being left.
+ * @param next - the marks the new document opens with.
+ * @returns the new document's history, with nothing to walk back to.
+ */
+export function resetMarks(history: EditHistory, next: readonly AnnotationMark[]): EditHistory {
+  if (history.marks === next && history.past.length === 0 && history.future.length === 0) return history
+  return { marks: next, past: [], future: [] }
+}
+
+/**
  * Walk one step back.
  *
  * Returns the same value when there is nothing behind, rather than a copy of it: an
@@ -121,6 +139,14 @@ export interface HistoryHandle {
   readonly commit: (next: readonly AnnotationMark[]) => void
   /** Swap the marks out without recording a step. */
   readonly replace: (next: readonly AnnotationMark[]) => void
+  /**
+   * Start over on a different document.
+   *
+   * Unlike {@link replace} this drops both stacks: the redo trail belongs to the
+   * picture it was walked on, and carrying it to the next one offers to restore
+   * marks that were never drawn there.
+   */
+  readonly reset: (next: readonly AnnotationMark[]) => void
   /** Change the marks in place, as typing does: no undo step, no redo cleared. */
   readonly amend: (update: (marks: readonly AnnotationMark[]) => readonly AnnotationMark[]) => void
   /** Walk one step back. */
@@ -149,6 +175,9 @@ export function useAnnotationHistory(initial: readonly AnnotationMark[]): Histor
   const replace = useCallback((next: readonly AnnotationMark[]): void => {
     setState(history => replaceMarks(history, next))
   }, [])
+  const reset = useCallback((next: readonly AnnotationMark[]): void => {
+    setState(history => resetMarks(history, next))
+  }, [])
   const amend = useCallback((update: (marks: readonly AnnotationMark[]) => readonly AnnotationMark[]): void => {
     setState(history => ({ ...history, marks: update(history.marks) }))
   }, [])
@@ -161,5 +190,5 @@ export function useAnnotationHistory(initial: readonly AnnotationMark[]): Histor
     () => ({ past: state.past.length, future: state.future.length }),
     [state.future.length, state.past.length],
   )
-  return { marks: state.marks, depth, commit, replace, amend, undo, redo }
+  return { marks: state.marks, depth, commit, replace, reset, amend, undo, redo }
 }

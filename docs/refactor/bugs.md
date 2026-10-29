@@ -1458,10 +1458,40 @@ It is recorded because the field is labelled "column" and a column is not a code
 because the fix is `[...head].length + 1` rather than anything structural.
 
 
-## Fixed during the refactor
+## Fixed since the refactor
 
-None yet: a fix would be a behaviour change, which is what this refactor exists
-not to make.
+These were behaviour changes, so each one waited for its own decision rather than
+riding along inside a file split. Each names the test that now holds it.
+
+- **13.** A hand-off from the comment pill sends the one mark the pill is about and
+  leaves the rest — on the surface and in the sidecar. It used to run the
+  whole-figure path, so a press beside one sentence wrote a sidecar describing that
+  sentence and then deleted the figures's other work along with it. The two paths
+  are now told apart by argument (`run(target, only?)`), not by who called it.
+  `tests/annotator-body.spec.tsx` › "keeps the marks it did not send".
+- **14.** The same pill inside a PDF page now hands the mark up to the document
+  (`onSendMark`) instead of running a save the page could never perform: a page body
+  never reads a sidecar, so it had no document to build and every press failed.
+  `tests/pdf-body.spec.tsx` › "sends the one mark the pill is about".
+- **15.** Clear on a page asks the document to clear (`onDocumentClear`), so the
+  single sidecar is not deleted while other pages keep their rows.
+  `tests/pdf-body.spec.tsx` › "clears the whole document from a page".
+- **19, 46.** Reading an annotation for a *different* document now resets
+  everything that belonged to the old one: marks, sentence, timestamp, selection,
+  the written signature, and both undo stacks. A first read still adopts the file
+  over the seeded draft, and a re-read of the same document still changes nothing.
+  The two stacks needed a `resetMarks` of their own — `replaceMarks` deliberately
+  keeps them, which is right for a reload and wrong for a change of document.
+  `tests/annotator-body.spec.tsx` › "moving to a different figure"; the state
+  machine itself in `tests/history.spec.ts`.
+- **29.** The arrow head is drawn with the same figure unit that measures it, so a
+  large figure no longer gets a head that stops short of the outline reserved for
+  it. `markPathData` takes the unit rather than assuming 1.
+  `tests/render-export.spec.ts` › "draws an arrow head at the size it is measured at".
+- **47.** The weight slider's reach is its visible rail's width, not a fixed 30px:
+  turned sideways it used to cover 11.5px of paper on each side, so a press meant
+  for the figure moved the stroke weight instead, with nothing on screen to say so.
+  `tests/styles.spec.ts` › "gives the weight slider no reach the rail does not show".
 
 ## Checked and found not to be bugs
 

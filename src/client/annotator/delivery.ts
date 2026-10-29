@@ -67,6 +67,21 @@ export function handoffDelivered(t: Translate, target: DeliveryTarget): Delivery
 }
 
 /**
+ * The line that says one mark of several was handed somewhere.
+ *
+ * A per-mark hand-off is the same act as a whole-figure one, but its aftermath is
+ * the opposite: what the reader can see afterwards is the rest of the work, not an
+ * empty panel. Saying "cleared" there would be false, and leaving the sentence
+ * unchanged is what makes the difference invisible until the reader counts.
+ * @param t - the translator seat.
+ * @param target - who received it.
+ * @returns the success line for a single mark.
+ */
+export function handoffDeliveredOne(t: Translate, target: DeliveryTarget): DeliveryStatus {
+  return { tone: 'ok', text: t(target === 'composer' ? 'composedOne' : 'sentOne') }
+}
+
+/**
  * The line for a menu row that asks the Host to do something.
  *
  * The two rows that touch the desktop are the only ones whose outcome is not the

@@ -876,6 +876,67 @@ describe('saving the document', () => {
     expect(host.textContent).not.toContain(zh.sent)
   })
 
+  it('sends the one mark the pill is about, and keeps the rest of the document', async () => {
+    // The pill's buttons sit beside one sentence. On a paged document the page body
+    // has no seat for the save, so the hand-off has to come up here — and it must
+    // keep the other pages, whose marks the reader never pointed at.
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.nextPage))
+    await edit([mark('m3', 2)])
+    const page = defined(surfaces[surfaces.length - 1])
+    // The page body is handed the document's door for a one-mark send.
+    expect(page.onSendMark).toBeDefined()
+    await act(async () => {
+      page.onSendMark?.(mark('m1', 1), 'agent')
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    // What travelled is the one mark, saved as a document of one mark.
+    const saved = defined(seatState.saves[seatState.saves.length - 1])
+    expect(saved.input.marks.map(entry => entry.id)).toEqual(['m1'])
+    expect(host.textContent).toContain(zh.sentOne)
+    // The other page's mark is still the document's, and the sidecar was not
+    // deleted: this was not a delivery of the whole document.
+    expect(seatState.discards).toHaveLength(0)
+  })
+
+  it('writes the one mark the pill is about into the composer, and keeps the rest', async () => {
+    // The other half of the one-mark hand-off: a draft is not a delivery, so the same
+    // rule has to hold there — one sentence in, every other page still on the panel.
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.nextPage))
+    await edit([mark('m3', 2)])
+    const page = defined(surfaces[surfaces.length - 1])
+    await act(async () => {
+      page.onSendMark?.(mark('m3', 2), 'composer')
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    expect(defined(seatState.composes[0]).input.marks.map(entry => entry.id)).toEqual(['m3'])
+    expect(host.textContent).toContain(zh.composedOne)
+    expect(seatState.sends).toEqual([])
+    expect(seatState.discards).toHaveLength(0)
+  })
+
+  it('clears the whole document from a page, so no page is left holding a deleted file', async () => {
+    // One sidecar serves every page, so a page's own clear would delete it while the
+    // other pages kept their rows — half a document, and the file damaged doing it.
+    // The page body therefore asks the document rather than clearing itself.
+    await mount()
+    await edit([mark('m1', 1)])
+    const page = defined(surfaces[surfaces.length - 1])
+    expect(page.onDocumentClear).toBeDefined()
+    await act(async () => {
+      page.onDocumentClear?.()
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    expect(seatState.discards).toEqual(['dsh-resource://file/session/s1/report.pdf'])
+    // Every page let go of its marks, not just the one that asked: the document's
+    // own copy of the marks is what the pages are handed, and it is now empty.
+    const after = defined(surfaces[surfaces.length - 1])
+    expect(after.draft?.marks).toEqual([])
+  })
+
   it('says so when the document facts are not known yet', async () => {
     // Without the Host's own facts there is nothing to write an annotation against,
     // so the action reports rather than silently doing nothing.
