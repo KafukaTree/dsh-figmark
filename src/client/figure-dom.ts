@@ -297,7 +297,7 @@ export function anchorAtPoint(
   const root = container.querySelector('svg')
   if (root === null) return undefined
   const frame = root.getBoundingClientRect()
-  const hit = pickInFigure(container, root, frame, clientX, clientY, scaleX, scaleY)
+  const hit = pickInFigure(container, root, frame, clientX, clientY)
   // Nothing painted under the pointer: a click on blank paper names nothing, rather
   // than falling back to the sheet it is blank on.
   if (hit === undefined) return undefined
@@ -339,8 +339,6 @@ export function anchorAtPoint(
  * @param frame - the box the figure is drawn in.
  * @param clientX - pointer x in client space.
  * @param clientY - pointer y in client space.
- * @param scaleX - figure pixels per client pixel horizontally.
- * @param scaleY - figure pixels per client pixel vertically.
  * @returns the element, or undefined when nothing is painted there.
  */
 function pickInFigure(
@@ -349,13 +347,15 @@ function pickInFigure(
   frame: DOMRect,
   clientX: number,
   clientY: number,
-  scaleX: number,
-  scaleY: number,
 ): Element | undefined {
-  // The reach is stated in screen pixels, so it is converted to the figure's own
-  // units: a magnified figure needs fewer of them to cover the distance the reader's
-  // hand covers.
-  const stack = pickStack(container.ownerDocument, clientX, clientY, PICK_REACH / Math.max(scaleX, scaleY))
+  // The reach travels as it is: `elementsFromPoint` is asked in client space, which is
+  // the space `PICK_REACH` is stated in. It used to be divided by the figure's scale,
+  // which converted a screen distance into figure pixels and then spent it in client
+  // pixels — so the reach changed with the magnification and in the wrong direction.
+  // Zoomed in 6× it came to two client pixels, and a hairline needed sub-pixel aim;
+  // zoomed out 6× it came to seventy-two, so the picker named things the reader was
+  // not pointing at. The HTML surface never converted, so the two disagreed.
+  const stack = pickStack(container.ownerDocument, clientX, clientY, PICK_REACH)
   if (stack === null) return measuringHit(container, root, clientX, clientY)
   const painted = stack.find(element => isPickable(element, root))
   // A shape with `fill="none"` is invisible to the pointer, so the browser can only

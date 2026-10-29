@@ -140,8 +140,12 @@ export function createHandlers(deps: RouteDeps): {
       sendFailure(res, 403, 'missing plugin guard header')
       return
     }
-    const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      // Inside the try, because parsing is the one step that can throw before any
+      // route sees the request: a target like `//[` is neither a path nor an origin,
+      // and `new URL` refuses it. The plugin's contract is that a handler answers
+      // rather than rejects, so that refusal is this handler's 400 to write.
+      const url = new URL(req.url ?? '/', 'http://localhost')
       const answer = await route(req, url, deps)
       if (answer.ok) {
         sendJson(res, 200, answer.body)

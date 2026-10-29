@@ -266,11 +266,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * and the comment pill would vanish under the sentence it belongs to.
    */
   const selectedId = props.selectedId === undefined ? ownSelectedId : props.selectedId
+  /**
+   * The selection, readable from a callback built by an earlier render.
+   *
+   * An updater has to read the selection as it is when it runs, not as it was when
+   * the callback holding it was built: `removeMark` captures its dependencies once,
+   * and a stale closure made it compare against a selection from before the reader
+   * picked the row next to the one being deleted. Writing the value through a ref
+   * keeps one stable callback honest without rebuilding it on every click.
+   */
+  const selectedRef = useRef<string | null>(selectedId)
+  selectedRef.current = selectedId
   const setSelectedId = useCallback((next: string | null | ((current: string | null) => string | null)): void => {
-    const value = typeof next === 'function' ? next(selectedId) : next
+    const value = typeof next === 'function' ? next(selectedRef.current) : next
     if (props.onSelectedIdChange === undefined) setOwnSelectedId(value)
     else props.onSelectedIdChange(value)
-  }, [props.onSelectedIdChange, selectedId])
+  }, [props.onSelectedIdChange])
   /** The mark whose detail box should take the caret once it is on screen. */
   const [focusId, setFocusId] = useState<string | null>(null)
   /**
@@ -982,8 +993,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     commit(removedMarks(marks, id))
+    // Only the row that went takes the selection with it. The updater reads the
+    // selection at the moment it runs, so pruning one row leaves the comment card of
+    // another open — a reader who deletes mark 2 was losing the card they were typing
+    // mark 1 into.
     setSelectedId(current => (current === id ? null : current))
-  }, [commit, marks, props.onDocumentRemove])
+  }, [commit, marks, props.onDocumentRemove, setSelectedId])
 
   /**
    * Write one mark's detail.
@@ -1230,6 +1245,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [address, createdAt, loaded, marks, summary])
 
   /**
+   * Take back a save failure once a write has gone through.
+   *
+   * The line was only ever written, never cleared: one failed save — a full disk, a
+   * host hiccup — left `保存标注失败` on screen while every write after it succeeded
+   * silently. The reader then either redid work that was already saved or gave up on
+   * an annotation that was saving fine. Only a failure is taken back here; a line
+   * saying a handoff went through is news of its own and is not this one's to drop.
+   */
+  const clearSaveError = useCallback((): void => {
+    setStatus(current => (current !== null && current.tone === 'error' ? null : current))
+  }, [])
+
+  /**
    * Write the surface's current marks to disk, without a review image.
    *
    * This is the draft write: it happens while the reader is still working, so it
@@ -1254,6 +1282,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           if (signature === writtenSignature.current) return
           await deleteAnnotation(state.address)
           writtenSignature.current = signature
+          clearSaveError()
           return
         }
         const signature = annotationSignature(state.marks, state.summary)
@@ -1273,6 +1302,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         })
         await saveAnnotation(state.address, document, undefined, true)
         writtenSignature.current = signature
+        clearSaveError()
       },
       onError: (error: unknown) => { setStatus(failureStatus(t, 'saveError', error)) },
     })
@@ -1638,11 +1668,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const litSpots = useCallback(
     (preview: MarkAnchor | undefined): readonly LitSpot[] => collectLitSpots({
       marks,
-      selectedId: props.selectedId,
+      selectedId,
       preview,
       findElement,
     }),
-    [findElement, marks, props.selectedId],
+    [findElement, marks, selectedId],
   )
 
   /**

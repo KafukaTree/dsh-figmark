@@ -1527,6 +1527,17 @@ detail was allowed to stand in for the thing the reader meant.
   top edge. `tests/render-export.spec.ts` › "keeps the pin the same way up at the top
   edge"; `tests/annotator-body.spec.tsx` › "stands the rail down for a point".
 
+### The picture, the paper, and the picker
+
+- **2, 10, 39.** Three things measured in the wrong space. An `element` mark's box grew
+  by half a stroke it never paints, so naming a full-width curve grew the sheet, grew
+  the exported picture, and drew the grey edge rule on a mark that reached nowhere
+  (`render.ts`, `markOutline`). The picker's reach was divided by the figure's scale —
+  converting a screen distance into figure pixels and then spending it in client
+  pixels — so zoomed in 6× it reached 2px and zoomed out it reached 72px, and the HTML
+  surface, which never converted, disagreed with it (`figure-dom.ts`, `pickInFigure`).
+  The reach now travels as stated.
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code

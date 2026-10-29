@@ -416,7 +416,14 @@ export function markOutline(mark: AnnotationMark, unit = 1): MarkBox | undefined
   // from a box far too narrow.
   const radians = markRadians(mark)
   const box = radians === 0 ? straight : turnedBox(straight, radians)
-  const grow = strokeWidthOf(mark, unit) / 2
+  // Only a mark that paints a stroke is half a stroke wider than its path. An
+  // `element` paints nothing — it is the light on the figure's own artwork — so
+  // growing its box measured a stroke the reader never sees. That box is what the
+  // paper is measured from, so an element naming a full-width curve or the
+  // background patch grew the sheet by 1.25px, flipped the exported picture into
+  // "something reached past the figure", and drew the grey dashed edge rule for a
+  // mark that reached nowhere.
+  const grow = isStrokeKind(mark.kind) ? strokeWidthOf(mark, unit) / 2 : 0
   return { x: box.x - grow, y: box.y - grow, width: box.width + grow * 2, height: box.height + grow * 2 }
 }
 

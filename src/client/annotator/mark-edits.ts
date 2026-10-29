@@ -14,6 +14,32 @@ import type { MarkPatch } from '../Canvas'
 import { draggedMarks } from '../mark-geometry'
 
 /**
+ * Whether a patch field is a list of points.
+ *
+ * Narrowed here rather than inline so the comparison below reads as arithmetic on two
+ * numbers instead of as indexing into `unknown`, which the type checker cannot follow.
+ * @param value - the value a patch field or a mark field holds.
+ * @returns true when it is a list of figure points.
+ */
+function isPoints(value: unknown): value is readonly FigurePoint[] {
+  return Array.isArray(value) && value.every(point => Array.isArray(point) && point.length === 2)
+}
+
+/**
+ * Whether two lists of points name the same places.
+ * @param next - the list a gesture produced.
+ * @param now - the list the mark carries.
+ * @returns true when every point matches and there are no more of them.
+ */
+function samePoints(next: readonly FigurePoint[], now: readonly FigurePoint[]): boolean {
+  if (next.length !== now.length) return false
+  return next.every((point, at) => {
+    const was = now[at]
+    return was !== undefined && was[0] === point[0] && was[1] === point[1]
+  })
+}
+
+/**
  * Whether a patch would leave the mark exactly as it is.
  *
  * Compared key by key: `patch` only carries the fields the gesture produced, so an
@@ -23,7 +49,16 @@ import { draggedMarks } from '../mark-geometry'
  * @returns true when every field is already at that value.
  */
 export function patchChangesNothing(mark: AnnotationMark, patch: MarkPatch): boolean {
-  return (Object.keys(patch) as (keyof MarkPatch)[]).every(key => mark[key] === patch[key])
+  return (Object.keys(patch) as (keyof MarkPatch)[]).every(key => {
+    const next = patch[key]
+    const now = mark[key]
+    // Geometry arrives as a fresh array from a drag, so a reference compare calls
+    // every gesture a change. That is how nudging a mark and putting it back
+    // recorded an undo step that undid nothing: the reader pressed undo, saw
+    // nothing happen, pressed again and went back two edits.
+    if (isPoints(next) && isPoints(now)) return samePoints(next, now)
+    return now === next
+  })
 }
 
 /**
@@ -38,6 +73,11 @@ export function patchedMarks(
   id: string,
   patch: MarkPatch,
 ): readonly AnnotationMark[] {
+  const at = marks.findIndex(mark => mark.id === id)
+  // Same list back for a patch that changes nothing, and for a mark that is not
+  // there: both callers record an undo step from what comes out, and a fresh array
+  // holding the same marks is a step that undoes nothing.
+  if (at === -1 || patchChangesNothing(marks[at] as AnnotationMark, patch)) return marks
   return marks.map(mark => (mark.id === id ? { ...mark, ...patch } : mark))
 }
 
@@ -59,7 +99,14 @@ export function detailedMarks(
   id: string,
   value: string,
 ): readonly AnnotationMark[] {
-  return marks.map(mark => (mark.id === id ? { ...mark, detail: value } : mark))
+  const at = marks.findIndex(mark => mark.id === id)
+  if (at === -1) return marks
+  // A keystroke that reports the value already there changed nothing, and the history
+  // reads the same list back as "no edit" — which is what keeps it from clearing a
+  // redo trail for a keypress that wrote nothing.
+  const mark = marks[at] as AnnotationMark
+  if ((mark.detail ?? '') === value) return marks
+  return marks.map(each => (each.id === id ? { ...each, detail: value } : each))
 }
 
 /**
@@ -85,6 +132,9 @@ export function removedMarks(
   marks: readonly AnnotationMark[],
   id: string,
 ): readonly AnnotationMark[] {
+  // Nothing to remove is not an edit: the list already is the one the reader wants,
+  // and the commit that follows would otherwise record a step that does nothing.
+  if (!marks.some(mark => mark.id === id)) return marks
   return marks.filter(mark => mark.id !== id)
 }
 

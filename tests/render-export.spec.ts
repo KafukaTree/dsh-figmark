@@ -31,13 +31,13 @@ describe('mark geometry', () => {
     const element: AnnotationMark = { id: 'e', kind: 'element', color: '#1971c2', points: [[10, 20], [60, 50]] }
     expect(markPathData(element)).toBeUndefined()
     // It still has a box — the canvas uses it for the mark's invisible hit area, and
-    // the picker used it to say what was taken. The box is the two corners plus the pen
-    // weight's half, because that is how every mark is measured.
+    // the picker used it to say what was taken. The box is exactly its two corners:
+    // a mark that paints no stroke has no half-stroke to grow by, and growing it
+    // anyway measured a stroke the reader never sees. That number is what the paper
+    // is sized from, so an element naming the background patch grew the sheet and
+    // drew the grey "the figure edge is here" rule on a picture nothing left.
     const box = defined(markOutline(element))
-    expect(box.width).toBeGreaterThan(50)
-    expect(box.height).toBeGreaterThan(30)
-    expect(box.x).toBeLessThan(10)
-    expect(box.y).toBeLessThan(20)
+    expect(box).toEqual({ x: 10, y: 20, width: 50, height: 30 })
   })
 
   it('carries no path for an element mark with one corner only', () => {

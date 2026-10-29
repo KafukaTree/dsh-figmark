@@ -2897,6 +2897,38 @@ describe('autosave', () => {
     expect(body['reviewImage']).toBeUndefined()
   })
 
+  it('takes the save failure back once a later write goes through', async () => {
+    // One failed write — a full disk, a host hiccup — used to leave the red line on
+    // screen while every write after it succeeded silently, and the reader either
+    // redid work that was already saved or gave up on one that was saving fine.
+    // The stub reads its answers on every call, so clearing the field is the same
+    // thing the host does when the disk frees up.
+    const answers: { saveError?: string } = { saveError: '磁盘满了' }
+    const result = await svgBody(answers)
+    mounted = result
+    await drawArrow(result.host)
+    await settle()
+    expect(result.host.textContent).toContain('磁盘满了')
+    delete answers.saveError
+    await drawArrow(result.host)
+    await settle()
+    expect(result.host.textContent).not.toContain('磁盘满了')
+    expect(result.calls.filter(call => call.init?.method === 'POST').length).toBeGreaterThan(1)
+  })
+
+  it('leaves a line about a handoff alone when a write goes through', async () => {
+    // Only a failure is taken back: a line saying an annotation reached the agent is
+    // news of its own, and a background save clearing it would take the answer away.
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
+    mounted = result
+    await drawArrow(result.host)
+    await click(button(result.host, zh.sendToAgent))
+    expect(document.body.textContent).toContain('已发送给智能体')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
+    expect(document.body.textContent).toContain('已发送给智能体')
+  })
+
   it('does not write a loaded annotation straight back', async () => {
     const result = await svgBody({ annotation: saved })
     mounted = result

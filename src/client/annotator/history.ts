@@ -115,6 +115,28 @@ export function undoStep(history: EditHistory): EditHistory {
 }
 
 /**
+ * Change the marks without recording a step, as typing does.
+ *
+ * Not an undoable edit — a character is not a decision the reader wants to walk back
+ * one press at a time — but it *is* a change to what the marks are, so the redo trail
+ * has to go with it. A redo entry is a snapshot taken before the sentence existed, and
+ * leaving it there offered a button that undid the reader's own typing: undo once,
+ * type, press redo, and the words were gone with nothing left to bring them back.
+ * @param history - the current state.
+ * @param update - the marks as they now stand.
+ * @returns the state with the new marks and nothing left to redo.
+ */
+export function amendMarks(
+  history: EditHistory,
+  update: (marks: readonly AnnotationMark[]) => readonly AnnotationMark[],
+): EditHistory {
+  const marks = update(history.marks)
+  // The same list back means the control reported the value already there. Nothing
+  // changed, so nothing — including the trail — should.
+  return marks === history.marks ? history : { marks, past: history.past, future: [] }
+}
+
+/**
  * Walk one step forward again.
  * @param history - the current state.
  * @returns the state one step later.
@@ -147,7 +169,7 @@ export interface HistoryHandle {
    * marks that were never drawn there.
    */
   readonly reset: (next: readonly AnnotationMark[]) => void
-  /** Change the marks in place, as typing does: no undo step, no redo cleared. */
+  /** Change the marks in place, as typing does: no undo step, and nothing left to redo. */
   readonly amend: (update: (marks: readonly AnnotationMark[]) => readonly AnnotationMark[]) => void
   /** Walk one step back. */
   readonly undo: () => void
@@ -179,7 +201,7 @@ export function useAnnotationHistory(initial: readonly AnnotationMark[]): Histor
     setState(history => resetMarks(history, next))
   }, [])
   const amend = useCallback((update: (marks: readonly AnnotationMark[]) => readonly AnnotationMark[]): void => {
-    setState(history => ({ ...history, marks: update(history.marks) }))
+    setState(history => amendMarks(history, update))
   }, [])
   const undo = useCallback((): void => { setState(undoStep) }, [])
   const redo = useCallback((): void => { setState(redoStep) }, [])

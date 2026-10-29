@@ -452,6 +452,16 @@ describe('annotation route edge cases', () => {
     expect(answer.body['error']).toContain('too large')
   })
 
+  it('answers a request target that is not a URL at all', async () => {
+    // `//[` is neither a path nor an origin, and `new URL` throws on it. That throw
+    // used to happen before the try, so the handler's promise rejected instead of
+    // answering — a break of the plugin's own contract, even though the shell's
+    // wrapper turned the rejection into a 400 for a live request.
+    const answer = await callRoute({ sessionCwd: async () => CWD }, { url: '//[' })
+    expect(answer.status).toBe(400)
+    expect(answer.body['error']).toContain('Invalid URL')
+  })
+
   it('reports a non-Error failure as its own text', async () => {
     const answer = await callRoute({
       sessionCwd: async () => { throw 'backend exploded' },
