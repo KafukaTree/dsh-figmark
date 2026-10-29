@@ -1565,6 +1565,48 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/canvas.spec.tsx` › "gives a region no anchor, because a region points at no
   one thing", "anchors a finished arrow to the figure element under its tip".
 
+### The panel's own state
+
+- **8.** A request target that cannot be parsed — `//[` is neither a path nor an
+  origin — threw before any route saw it, so the handler rejected instead of
+  answering and the client got a dead socket rather than a reason. The parse now sits
+  inside the handler's `try`, where every other failure is reported as a 400.
+  `tests/routes.spec.ts` › "answers a request target that is not a URL at all".
+- **16.** The figure is drawable as soon as it decodes, which does not wait for the
+  annotation read. A stroke drawn in that window was not in the seeded draft, so
+  adopting the saved document wholesale erased it — silently, with no step to walk
+  back to. `loadedMarks` (`annotator/mark-edits.ts`) keeps exactly what the reader
+  drew while the answer was out: a mark neither the draft nor the file names.
+  `tests/annotator-body.spec.tsx` › "keeps a stroke drawn while the read was still
+  out"; `tests/mark-edits.spec.ts` › "keeps a stroke drawn while the read was out".
+- **17.** Typing in a note is not an undoable step, but it *is* a change: a redo entry
+  is a snapshot from before the sentence existed, so keeping it offered a button that
+  undid the reader's own typing. `amendMarks` (`annotator/history.ts`) now drops the
+  redo trail, and hands back the same value when the typing changed nothing.
+  `tests/history.spec.ts` › "typing after an undo".
+- **18.** A failed save left its line on screen after a later write went through, so
+  the panel still claimed the work was not on disk. The error line is taken back when
+  a save or a delete succeeds; a line about a handoff is left alone, because that is
+  news and not a complaint.
+  `tests/annotator-body.spec.tsx` › "takes the save failure back once a later write
+  goes through".
+- **21.** The panel lit the selected element mark harder only when the body owned the
+  selection itself; an owner-held selection (the PDF's document-wide list) reached the
+  spotlights as `undefined`, so the mark the reader had open was not the one lit.
+  The resolved selection is passed in.
+  `tests/annotator-body.spec.tsx` › "lights the selected element mark harder than the
+  others".
+- **22.** A drag that ended where it started recorded an undo step that changed
+  nothing — an undo press that seemed to do nothing, then a second that went back two
+  edits. `patchChangesNothing` compares points by value rather than by reference.
+  `tests/mark-edits.spec.ts` › "sees through a fresh array holding the same places".
+- **25.** Deleting a mark cleared the selection the reader was typing into, because the
+  setter closed over a stale `selectedId` and the remover's dependencies missed it. The
+  setter reads the current selection from a ref, so the delete leaves a selection that
+  still exists alone.
+  `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
+  mark is removed".
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code
