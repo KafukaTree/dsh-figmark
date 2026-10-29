@@ -99,6 +99,12 @@ export function deliverToComposer(input: ComposerInput): void {
     throw new Error('the composer refused the attachments')
   }
   const message = buildAnnotationMessage(document_, paths, locale)
-  const existing = shell.snapshot.draft.trim()
-  shell.setDraft(existing === '' ? message : `${existing}\n\n${message}`)
+  // `trim` decides only whether there is anything to separate; the draft itself is
+  // kept exactly as it was written. Trimming it removed the reader's own shape — the
+  // two spaces that make a fenced block a code block, the blank lines that end a
+  // paragraph — and in a Markdown draft that shape is what the agent reads. Appending
+  // is not supposed to cost anything for being appended to.
+  const existing = shell.snapshot.draft
+  const room = existing.trim() === ''
+  shell.setDraft(room ? message : `${existing}\n\n${message}`)
 }

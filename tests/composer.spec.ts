@@ -119,6 +119,26 @@ describe('writing into the composer', () => {
     expect(text).toContain('【附图标注】')
   })
 
+  it('keeps the shape of the draft, not just its words', () => {
+    // Appending must not cost the reader anything for being appended to. A draft that
+    // begins with indentation — a fenced block, a nested list — or ends with a blank
+    // line had both ends cut by the emptiness test, and an indented block that loses
+    // its indentation is no longer a code block to whoever reads the message.
+    const draft = '  indented line\n\nkeep trailing  \n\n'
+    const log = stubComposer({ draft })
+    deliverToComposer({
+      conversation: log.conversation,
+      sessionId: 's1',
+      document: document_,
+      paths,
+      files: [],
+      locale: 'zh',
+    })
+    const text = defined(log.written[0])
+    expect(text.startsWith(draft)).toBe(true)
+    expect(text).toContain('【附图标注】')
+  })
+
   it('writes into an empty draft with no leading blank line', () => {
     const log = stubComposer({ draft: '   ' })
     deliverToComposer({

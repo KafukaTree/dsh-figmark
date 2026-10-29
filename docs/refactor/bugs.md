@@ -1607,6 +1607,16 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+- **62.** `deliverToComposer` wrote `shell.snapshot.draft.trim()` back as the existing
+  draft, so the emptiness test and the text it wrote were the same string: a draft that
+  began with indentation — a fenced block, a nested list — lost those spaces, and one
+  that ended with blank lines lost them too. The docstring argued for appending because
+  "the reader may have written half a sentence, and losing it is worse than a longer
+  draft"; the words were kept and their shape was not, and in a Markdown draft the shape
+  is what the agent reads. The draft is now kept exactly as written, and `trim` decides
+  only whether there is anything to separate.
+  `tests/composer.spec.ts` › "keeps the shape of the draft, not just its words".
+
 ### The diff's own words
 
 - **61.** `diffLines` compared the two texts only after `textLines` had dropped one
