@@ -94,7 +94,17 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
   const drawing = useRef(false)
   const panning = useRef<{ x: number; y: number } | null>(null)
   const panned = useRef(false)
-  const drew = useRef(false)
+  /**
+   * Whether the press that just ended has already spent the click it comes with.
+   *
+   * A press and its release are followed by a `click` on whatever the browser
+   * considers the target. That click is the panel's way of saying "the reader
+   * pressed the paper", which is how a selection is dropped — so a gesture that
+   * deliberately ended with a selection has to say so, or it selects and deselects
+   * in the one movement. Drawing set this; picking a placed element did not, which
+   * is why an element mark could be placed but never reopened.
+   */
+  const settled = useRef(false)
   const [hover, setHover] = useState<MarkAnchor | null>(null)
   const reportHover = props.onHover
   /**
@@ -134,7 +144,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
   const anchorFor = (event: EventPoint, point: FigurePoint): MarkAnchor | undefined =>
     anchorOf(event, point, geometry, { anchoring, containerRef, anchorAtFigurePoint: props.anchorAtFigurePoint })
   const elementMarkAt = (event: EventPoint, point: FigurePoint): AnnotationMark | undefined =>
-    elementNamedBy(marks, anchorFor(event, point))
+    elementNamedBy(marks, anchorFor(event, point), props.selectedId)
 
   /**
    * Handle a press that landed on an existing mark.
@@ -216,7 +226,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // Every gesture begins here, so this is where the previous one's trailing click
     // stops being owed: a press that neither pans nor draws must leave a later click
     // meaning what it says.
-    drew.current = false
+    settled.current = false
     if (tool === 'select') {
       // A press on a placed element selects it, the way a press on any other mark
       // does — but it is found by asking the figure what is under the pointer, not by
@@ -225,6 +235,10 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       const overElement = elementMarkAt(event, toFigure(event))
       if (overElement !== undefined) {
         beginGesture(overElement, event)
+        // The press landed on the overlay because the mark paints nothing, so the
+        // browser will report the trailing click on the overlay too — and a click on
+        // the paper is what drops the selection. This one is the click that made it.
+        settled.current = true
         return
       }
       // Under `select` a drag on empty space has no other meaning: a mark's own hit
@@ -248,7 +262,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       props.onAdd(mark)
       props.onSelect(mark.id)
       props.onDrawn?.(mark.id)
-      drew.current = true
+      settled.current = true
       return
     }
     if (tool === 'element') {
@@ -262,7 +276,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       props.onAdd(mark)
       props.onSelect(mark.id)
       props.onDrawn?.(mark.id)
-      drew.current = true
+      settled.current = true
       return
     }
     drawing.current = true
@@ -365,7 +379,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // the mark actionable can be typed without a second gesture.
     props.onSelect(mark.id)
     props.onDrawn?.(mark.id)
-    drew.current = true
+    settled.current = true
   }
 
   const onClick = (event: SurfaceClickEvent): void => {
@@ -381,8 +395,8 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // Neither is the click the browser fires when a drawing gesture ends: it
     // arrives after the mark is placed and selected, and clearing here would
     // shut the very box the gesture just asked for.
-    if (drew.current) {
-      drew.current = false
+    if (settled.current) {
+      settled.current = false
       return
     }
     props.onSelect(null)

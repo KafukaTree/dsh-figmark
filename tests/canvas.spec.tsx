@@ -698,6 +698,44 @@ describe('picking an element', () => {
     expect(onEdit).toHaveBeenCalledWith('e1')
   })
 
+  it('keeps a placed element selected after the click that ends the press', () => {
+    // The press lands on the overlay, because the mark paints nothing. The browser
+    // then dispatches a `click` on that same overlay, and the surface reads a plain
+    // click as "the reader pressed the paper" — so the gesture that selects a placed
+    // element must say its trailing click is already spent. Without that, selecting
+    // and deselecting happened in one movement and the comment pill never opened.
+    const onSelect = vi.fn()
+    mounted = mount({
+      tool: 'select', onSelect, anchoring: false, anchorAtFigurePoint: () => anchor,
+      marks: [{ id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }],
+    })
+    pointer(mounted.svg, 'pointerdown', 60, 50)
+    pointer(mounted.svg, 'pointerup', 60, 50)
+    act(() => { mounted?.svg.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(onSelect).toHaveBeenCalledWith('e1')
+    expect(onSelect).not.toHaveBeenCalledWith(null)
+  })
+
+  it('reaches the second of two marks naming the same element', () => {
+    // The picker does not dedupe by selector, and deliberately so: the same curve can
+    // be pointed at twice with a different sentence each time. Taking the first match
+    // made the second mark dead on the figure and sent a press on the element to the
+    // first mark instead of the one the reader had selected.
+    const onSelect = vi.fn()
+    const anchorOnCurve = { tag: 'g', id: 'line2d_1', bbox: [30, 20, 140, 90] as [number, number, number, number], selector: '#line2d_1' }
+    mounted = mount({
+      tool: 'select', onSelect, anchoring: false, anchorAtFigurePoint: () => anchorOnCurve,
+      selectedId: 'e2',
+      marks: [
+        { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor: anchorOnCurve },
+        { id: 'e2', kind: 'element', color: '#e03131', points: [[40, 30], [160, 90]], anchor: anchorOnCurve },
+      ],
+    })
+    pointer(mounted.svg, 'pointerdown', 60, 50)
+    pointer(mounted.svg, 'pointerup', 60, 50)
+    expect(onSelect).toHaveBeenCalledWith('e2')
+  })
+
   it('draws nothing on a placed element, not even a frame or a hit box', () => {
     const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
     mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
@@ -910,19 +948,35 @@ describe('moving a mark', () => {
     expect(onAdd).not.toHaveBeenCalled()
   })
 
-  it('re-anchors a dragged mark to whatever it was dropped on', () => {
+  it('re-anchors a dragged mark to what its own tip is over, not to the hand', () => {
+    // A mark dragged by its middle ends with its tip somewhere other than under the
+    // pointer, and the two are a whole grab offset apart. Asking the browser what is
+    // under the *hand* re-anchored the mark to whatever the reader happened to be
+    // over — an arrow dropped across a curve re-anchored to the legend it was held
+    // over, so the mark named something its own geometry did not point at.
     const onMove = vi.fn()
-    mounted = mount({ tool: 'select', marks: [mark], anchoring: true, onMove })
+    // An arrow from (40, 40) to (100, 100): its tip is `points[1]`.
+    const arrow: AnnotationMark = { id: 'a1', kind: 'arrow', color: '#1971c2', points: [[40, 40], [100, 100]] }
+    mounted = mount({ tool: 'select', marks: [arrow], anchoring: true, onMove })
     const inline = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    const node = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-    node.setAttribute('id', 'node102')
-    inline.append(node)
+    const underTip = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    underTip.setAttribute('id', 'under_tip')
+    const underHand = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    underHand.setAttribute('id', 'under_hand')
+    inline.append(underTip, underHand)
     mounted.figure.append(inline)
     stubRect(mounted.figure, { left: 0, top: 0, width: 400, height: 300 })
-    stubRect(node, { left: 40, top: 30, width: 40, height: 20 })
-    drag(mounted, [20, 20], [50, 45])
+    stubRect(inline, { left: 0, top: 0, width: 400, height: 300 })
+    // The tip lands at (150, 150); the press was on the shaft at (70, 70), so the hand
+    // is 30px short of the tip.
+    stubRect(underTip, { left: 140, top: 140, width: 20, height: 20 })
+    stubRect(underHand, { left: 100, top: 100, width: 20, height: 20 })
+    const hit = defined(mounted.svg.querySelector('path[stroke="transparent"]'))
+    pointer(hit, 'pointerdown', 70, 70)
+    pointer(mounted.svg, 'pointermove', 120, 120)
+    pointer(mounted.svg, 'pointerup', 120, 120)
     const anchor = onMove.mock.calls[0]?.[2] as MarkAnchor | undefined
-    expect(anchor).toMatchObject({ tag: 'g', id: 'node102' })
+    expect(anchor).toMatchObject({ tag: 'g', id: 'under_tip' })
   })
 
   it('moves a point mark when its pin is dragged', () => {

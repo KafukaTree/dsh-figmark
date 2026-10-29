@@ -98,5 +98,16 @@ export function anchorOf(
   if (!source.anchoring || container === null) return undefined
   const rect = event.currentTarget.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return undefined
-  return anchorAtPoint(container, event.clientX, event.clientY, geometry.width / rect.width, geometry.height / rect.height)
+  // Hit-test the figure at the *point*, not at the pointer. The two differ by the
+  // grab offset whenever the gesture was not a placement: a mark dragged by its middle
+  // ends with its tip somewhere other than under the hand, and asking the browser what
+  // is under the hand re-anchored the mark to whatever the reader's cursor happened to
+  // be over — an arrow dropped over the legend re-anchored to the legend while its own
+  // tip pointed at a curve. The point is already in figure pixels, so mapping it back
+  // to client coordinates is the inverse of what produced it.
+  const scaleX = geometry.width / rect.width
+  const scaleY = geometry.height / rect.height
+  const clientX = rect.left + (point[0] + geometry.originX) / scaleX
+  const clientY = rect.top + (point[1] + geometry.originY) / scaleY
+  return anchorAtPoint(container, clientX, clientY, scaleX, scaleY)
 }

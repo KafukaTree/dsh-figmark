@@ -1543,10 +1543,46 @@ the export path took a different route to a number the panel already had.
 - **34.** The delivered pin was one stroke at `2 × unit`, matching neither the
   panel's `4.5 × unit` disc nor its `1.5 × unit` body. It now draws both.
 
+### The surface and the pointer
+
+The five below are all in the code that turns a press into an edit, and they share a
+shape too: each one is a place where the surface answered a question about the
+*pointer* when the reader was asking about the *mark*.
+
+- **4.** A press on a placed element mark selected it and then deselected it in the
+  same movement, because the browser's trailing `click` landed on the overlay and the
+  surface read that as a press on bare paper. The flag that says "this gesture already
+  spent its click" is now set by a pick as well as by a draw, so the comment pill opens
+  on an element that was already placed.
+- **33.** Two element marks naming the same element were not both reachable: the
+  lookup took the first match, so the second was dead on the figure and a press on the
+  element jumped the selection to the first. It now prefers the mark that is already
+  selected.
+- **36.** A dragged mark re-anchored to what was under the *hand*, not what was under
+  its own tip, so the two differed by the grab offset — drag an arrow across the
+  legend and it named the legend. The anchor is now asked for at the mark's final
+  point, mapped back through the paper's scale.
+- **37.** Not a bug. The record said a cancelled pan left a click owing; a click on
+  the surface cannot arrive without a `pointerdown` first, and that press clears the
+  flag. Moved to "checked and found not to be bugs" with the reason.
+- **11, 23, 27, 28.** The panel and the delivered picture had to agree, and each of
+  these was a place they did not: the pen was sized from the grown paper while the
+  export was sized from the figure; the export drew every mark in the document while
+  the message named a subset and numbered it differently; a pin was drawn at one
+  weight here and another there; and a turned box was measured by a turned diagonal
+  instead of by the corners it sweeps.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.
 
+- **37, the click a pan never got.** Re-read against the code: the flag a pan sets
+  is already cleared on the next press, not only by the click that follows it, and
+  `start` runs on the `pointerdown` that any click on the surface is preceded by —
+  there is no way to reach the surface's `onClick` without first passing through
+  `start`. So a pan cancelled or released outside the surface cannot spend the
+  reader's next click, and the reported symptom has no path to it. Recorded here
+  rather than "fixed" so the next reader does not go looking for it again.
 - **A double-click on the overlay conflicting with per-mark double-click.** Every
   drawn mark's hit path stops propagation on `dblclick` (`canvas/overlay.tsx:212`),
   and the overlay's own handler only answers for element marks found by asking

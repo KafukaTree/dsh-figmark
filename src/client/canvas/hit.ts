@@ -50,11 +50,20 @@ export function sameAnchor(one: MarkAnchor | null, other: MarkAnchor | null): bo
 export function elementNamedBy(
   marks: readonly AnnotationMark[],
   named: MarkAnchor | undefined,
+  preferred?: string | null,
 ): AnnotationMark | undefined {
   if (named === undefined) return undefined
   const selector = named.selector
   if (selector === undefined) return undefined
-  return marks.find(mark => mark.kind === 'element' && mark.anchor?.selector === selector)
+  const onElement = marks.filter(mark => mark.kind === 'element' && mark.anchor?.selector === selector)
+  // Two marks may name the same element — the picker does not dedupe, and there is no
+  // reason it should: the same curve can be pointed at twice with a different
+  // sentence each time. Taking the first match meant the second mark was dead on the
+  // figure and pressing the element jumped the selection to the first; preferring the
+  // mark that is already selected makes the press land on whichever one the reader is
+  // looking at, and every mark on that element reachable by selecting it elsewhere.
+  const chosen = onElement.find(mark => mark.id === preferred)
+  return chosen ?? onElement[0]
 }
 
 /**
