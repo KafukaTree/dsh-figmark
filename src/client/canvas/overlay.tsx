@@ -19,8 +19,8 @@ import type { AnnotationMark } from '../../shared/annotation'
 import { cursorFor, handlesFor, tetherFor, type HandleId } from '../handles'
 import type { MarkBox } from '../mark-geometry'
 import {
-  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, hasFixedExtent, pinFontSizeOf, strokeWidthOf,
-  markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
+  PIN_FONT_FAMILY, PIN_NUMBER_COLOR, badgeGeometry, hasFixedExtent, pinFontSizeOf,
+  strokeWidthOf, markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from '../render'
 import { HIT_WIDTH, controlBox } from './hit'
 import { shownMark, type Press } from './press'
@@ -90,6 +90,36 @@ function Pin(props: {
       <path d={pin} fill={mark.color} stroke="#ffffff" strokeWidth={1.5 * unit} strokeLinejoin="round" />
       <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={pinFontSizeOf(unit)}
         fontWeight={700} fill={PIN_NUMBER_COLOR} textAnchor="middle" dominantBaseline="central">
+        {number}
+      </text>
+    </>
+  )
+}
+
+/**
+ * The number a stroke mark wears beside it.
+ *
+ * A pin keeps its number inside its head, which is a filled shape. A stroke has no
+ * inside, so its number goes in a disc placed clear of its corner — in the mark's own
+ * colour, so the number belongs to the mark it counts. The panel and the delivered
+ * picture both draw this from {@link badgeGeometry}, so the reader and the agent read
+ * the same number beside the same mark.
+ */
+function Badge(props: {
+  readonly mark: AnnotationMark
+  readonly unit: number
+  readonly number: number | undefined
+}): ReactNode {
+  const { mark, unit, number } = props
+  const badge = badgeGeometry(mark, unit)
+  if (badge === undefined || number === undefined) return null
+  return (
+    <>
+      <circle cx={badge.centre[0]} cy={badge.centre[1]} r={badge.radius}
+        fill={mark.color} stroke="#ffffff" strokeWidth={1.5 * unit} />
+      <text x={badge.centre[0]} y={badge.centre[1]} fontFamily={PIN_FONT_FAMILY}
+        fontSize={pinFontSizeOf(unit)} fontWeight={700} fill={PIN_NUMBER_COLOR}
+        textAnchor="middle" dominantBaseline="central">
         {number}
       </text>
     </>
@@ -214,6 +244,7 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
         </g>
       )}
       {hitArea}
+      {isDraft ? null : <Badge mark={shown} unit={unit} number={numbers.get(mark.id)} />}
       {selected && !isDraft && isPoint ? <FixedFrame box={pointMarkBox(shown, unit)} hairline={sizes.hairline} /> : null}
       {selected && !isDraft && !hasFixedExtent(mark.kind) ? (
         <Handles mark={shown} sizes={sizes} onPressHandle={props.onPressHandle} />

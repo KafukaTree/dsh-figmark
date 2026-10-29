@@ -1261,11 +1261,11 @@ describe('the control frame around a selected mark', () => {
     expect([...mounted.svg.querySelectorAll('text')].map(node => node.textContent)).toEqual(['4'])
   })
 
-  it('numbers a pin but never a stroke mark', () => {
-    // A pin has a body to hold its number; an arrow does not, and a number parked
-    // beside one is a second thing to read on a figure already full of them. The
-    // list keeps numbering every mark, so the figure only repeats what it can say
-    // cleanly.
+  it('numbers every mark, in the shape each kind can carry a number in', () => {
+    // A pin holds its number inside its head. A stroke has no inside, so its number
+    // goes in a disc beside its corner. Both are drawn, because the message the agent
+    // reads is a numbered list: a picture with only the pins numbered leaves "the
+    // second one" to be found by counting arrows.
     mounted = mount({
       tool: 'select',
       marks: [
@@ -1275,7 +1275,10 @@ describe('the control frame around a selected mark', () => {
       ],
     })
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['3'])
+    expect(letters).toEqual(['1', '2', '3'])
+    // Two discs, for the arrow and the box; the pin's number lives inside its head
+    // and needs none.
+    expect(mounted.svg.querySelectorAll('circle').length).toBe(2)
   })
 
   it('draws no lettering for any mark, however much it has to say', () => {
@@ -1285,11 +1288,11 @@ describe('the control frame around a selected mark', () => {
     const noted: AnnotationMark = { ...box, detail: '缺图形，这里的线应该更粗' }
     const dotted: AnnotationMark = { ...dot, detail: '这一点的刻度标错了' }
     mounted = mount({ tool: 'select', marks: [noted, dotted], selectedId: null })
-    // The only lettering on the surface is the pin's own number, which is what lets
-    // the list say "②" and have the figure mean the same thing. The box gets none:
-    // a stroke mark has no body that could hold a digit without covering the work.
+    // The only lettering on the surface is the marks' numbers, which is what lets the
+    // list say "②" and have the figure mean the same thing. The sentences themselves
+    // are what the agent reads, and painting them would bury the line work.
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['2'])
+    expect(letters).toEqual(['1', '2'])
     expect(mounted.svg.querySelectorAll('tspan')).toHaveLength(0)
     expect(mounted.svg.textContent).not.toContain('缺图形')
     expect(mounted.svg.textContent).not.toContain('刻度标错')

@@ -123,6 +123,58 @@ export function pinFontSizeOf(unit = 1): number {
   return PIN_FONT_SIZE * unit
 }
 
+/**
+ * Where a stroke mark's number goes, and how big it is.
+ *
+ * The number travels two ways. A `point` mark wears it inside its pin, which is a
+ * filled shape with room for a digit. Every other kind is a line: there is nothing to
+ * put a digit *in*, so it gets a disc beside the mark, in the mark's own colour.
+ *
+ * The alternative is what the code did before — a number in the message and no number
+ * on the picture for anything but a pin. The message reads as a list ("① the arrow at
+ * the peak"), so a reader of the picture had to count arrows to find "the second one".
+ * Two readers of the same review are the reader and the agent, and they have to be
+ * able to say the same thing about the same mark.
+ *
+ * The disc sits at the mark's top-left corner, just outside the outline, so it never
+ * covers the line work it names. It is placed from the *drawn* box, so a turned mark
+ * carries its number beside the turned shape rather than beside where its points were
+ * before the turn.
+ * @param mark - the mark to number.
+ * @param unit - the figure's size multiple.
+ * @returns the disc's centre and radius, or undefined for a mark that wears its number
+ *   inside itself, or for one with no extent to sit beside.
+ */
+export function badgeGeometry(mark: AnnotationMark, unit = 1): { readonly centre: FigurePoint; readonly radius: number } | undefined {
+  // A pin carries its number inside its head: a disc beside it would be a second
+  // marker for one coordinate.
+  if (mark.kind === 'point') return undefined
+  // An element mark is light on the figure's own artwork. It paints no outline, so
+  // there is no corner to stand beside — and its box can cover half the plot, which
+  // would put the number nowhere near the thing it names.
+  if (mark.kind === 'element') return undefined
+  const box = markOutline(mark, unit)
+  /* v8 ignore next -- every kind reaching here has points, so it has a box. */
+  if (box === undefined) return undefined
+  const radius = BADGE_RADIUS * unit
+  // Up and to the left, by one radius plus a hair of clear space, so the disc clears
+  // the stroke rather than sitting on it.
+  const gap = radius + strokeWidthOf(mark, unit) / 2 + BADGE_GAP * unit
+  return { centre: [box.x - gap, box.y - gap], radius }
+}
+
+/**
+ * Radius of the disc a stroke mark's number sits in, on a reference-sized figure.
+ *
+ * Ten puts the disc at twenty pixels across on a reference figure: the same order as
+ * the pin's head, so a pin and a numbered stroke read as one set of marks rather than
+ * as two. Smaller and the digit crowds its rim at the sizes a plot is usually drawn at.
+ */
+const BADGE_RADIUS = 10
+
+/** Clear space between a stroke mark's outline and its number disc, in figure pixels. */
+const BADGE_GAP = 1
+
 /** A box in figure pixels. */
 export interface MarkBox {
   /** Left edge. */

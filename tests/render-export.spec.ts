@@ -329,9 +329,11 @@ describe('review image', () => {
     expect(outside).toContain('stroke="#9aa3b2"')
   })
 
-  it('numbers a pin on the delivered picture, and leaves stroke marks unnumbered', () => {
-    // A pin holds its own number; an arrow has no body to hold one, and a digit
-    // parked beside it is a second thing to read on an already busy figure.
+  it('numbers every mark on the delivered picture, in the shape each kind can hold one in', () => {
+    // A pin holds its number inside its head; a stroke has no inside, so its number
+    // goes in a disc beside its corner. Both are drawn because the message the agent
+    // reads is a numbered list — a picture numbering only the pins leaves "the second
+    // one" to be found by counting arrows.
     const svg = composeReviewSvg(
       { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
       [
@@ -339,8 +341,38 @@ describe('review image', () => {
         { id: 'b', kind: 'point', color: '#1971c2', points: [[150, 200]] },
       ],
     )
-    expect([...svg.matchAll(/>\d<\/text>/gu)].map(match => match[0])).toEqual(['>2</text>'])
-    expect(svg).not.toContain('data-da-badge')
+    expect([...svg.matchAll(/>\d<\/text>/gu)].map(match => match[0])).toEqual(['>1</text>', '>2</text>'])
+    // One disc, for the arrow: the pin's number sits in its own body.
+    expect(svg.match(/<circle /gu)).toHaveLength(1)
+  })
+
+  it('places a stroke mark number clear of the mark, on the side its corner is', () => {
+    // A disc on top of the stroke would hide the line it numbers. It sits one radius
+    // plus a hair outside the top-left corner, so it never covers the drawing.
+    const svg = composeReviewSvg(
+      { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
+      [{ id: 'r', kind: 'rect', color: '#1971c2', points: [[100, 100], [200, 160]] }],
+    )
+    const circle = /<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([-\d.]+)"/u.exec(svg)
+    expect(circle).not.toBeNull()
+    const [cx, cy, radius] = [Number(circle?.[1]), Number(circle?.[2]), Number(circle?.[3])]
+    // Left of and above the box's own corner, and clear of its stroke.
+    expect(cx).toBeLessThan(100)
+    expect(cy).toBeLessThan(100)
+    expect(radius).toBeGreaterThan(0)
+    // The disc is entirely outside the mark's box, so no part of it covers the drawing.
+    expect(cx + radius).toBeLessThanOrEqual(100)
+    expect(cy + radius).toBeLessThanOrEqual(100)
+  })
+
+  it('leaves an element mark unnumbered on the picture as it is in the panel', () => {
+    // An element mark lights the figure's own artwork; it has no outline of its own,
+    // so there is no corner to stand a disc beside — and its box can span the plot.
+    const svg = composeReviewSvg(
+      { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
+      [{ id: 'e', kind: 'element', color: '#1971c2', points: [[0, 0], [400, 300]] }],
+    )
+    expect(svg).not.toContain('<circle ')
   })
 
   it('numbers a pin by the document, when the marks are a slice of it', () => {

@@ -1538,6 +1538,20 @@ detail was allowed to stand in for the thing the reader meant.
   surface, which never converted, disagreed with it (`figure-dom.ts`, `pickInFigure`).
   The reach now travels as stated.
 
+### The numbers
+
+- **12.** Every mark was numbered in the message the agent reads — `① the arrow at
+  the peak`, `② the box around the legend` — but the delivered picture only drew a
+  number for a `point`, because a pin has a body to hold a digit in. A stroke has no
+  inside, so it went unnumbered, and "the second one" had to be found by counting
+  arrows. A stroke mark now wears its number in a disc beside its top-left corner
+  (`render.ts`, `badgeGeometry`), drawn from the same geometry by the panel and by the
+  export, in the mark's own colour. An `element` mark stays unnumbered: it is light on
+  the figure's own artwork and has no outline to sit beside.
+  `tests/canvas.spec.tsx` › "numbers every mark, in the shape each kind can carry a
+  number in"; `tests/render-export.spec.ts` › "places a stroke mark number clear of
+  the mark".
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code
