@@ -15,3 +15,13 @@ export const MAX_ANNOTATION_BYTES = 4 * 1024 * 1024
 
 /** Maximum accepted flattened review artifact. */
 export const MAX_REVIEW_BYTES = 24 * 1024 * 1024
+
+/**
+ * The field caps are imported rather than restated.
+ *
+ * The browser stops the reader at the same number for the same reason: a note long
+ * enough to push the sidecar past {@link MAX_ANNOTATION_BYTES} would be written and
+ * then read back as `null`, which is the same answer as "never annotated" — the
+ * reader's work gone, with the panel saying nothing was ever there.
+ */
+export { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS } from '../shared/annotation'

@@ -67,7 +67,7 @@ vi.mock('../src/client/pdf/annotate', () => ({
 
 /** What one seat stub recorded, and how it should behave. */
 const seatState = vi.hoisted(() => ({
-  loaded: null as { path: string; mediaType: string; sha256: string; annotation: AnnotationDocument | null } | null,
+  loaded: null as { path: string; mediaType: string; sha256: string; annotation: AnnotationDocument | null; unreadable: readonly string[] } | null,
   loadFails: null as unknown,
   saveFails: null as unknown,
   draftFails: null as unknown,
@@ -94,7 +94,7 @@ function stubSeat(): DocumentSeat {
     load: async (address) => {
       seatState.loads.push(address)
       if (seatState.loadFails !== null) throw seatState.loadFails
-      return seatState.loaded ?? { path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), annotation: null }
+      return seatState.loaded ?? { path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), annotation: null, unreadable: [] }
     },
     save: async (address, input, bytes) => {
       if (seatState.saveFails !== null) throw seatState.saveFails
@@ -535,6 +535,7 @@ describe('paging', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
         marks: [mark('saved1', 1)],
       },
+      unreadable: [],
     }
     await mount()
     expect(currentProps().mode).toBe('annotate')
@@ -618,6 +619,7 @@ describe('paging', () => {
         marks: [mark('saved1', 1), mark('saved2', 3)],
         summary: '已保存的总体说明',
       },
+      unreadable: [],
     }
     const { host } = await mount()
     expect(host.textContent).toContain(zh.stale)
@@ -643,6 +645,7 @@ describe('paging', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
         marks: [{ id: 'pageless', kind: 'rect', color: '#1971c2', points: [[1, 2], [3, 4]] }],
       },
+      unreadable: [],
     }
     const { host } = await mount()
     expect(host.textContent).toContain('marks 1')
@@ -682,6 +685,7 @@ describe('paging', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
         marks: [mark('saved1', 1)],
       },
+      unreadable: [],
     }
     const { host } = await mount()
     expect(host.textContent).not.toContain(zh.stale)
@@ -714,6 +718,7 @@ describe('the shell around the document', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
         marks: [mark('saved1', 1)],
       },
+      unreadable: [],
     }
     const { host, root } = await mount()
     await click(button(host, zh.nextPage))
@@ -730,7 +735,9 @@ describe('the shell around the document', () => {
 
   it('still reads the document again when the tab moves to another one', async () => {
     const { root } = await mount()
-    seatState.loaded = { path: '/w/other.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), annotation: null }
+    seatState.loaded = { path: '/w/other.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), annotation: null,
+      unreadable: [],
+    }
     await rerender(root, { resourceAddress: 'dsh-resource://file/session/s1/other.pdf' })
     expect(seatState.loads).toEqual([
       'dsh-resource://file/session/s1/report.pdf',
@@ -1043,6 +1050,7 @@ describe('keeping a draft', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
         marks: [mark('m1', 1)],
       },
+      unreadable: [],
     }
     const { host } = await mount()
     await settle()

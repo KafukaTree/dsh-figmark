@@ -1269,9 +1269,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * hidden, since a surviving sidecar reappears on the next open.
    */
   const discard = useCallback(async (): Promise<void> => {
-    // Drop the pending write before deleting: a debounced save that fired during
-    // the delete would put the sidecar back moments after it was removed.
-    autosave.current?.cancel()
+    // Wait for the queue to empty before deleting, and drop any wait that has not
+    // started. Both matter and they are not the same thing: a pending timer would
+    // write after the delete, and a write already in flight would finish after it,
+    // and either one puts the sidecar back on a figure the reader just cleared.
+    await autosave.current?.drained()
     writtenSignature.current = null
     try {
       await deleteAnnotation(address)
@@ -1328,6 +1330,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     setBusy('sending')
     setStatus(handoffStarted(t, target))
     try {
+      // Everything that can refuse the hand-off is asked *before* anything is
+      // written. Saving first and asking afterwards left a narrowed document on disk
+      // for a send that never happened: the reader was told the save failed and the
+      // screen looked untouched, while the sidecar already held the subset. A refusal
+      // has to leave no trace at all.
+      if (sessionId === undefined) throw new Error('the figure address carries no session')
+      if (target === 'composer' && props.conversation === undefined) {
+        throw new Error('the conversation service is unavailable')
+      }
+      if (target === 'agent' && props.sessions === undefined) {
+        throw new Error('the sessions service is unavailable')
+      }
       const document_ = buildDocument(size, scope)
       if (document_ === null) throw new Error(t('loadFailed'))
       // A picture is only needed when the marks claim an extent. A figure whose
@@ -1341,11 +1355,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       writtenSignature.current = annotationSignature(document_.marks, document_.summary ?? '')
       setCreatedAt(document_.createdAt)
       setStale(false)
-      if (sessionId === undefined) throw new Error('the figure address carries no session')
       const pageImages = review === undefined ? [] : [{ page: 1, image: review }]
       const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
-      if (target === 'composer') {
-        if (props.conversation === undefined) throw new Error('the conversation service is unavailable')
+      if (target === 'composer' && props.conversation !== undefined) {
         deliverToComposer({
           conversation: props.conversation,
           sessionId,
@@ -1354,8 +1366,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
           locale,
         })
-      } else {
-        if (props.sessions === undefined) throw new Error('the sessions service is unavailable')
+      } else if (props.sessions !== undefined) {
         await deliverAnnotation({
           sessions: props.sessions,
           // A single-surface figure is reviewed as the picture it is, which travels
@@ -1785,6 +1796,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   return (
     <div className="da-root" ref={rootRef}>
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
+      {loaded === null || loaded.unreadable.length === 0 ? null : (
+        // The marks are on disk and are not on the panel. Saying nothing would be the
+        // same answer as "never annotated", which is exactly the wrong thing to tell
+        // the reader about their own work; saying which file is in the way is what
+        // lets them do something about it.
+        <div className="da-status" data-tone="error">{`${t('annotationUnreadable')}${loaded.unreadable.join(', ')}`}</div>
+      )}
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
       {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
 

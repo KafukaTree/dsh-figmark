@@ -72,11 +72,28 @@ describe('reading a saved annotation', () => {
       // A Host that names no Session directory still loads the figure; the menu
       // just has no workspace to name a relative path against.
       workspace: null,
+      // Nothing was left behind by a version that wrote past the field caps.
+      unreadable: [],
     })
     expect(calls[0]?.url).toContain('/dsh-figmark/annotation?address=')
     expect(calls[0]?.url).toContain('dsh-resource%3A%2F%2Ffile%2Fsession%2Fs1%2Ffig1.svg')
     expect(calls[0]?.init?.headers).toEqual({ 'x-dsh-figmark': '1' })
     expect(calls[0]?.init?.signal).toBe(signal)
+  })
+
+  it('carries the sidecars the Host would not read, so the panel can say so', async () => {
+    // The Host distinguishes "the file is there and is too large to be ours" from
+    // "never annotated" precisely so the panel stops making the same claim it stopped
+    // making. Dropping the field on the way through would put the lie back.
+    stubFetch({
+      ok: true,
+      figure: { path: '/w/fig1.svg', mediaType: 'image/svg+xml', sha256: 'a'.repeat(64) },
+      annotation: null,
+      unreadable: ['/w/fig1.svg.annot.json'],
+    })
+    const loaded = await loadAnnotation('dsh-resource://file/session/s1/fig1.svg', new AbortController().signal)
+    expect(loaded.annotation).toBeNull()
+    expect(loaded.unreadable).toEqual(['/w/fig1.svg.annot.json'])
   })
 
   it('answers null when the figure was never annotated', async () => {

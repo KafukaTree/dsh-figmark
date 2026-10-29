@@ -1493,6 +1493,34 @@ riding along inside a file split. Each names the test that now holds it.
   for the figure moved the stroke weight instead, with nothing on screen to say so.
   `tests/styles.spec.ts` › "gives the weight slider no reach the rail does not show".
 
+### The persistence half
+
+The seven below are all in the code that owns the sidecar rather than the code
+that draws, which is why they came as one batch: each one is a place where the
+disk and the panel were allowed to disagree.
+
+- **1.** A clear or a hand-off now waits for the autosave queue to drain before it
+  deletes, and `removeAnnotation` unlinks the legacy base-name and per-page files
+  too. A cleared figure used to reopen with its marks, either because a write in
+  flight put the sidecar back or because the read path still accepted a name the
+  delete had not removed.
+  `tests/annotation.spec.ts` › "unlinks the legacy names too".
+- **2.** The read route asks for the marks before the digest rather than both at
+  once, so the fingerprint is never older than the marks it describes.
+  `tests/routes.spec.ts` › "digests the figure after reading its marks".
+- **7.** A sidecar over the read cap is reported as `unreadable` with its path
+  instead of being answered as "never annotated" — by the route, by `loadAnnotation`
+  and on the panel. The field caps live in `shared/annotation.ts`, so the browser
+  refuses the same note length the Host would refuse.
+  `tests/annotation.spec.ts` › "names a sidecar too large".
+- **24.** `run()` asks everything that can refuse a hand-off *before* it writes
+  anything. Saving first left a narrowed sidecar on disk for a send the reader was
+  told had failed, so the failure kept a document the screen never showed.
+  `tests/annotator-body.spec.tsx` › "reports a conversation service".
+- **60.** The temporary file a save renames into place carries a per-process
+  counter as well as the pid and clock, so two saves started in the same
+  millisecond cannot take the same scratch name.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.

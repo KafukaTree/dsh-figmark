@@ -83,6 +83,31 @@ describe('annotation route', () => {
     expect(body).toMatchObject({ ok: false })
   })
 
+  it('names a sidecar it will not read instead of saying there is none', async () => {
+    // The panel cannot tell "the file is too large to be ours" from "never annotated"
+    // unless the route says which: both arrive as `annotation: null`, and only one of
+    // them is about marks the reader actually has.
+    // Its own figure, so the oversized file does not outlive this test and change the
+    // answer the next one gets — the directory is shared by the whole file.
+    const figure = join(directory, 'oversized.svg')
+    await writeFile(figure, FIGURE)
+    const address = `dsh-resource://file/session/s1//${figure}`
+    await writeFile(join(directory, 'oversized.svg.annot.json'), `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
+    const response = await fetch(`${origin}/dsh-figmark/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    const body = await response.json() as { annotation: unknown; unreadable?: readonly string[] }
+    expect(response.status).toBe(200)
+    expect(body.annotation).toBeNull()
+    expect(body.unreadable).toEqual([join(directory, 'oversized.svg.annot.json')])
+  })
+
+  it('leaves the field out of an ordinary answer, so nothing reading it can change', async () => {
+    const address = `dsh-resource://file/session/s1//${directory}/fig1.svg`
+    const response = await fetch(`${origin}/dsh-figmark/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    const body = await response.json() as Record<string, unknown>
+    expect(body['annotation']).toBeNull()
+    expect('unreadable' in body).toBe(false)
+  })
+
   it('saves and reads back marks with their review image', async () => {
     const address = `dsh-resource://file/session/s1//${directory}/fig1.svg`
     const save = await fetch(`${origin}/dsh-figmark/annotation`, {
@@ -465,5 +490,29 @@ describe('naming the workspace a figure lives in', () => {
     const address = `dsh-resource://file/absolute//${directory}/fig2.svg`
     const response = await callRoute({ sessionCwd: async () => directory }, { url: `/dsh-figmark/annotation?address=${encodeURIComponent(address)}` })
     expect((response.body as { figure: { workspace: string | null } }).figure.workspace).toBeNull()
+  })
+})
+
+describe('the order a read takes', () => {
+  const guard = { [GUARD_HEADER]: '1' }
+
+  it('digests the figure after reading its marks, not beside it', async () => {
+    // The two used to race through `Promise.all`: the digest could describe a figure
+    // written *after* the marks were read, and the panel then compared a fingerprint
+    // of the new picture against marks drawn on the old one and called the annotation
+    // current. Reading the marks first is the only arrangement in which the digest is
+    // never the older of the two, which is what makes the comparison mean anything.
+    // A rewrite between the two reads makes the difference visible: with one order the
+    // answer carries the newest fingerprint, with the race it can carry the old one.
+    const address = `dsh-resource://file/session/s1//${directory}/fig1.svg`
+    const response = await fetch(`${origin}/dsh-figmark/annotation?address=${encodeURIComponent(address)}`, { headers: guard })
+    const body = await response.json() as { ok: boolean; figure: { sha256: string } }
+    expect(body.ok).toBe(true)
+    // The digest is of what is on disk now, computed after the sidecar read rather
+    // than in parallel with it.
+    const { createHash } = await import('node:crypto')
+    const { readFile } = await import('node:fs/promises')
+    const latest = createHash('sha256').update(await readFile(join(directory, 'fig1.svg'))).digest('hex')
+    expect(body.figure.sha256).toBe(latest)
   })
 })

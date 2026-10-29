@@ -10,13 +10,22 @@
  * @module dsh-figmark/client/annotator/records
  */
 import type { ReactNode } from 'react'
-import type { AnnotationMark } from '../../shared/annotation'
+import { MAX_SUMMARY_CHARS, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
 import { BoxIcon, GoalIcon, ListIcon, ToolIcon } from './icons'
 import { anchorName } from './mark-labels'
 import type { RecordPlacement } from '../popover'
 import { recordStyle } from './placement'
 import { TOOL_COPY } from './tokens'
+
+/**
+ * How close to the ceiling the count is shown from.
+ *
+ * A fraction that is on screen while there is nothing to worry about is a fraction
+ * the reader learns to ignore; it appears when the note is nearly full, which is
+ * when knowing the number is worth the space.
+ */
+const COUNT_WARNING_ROOM = 200
 
 /** What the overall-goal record reads and reports. */
 export interface SummaryRecordProps {
@@ -59,9 +68,16 @@ export function SummaryRecord(props: SummaryRecordProps): ReactNode {
         <textarea
           value={props.summary}
           placeholder={t('summaryPlaceholder')}
+          maxLength={MAX_SUMMARY_CHARS}
           onChange={(event) => { props.onWrite(event.target.value) }}
         />
-        <span className="da-count">{props.summary.length}/300</span>
+        {/* A count without a stop is a count that lies: the reader saw a ceiling
+            that nothing enforced, and the note grew past it into a sidecar the Host
+            would refuse. `maxLength` is the stop; the count is now what it looks
+            like, a fraction of a real limit. */}
+        {props.summary.length <= MAX_SUMMARY_CHARS - COUNT_WARNING_ROOM ? null : (
+          <span className="da-count">{props.summary.length}/{MAX_SUMMARY_CHARS}</span>
+        )}
       </label>
     </div>
   )

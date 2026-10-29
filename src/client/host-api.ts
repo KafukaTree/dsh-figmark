@@ -22,6 +22,14 @@ import { GUARD_HEADER, ROUTE_PREFIX, type FigureFacts, type SidecarWriteResult }
 export type LoadedAnnotation = Omit<FigureFacts, 'address'> & {
   /** The saved document, or null when the figure was never annotated. */
   readonly annotation: AnnotationDocument | null
+  /**
+   * Sidecars the Host found and would not read.
+   *
+   * Non-empty means the marks exist and are not on the panel. The Host distinguishes
+   * that from "never annotated" precisely so the panel can stop making the same
+   * claim the Host stopped making.
+   */
+  readonly unreadable: readonly string[]
 }
 
 /**
@@ -63,6 +71,7 @@ export async function loadAnnotation(
     error?: string
     figure?: { path: string; mediaType: string; sha256: string; workspace?: string | null }
     annotation?: AnnotationDocument | null
+    unreadable?: readonly string[]
   }
   if (body.ok !== true || body.figure === undefined) {
     throw new AnnotatorHostError(body.error ?? `annotation read failed with status ${response.status}`)
@@ -72,6 +81,7 @@ export async function loadAnnotation(
     mediaType: body.figure.mediaType,
     sha256: body.figure.sha256,
     annotation: body.annotation ?? null,
+    unreadable: body.unreadable ?? [],
     workspace: body.figure.workspace ?? null,
   }
 }

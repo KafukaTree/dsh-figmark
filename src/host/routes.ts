@@ -68,8 +68,21 @@ async function targetOf(address: string, deps: RouteDeps): Promise<Answer<Figure
  * @returns the read body.
  */
 async function readAnswer(target: FigureTarget): Promise<AnnotationReadBody> {
-  const [sha256, saved] = await Promise.all([fileDigest(target.path), readAnnotation(target.path)])
-  return { ok: true, figure: { ...target, sha256 }, annotation: saved }
+  // Read the sidecar first, then the figure: `Promise.all` let the two race, so the
+  // digest could describe a figure written *after* the marks were read, and the panel
+  // then compared a fingerprint of the new picture against marks drawn on the old one
+  // and reported the annotation as current. One order is honest — marks first — and
+  // the comparison downstream is only meaningful if the digest is the later of the two.
+  const saved = await readAnnotation(target.path)
+  const sha256 = await fileDigest(target.path)
+  return {
+    ok: true,
+    figure: { ...target, sha256 },
+    annotation: saved.annotation,
+    // Left out when there is nothing to report, so the ordinary answer stays the
+    // shape it always was: a caller reading `annotation` alone cannot regress.
+    ...(saved.unreadable.length === 0 ? {} : { unreadable: saved.unreadable }),
+  }
 }
 
 /**

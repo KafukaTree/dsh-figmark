@@ -38,6 +38,24 @@ export async function fileDigest(path: string): Promise<string> {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+/** What reading one figure's sidecars produced. */
+export interface SidecarRead {
+  /** The stored document, when there was one this plugin can read. */
+  readonly annotation: AnnotationDocument | null
+  /**
+   * Files that are there but could not be read as a document of ours.
+   *
+   * A sidecar over {@link MAX_ANNOTATION_BYTES} is the case that matters: the write
+   * path acknowledged it, the read path refuses it, and answering `null` alone made
+   * that indistinguishable from "never annotated" — the reader's marks were gone with
+   * the panel saying there had never been any. The names travel up so the panel can
+   * say which file is in the way, and the reader has something to act on: the field
+   * caps that make such a file impossible are new, but a file written before them
+   * still exists.
+   */
+  readonly unreadable: readonly string[]
+}
+
 /**
  * Read one figure's saved annotation.
  *
@@ -46,15 +64,18 @@ export async function fileDigest(path: string): Promise<string> {
  * that share a base name would otherwise read each other's marks.
  *
  * @param figurePath - absolute path of the figure.
- * @returns the document, or null when none was stored or it is unreadable.
+ * @returns the document and any sidecar that was present but unusable.
  */
-export async function readAnnotation(figurePath: string): Promise<AnnotationDocument | null> {
+export async function readAnnotation(figurePath: string): Promise<SidecarRead> {
+  const unreadable: string[] = []
   for (const candidate of annotationCandidates(figurePath)) {
-    const document = await readSidecar(candidate)
-    if (document !== null && annotationTargetsFigure(document, figurePath)) return document
+    const read = await readSidecar(candidate)
+    if (read === 'unreadable') unreadable.push(candidate)
+    else if (read !== null && annotationTargetsFigure(read, figurePath)) return { annotation: read, unreadable }
   }
-  if (!isPagedFigurePath(figurePath)) return null
-  return await readLegacyPages(figurePath)
+  if (!isPagedFigurePath(figurePath)) return { annotation: null, unreadable }
+  const merged = await readLegacyPages(figurePath)
+  return { annotation: merged.annotation, unreadable: [...unreadable, ...merged.unreadable] }
 }
 
 /**
@@ -70,33 +91,36 @@ export async function readAnnotation(figurePath: string): Promise<AnnotationDocu
  * time it saves.
  *
  * @param figurePath - absolute path of the figure.
- * @returns the merged document, or null when no readable page file exists.
+ * @returns the merged document, when any page file was readable.
  */
-async function readLegacyPages(figurePath: string): Promise<AnnotationDocument | null> {
+async function readLegacyPages(figurePath: string): Promise<SidecarRead> {
   const directory = dirname(figurePath)
   const pattern = legacyPagePattern(figurePath)
   let entries: string[]
   try {
     entries = await readdir(directory)
   } catch {
-    return null
+    return { annotation: null, unreadable: [] }
   }
   const pages = entries
     .map(name => ({ name, page: Number(pattern.exec(name)?.[1]) }))
     .filter(entry => Number.isInteger(entry.page) && entry.page > 0)
     .sort((left, right) => left.page - right.page)
   const read: { readonly page: number; readonly document: AnnotationDocument }[] = []
+  const unreadable: string[] = []
   for (const entry of pages) {
-    const document = await readSidecar(join(directory, entry.name))
-    if (document !== null && annotationTargetsFigure(document, figurePath)) read.push({ page: entry.page, document })
+    const path = join(directory, entry.name)
+    const document = await readSidecar(path)
+    if (document === 'unreadable') unreadable.push(path)
+    else if (document !== null && annotationTargetsFigure(document, figurePath)) read.push({ page: entry.page, document })
   }
   const first = read[0]
-  if (first === undefined) return null
+  if (first === undefined) return { annotation: null, unreadable }
   let summary: string | undefined
   for (const entry of read) {
     if (entry.document.summary !== undefined) summary = entry.document.summary
   }
-  return {
+  return { annotation: {
     version: ANNOTATION_VERSION,
     figure: {
       address: first.document.figure.address,
@@ -109,19 +133,22 @@ async function readLegacyPages(figurePath: string): Promise<AnnotationDocument |
     updatedAt: read.reduce((latest, entry) => (entry.document.updatedAt > latest ? entry.document.updatedAt : latest), first.document.updatedAt),
     marks: read.flatMap(entry => entry.document.marks.map(mark => ({ ...mark, page: entry.page }))),
     ...(summary === undefined ? {} : { summary }),
-  }
+  }, unreadable }
 }
 
 /**
  * Parse one marks file into this plugin's document shape.
  * @param sidecarPath - absolute path of the marks file.
- * @returns the document, or null when the file is missing, oversized, or unreadable.
+ * @returns the document, null when there is no readable file, or `'unreadable'`
+ *   when the file is there and is not something this plugin will read.
  */
-async function readSidecar(sidecarPath: string): Promise<AnnotationDocument | null> {
+async function readSidecar(sidecarPath: string): Promise<AnnotationDocument | null | 'unreadable'> {
   let text: string
   try {
     const info = await stat(sidecarPath)
-    if (info.size > MAX_ANNOTATION_BYTES) return null
+    // Too large to be a document of ours, and the reader has to be told so: the file
+    // exists, so "never annotated" is a lie about their own data.
+    if (info.size > MAX_ANNOTATION_BYTES) return 'unreadable'
     text = await readFile(sidecarPath, 'utf8')
   } catch {
     // A missing sidecar is the ordinary "never annotated" state.

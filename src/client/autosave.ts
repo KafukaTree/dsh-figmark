@@ -62,6 +62,16 @@ export interface Autosave {
   flush(): Promise<void>
   /** Drop a pending wait without writing. */
   cancel(): void
+  /**
+   * Wait for every write this writer has started, so a caller that is about to
+   * delete the file knows one cannot land afterwards.
+   *
+   * Dropping the pending wait is not enough on its own: a write that had already
+   * begun when the reader cleared the panel finishes after the delete and puts the
+   * sidecar back, which is why a cleared figure could reopen with its marks on it.
+   * Deleting is the one gesture that has to wait for the queue to empty.
+   */
+  drained(): Promise<void>
 }
 
 /**
@@ -104,6 +114,12 @@ export function createAutosave(deps: AutosaveDeps): Autosave {
     async flush(): Promise<void> {
       cancel()
       await run()
+    },
+    async drained(): Promise<void> {
+      cancel()
+      // The chain never rejects — `run` catches on it — so awaiting the current tail
+      // means every write asked for so far has finished, successfully or not.
+      await chain
     },
     cancel,
   }

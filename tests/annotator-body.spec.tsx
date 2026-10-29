@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument, MarkAnchor } from '../src/shared/annotation'
-import { ANNOTATION_VERSION } from '../src/shared/annotation'
+import { ANNOTATION_VERSION, MAX_SUMMARY_CHARS } from '../src/shared/annotation'
 import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
 import type { ComposerLike } from '../src/client/composer'
@@ -38,6 +38,7 @@ function hostPayload(answers: HostAnswers = {}): unknown {
       workspace: answers.workspace === undefined ? '/w' : answers.workspace,
     },
     annotation: answers.annotation ?? null,
+    ...(answers.unreadable === undefined ? {} : { unreadable: answers.unreadable }),
   }
 }
 
@@ -98,6 +99,8 @@ interface HostAnswers {
   readonly deleteThrows?: unknown
   /** The Session directory the Host names, or null for one it cannot name. */
   readonly workspace?: string | null
+  /** Sidecars the Host found and would not read. */
+  readonly unreadable?: readonly string[]
 }
 
 /** Install the fetch stub answering as the host would. */
@@ -565,6 +568,20 @@ describe('saved annotations', () => {
     pending.fail(new Error('too late'))
     await act(async () => { for (let turn = 0; turn < 4; turn += 1) await Promise.resolve() })
     expect(document.querySelector('.da-status')).toBeNull()
+  })
+
+  it('says which sidecar it could not read, rather than claiming there is none', async () => {
+    // The marks are on disk and are not on the panel. The Host stopped answering
+    // "never annotated" over a file that is plainly there; the panel has to stop too,
+    // or the reader is told their work does not exist.
+    mounted = await svgBody({ unreadable: ['/w/fig.svg.annot.json'] })
+    expect(document.body.textContent).toContain(zh.annotationUnreadable)
+    expect(document.body.textContent).toContain('/w/fig.svg.annot.json')
+  })
+
+  it('says nothing about sidecars when the Host read everything', async () => {
+    mounted = await svgBody({ annotation: saved })
+    expect(document.body.textContent).not.toContain(zh.annotationUnreadable)
   })
 
   it('reports a read failure that is not an Error as its own text', async () => {
@@ -1972,7 +1989,8 @@ describe('the hand-off inside the comment', () => {
   it('sends only what the pill is about, not every mark on the figure', async () => {
     // A second mark on the same figure, whose sentence must not travel with a
     // hand-off started from the first one's comment.
-    const result = await svgBody()
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
     mounted = result
     await drawArrow(document.body)
     await type(detailBox(result.host), '第一条')
@@ -2325,13 +2343,15 @@ describe('saving', () => {
   })
 
   it('reports a refused write without losing the panel', async () => {
-    mounted = await svgBody({ annotation: saved, saveError: 'annotation document version 9 is not 1' })
+    const { sessions } = stubSessions()
+    mounted = await svgBody({ annotation: saved, saveError: 'annotation document version 9 is not 1' }, { sessions })
     await click(button(document.body, zh.sendToAgent))
     expect(document.body.textContent).toContain('annotation document version 9 is not 1')
   })
 
   it('reports a figure the host would not read as a save failure too', async () => {
-    mounted = await svgBody({ readError: 'no such figure' })
+    const { sessions } = stubSessions()
+    mounted = await svgBody({ readError: 'no such figure' }, { sessions })
     await drawArrow(document.body)
     await click(button(document.body, zh.sendToAgent))
     expect(document.body.textContent).toContain(zh.loadFailed)
@@ -2349,7 +2369,8 @@ describe('saving', () => {
   })
 
   it('stamps a first save and omits an empty overall note', async () => {
-    const result = await svgBody()
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
     mounted = result
     await drawArrow(document.body)
     await click(button(document.body, zh.sendToAgent))
@@ -2401,7 +2422,9 @@ describe('saving', () => {
     mounted = result
     await click(button(document.body, zh.sendToComposer))
     expect(document.body.textContent).toContain('the conversation service is unavailable')
-    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
+    // A refusal writes nothing: the sidecar still holds every mark the panel shows,
+    // because the question is asked before the save rather than after it.
+    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
   })
 
   it('gives the staged pictures back when the composer refuses them', async () => {
@@ -2421,7 +2444,8 @@ describe('saving', () => {
   })
 
   it('reports a save failure that is not an Error as its own text', async () => {
-    mounted = await svgBody({ annotation: saved, saveThrows: 'the socket died' })
+    const { sessions } = stubSessions()
+    mounted = await svgBody({ annotation: saved, saveThrows: 'the socket died' }, { sessions })
     await click(button(document.body, zh.sendToAgent))
     expect(document.body.textContent).toContain(`${zh.saveError}the socket died`)
   })
@@ -2984,6 +3008,37 @@ describe('the drawing choices that outlive the figure', () => {
     mounted = second
     expect((await swatch(second.host, '#f08c00')).getAttribute('aria-pressed')).toBe('true')
     expect((await swatch(second.host, '#e03131')).getAttribute('aria-pressed')).toBe('false')
+  })
+})
+
+describe('the ceiling on the overall note', () => {
+  /** Open the summary record and return its textarea. */
+  async function openSummary(): Promise<HTMLTextAreaElement> {
+    await click(button(document.body, zh.summary))
+    return defined(document.querySelector('.da-float-goal textarea')) as HTMLTextAreaElement
+  }
+
+  it('stops the reader at the cap rather than counting past a limit it ignores', async () => {
+    // The count advertised `/300` while nothing enforced it: a pasted paragraph grew
+    // past the ceiling into a sidecar the Host refuses, and the reader lost the save.
+    mounted = await svgBody()
+    const field = await openSummary()
+    expect(field.maxLength).toBe(MAX_SUMMARY_CHARS)
+  })
+
+  it('shows the count only as the note approaches the cap', async () => {
+    // A fraction printed beside every note is noise; one that appears when the room
+    // runs out is a warning. Both halves have to agree, so the count is hidden while
+    // there is a comfortable margin and shown once there is not.
+    // `COUNT_WARNING_ROOM` is 200: at 3800 there is still a margin, one more character
+    // is inside the last two hundred and the count appears.
+    const margin = MAX_SUMMARY_CHARS - 200
+    mounted = await svgBody({ annotation: { ...saved, summary: 'x'.repeat(margin) } })
+    await click(button(document.body, zh.summary))
+    expect(document.querySelector('.da-count')).toBeNull()
+    const field = defined(document.querySelector('.da-float-goal textarea')) as HTMLTextAreaElement
+    await type(field, 'x'.repeat(margin + 1))
+    expect(document.querySelector('.da-count')?.textContent).toBe(`${margin + 1}/${MAX_SUMMARY_CHARS}`)
   })
 })
 

@@ -13,6 +13,7 @@
  * both would have to guess which coordinate space the marks live in.
  * @module dsh-figmark/host/store-schema
  */
+import { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS } from './store-limits'
 import {
   ANNOTATION_VERSION,
   type AnnotationDocument,
@@ -26,6 +27,28 @@ import {
 
 /** Longest element selector one anchor may carry. */
 const MAX_SELECTOR_CHARS = 400
+
+/**
+ * A note as it is stored: trimmed, and refused when it is longer than a paragraph.
+ *
+ * The cap is enforced rather than truncated. A writer that silently cut a pasted
+ * paragraph would hand the reader back a different sentence than the one they
+ * wrote, with no way to tell which half survived; refusing says so and keeps the
+ * screen's copy intact. Absent and empty are the same thing — an empty note is no
+ * note, and writing one would make the file say something the reader did not.
+ * @param value - the field as it arrived.
+ * @param what - which field, for the refusal message.
+ * @returns the note, or undefined when there is none.
+ * @throws {Error} when the note is longer than a paragraph.
+ */
+function readNote(value: unknown, what: string, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  if (value.length > max) {
+    throw new Error(`the annotation ${what} is longer than ${String(max)} characters`)
+  }
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
 
 /** Kinds a mark may declare. */
 const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'point', 'element']
@@ -176,12 +199,13 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
   const anchor = readAnchor(raw['anchor'])
   const rotation = readRotation(raw['rotation'])
   const weight = readWeight(raw['weight'])
+  const detail = readNote(raw['detail'], 'mark note', MAX_DETAIL_CHARS)
   return {
     id: raw['id'],
     kind: kind as MarkKind,
     color: raw['color'],
     points,
-    ...(typeof raw['detail'] === 'string' ? { detail: raw['detail'] } : {}),
+    ...(detail === undefined ? {} : { detail }),
     ...(page === undefined ? {} : { page }),
     ...(rotation === undefined ? {} : { rotation }),
     ...(weight === undefined ? {} : { weight }),
@@ -224,6 +248,7 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
   const marks = raw['marks']
   if (!Array.isArray(marks)) throw new Error('annotation document needs a marks array')
   const updatedAt = typeof raw['updatedAt'] === 'string' ? raw['updatedAt'] : new Date().toISOString()
+  const summary = readNote(raw['summary'], 'document note', MAX_SUMMARY_CHARS)
   return {
     version: ANNOTATION_VERSION,
     figure: {
@@ -237,6 +262,6 @@ export function readAnnotationDocument(value: unknown): AnnotationDocument {
     createdAt: typeof raw['createdAt'] === 'string' ? raw['createdAt'] : updatedAt,
     updatedAt,
     marks: marks.map((mark, index) => readMark(mark, index, { ...(width === undefined ? {} : { width }), ...(pageCount === undefined ? {} : { pageCount }) })),
-    ...(typeof raw['summary'] === 'string' && raw['summary'] !== '' ? { summary: raw['summary'] } : {}),
+    ...(summary === undefined ? {} : { summary }),
   }
 }

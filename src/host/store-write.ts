@@ -10,10 +10,17 @@
  * is touched — a PNG review of a PDF would be a file no reader could open.
  * @module dsh-figmark/host/store-write
  */
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { AnnotationDocument } from '../shared/annotation'
-import { isPagedFigurePath, reviewFileExtension, sidecarPaths, type SidecarPaths } from './sidecar'
+import {
+  isPagedFigurePath,
+  legacyAnnotationPath,
+  legacyPagePattern,
+  reviewFileExtension,
+  sidecarPaths,
+  type SidecarPaths,
+} from './sidecar'
 
 /** The flattened artifact written beside the marks, and what it is. */
 export interface ReviewArtifact {
@@ -32,16 +39,28 @@ export interface SaveResult {
 }
 
 /**
+ * How many scratch files this process has named.
+ *
+ * The clock is not enough on its own: two saves started in the same millisecond
+ * share a pid and a millisecond, took the same scratch name, and one of them renamed
+ * the other's half-written bytes into place — or found nothing to rename and failed a
+ * save that had every right to succeed. A counter inside the process cannot repeat,
+ * and the pid and clock still keep two *processes* apart.
+ */
+let scratchCount = 0
+
+/**
  * Replace one file atomically.
  *
- * The temporary name carries the pid and the clock so two saves that overlap
- * cannot pick the same scratch file; the rename is the moment the new content
- * becomes observable.
+ * The temporary name carries the pid, a counter and the clock so two saves that
+ * overlap cannot pick the same scratch file; the rename is the moment the new
+ * content becomes observable.
  * @param path - absolute path of the file to replace.
  * @param content - text or bytes to write.
  */
 async function writeAtomically(path: string, content: string | Uint8Array): Promise<void> {
-  const temporary = `${path}.tmp-${process.pid}-${Date.now()}`
+  scratchCount += 1
+  const temporary = `${path}.tmp-${process.pid}-${scratchCount}-${Date.now()}`
   // The text side is spelled out rather than left to `writeFile`'s default: a
   // sidecar is UTF-8 JSON by contract, and a helper that quietly picks an
   // encoding is one refactor away from writing bytes a reader cannot decode.
@@ -99,7 +118,7 @@ export interface RemoveResult {
 export async function removeAnnotation(figurePath: string): Promise<RemoveResult> {
   const paths = sidecarPaths(figurePath)
   let removed = false
-  for (const path of [paths.annotation, paths.review]) {
+  for (const path of await allSidecarNames(figurePath)) {
     try {
       await rm(path, { force: false })
       removed = true
@@ -110,4 +129,40 @@ export async function removeAnnotation(figurePath: string): Promise<RemoveResult
     }
   }
   return { paths, removed }
+}
+
+/**
+ * Every file this plugin may have written beside one figure, oldest spelling first.
+ *
+ * The read path accepts more names than the write path produces: the legacy
+ * base-name sidecar (`fig1.annot.json` beside `fig1.svg`), and for a paged document
+ * the one-file-per-page sidecars an earlier version wrote. Removing only the two
+ * current names left those behind — and because the reader merges them back in, a
+ * cleared figure reopened with its marks on it, which is the bug in finding 1.
+ * Whatever the reader will read has to be what a clear removes.
+ * @param figurePath - absolute path of the figure whose sidecars are removed.
+ * @returns the paths to unlink.
+ */
+async function allSidecarNames(figurePath: string): Promise<readonly string[]> {
+  const paths = sidecarPaths(figurePath)
+  const names: string[] = [paths.annotation, paths.review, legacyAnnotationPath(figurePath)]
+  if (isPagedFigurePath(figurePath)) {
+    // Read the directory rather than reconstruct the names: the page numbers are
+    // whatever an earlier version happened to write, and both spellings are legal.
+    const pattern = legacyPagePattern(figurePath)
+    let entries: string[]
+    try {
+      entries = await readdir(dirname(figurePath))
+    } catch {
+      // A directory that cannot be listed is not a reason to refuse the clear: the
+      // current names above are still attempted, and if the directory really is
+      // unreachable that attempt is what reports it. Failing here instead would turn
+      // "one legacy file might be missing" into "the reader cannot clear".
+      entries = []
+    }
+    for (const entry of entries) {
+      if (pattern.test(entry)) names.push(join(dirname(figurePath), entry))
+    }
+  }
+  return [...new Set(names)]
 }

@@ -56,6 +56,15 @@ export interface AnnotationReadBody {
   readonly figure: FigureFacts
   /** The saved document, or null when the figure was never annotated. */
   readonly annotation: AnnotationDocument | null
+  /**
+   * Sidecars that are present and that this plugin will not read.
+   *
+   * Omitted in the ordinary case. Present means the reader's marks exist on disk but
+   * are not on the panel, which is a thing the panel has to say out loud: an answer
+   * of "nothing was ever annotated" over a file that is plainly there is the worst
+   * of the three possible answers.
+   */
+  readonly unreadable?: readonly string[]
 }
 
 /** `POST /dsh-figmark/annotation` body. */

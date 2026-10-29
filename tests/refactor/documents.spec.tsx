@@ -66,7 +66,7 @@ vi.mock('../../src/client/pdf/annotate', () => ({
 
 /** What the PDF seat double reports as loaded. */
 const seatState = vi.hoisted(() => ({
-  loaded: null as { path: string; mediaType: string; sha256: string; annotation: AnnotationDocument | null } | null,
+  loaded: null as { path: string; mediaType: string; sha256: string; annotation: AnnotationDocument | null; unreadable: readonly string[] } | null,
 }))
 
 /** A seat that loads what `seatState` says and accepts every write. */
@@ -77,6 +77,7 @@ function pdfSeat(): DocumentSeat {
       mediaType: 'application/pdf',
       sha256: 'a'.repeat(64),
       annotation: null,
+      unreadable: [],
     },
     save: async () => ({ annotationPath: '/w/a.json', reviewPath: '/w/a.pdf' }),
     draft: async () => {},
@@ -252,6 +253,7 @@ describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document bodies', (
       mediaType: 'application/pdf',
       sha256: 'a'.repeat(64),
       annotation: pagedAnnotation([]),
+      unreadable: [],
     }
     const target = await mount(() => <PdfBody {...pdfProps()} />)
     capture('pdf-page-one', target)
@@ -265,6 +267,7 @@ describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document bodies', (
       annotation: pagedAnnotation([
         { id: 'm1', kind: 'rect', color: '#1971c2', points: [[10, 20], [60, 90]], page: 1, detail: '标号错' },
       ]),
+      unreadable: [],
     }
     const target = await mount(() => <PdfBody {...pdfProps()} />)
     capture('pdf-with-marks', target)
@@ -278,6 +281,7 @@ describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document bodies', (
       annotation: pagedAnnotation([
         { id: 'm1', kind: 'point', color: '#e03131', points: [[3, 4]], page: 2 },
       ]),
+      unreadable: [],
     }
     const target = await mount(() => <PdfBody {...pdfProps()} />)
     capture('pdf-stale', target)

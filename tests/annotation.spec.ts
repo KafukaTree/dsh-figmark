@@ -1,9 +1,10 @@
 /** The stored annotation document: validation, sidecar round trip, and the model-facing summary. */
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { AnnotationDocument, AnnotationMark, FigurePoint, MarkKind } from '../src/shared/annotation'
+import { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS, type AnnotationDocument, type AnnotationMark, type FigurePoint, type MarkKind } from '../src/shared/annotation'
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
@@ -229,6 +230,21 @@ describe('document validation', () => {
   })
 })
 
+describe('the field caps that keep a sidecar readable', () => {
+  it('refuses a note longer than the cap, on both the mark and the document', () => {
+    // The write path used to accept any length while the read path refused any
+    // sidecar over 4 MiB: one long paste produced a file the plugin acknowledged and
+    // then reported as absent. The caps live in `shared` so both halves use one number.
+    const longNote = 'x'.repeat(MAX_DETAIL_CHARS + 1)
+    expect(() => readAnnotationDocument({ ...document_, marks: [{ ...document_.marks[0], detail: longNote }] }))
+      .toThrow(new RegExp(`the annotation mark note is longer than ${String(MAX_DETAIL_CHARS)}`))
+    expect(() => readAnnotationDocument({ ...document_, summary: 'x'.repeat(MAX_SUMMARY_CHARS + 1) }))
+      .toThrow(new RegExp(`the annotation document note is longer than ${String(MAX_SUMMARY_CHARS)}`))
+    // Exactly at the cap is allowed: a limit a reader can hit is a limit they can use.
+    expect(() => readAnnotationDocument({ ...document_, summary: 'x'.repeat(MAX_SUMMARY_CHARS) })).not.toThrow()
+  })
+})
+
 describe('the weight a stroke can be drawn at', () => {
   it('holds a weight to the ends of the range, and only calls a weight one inside it', () => {
     expect(clampWeight(0.1)).toBe(WEIGHT_MIN)
@@ -320,7 +336,7 @@ describe('sidecar round trip', () => {
     expect(saved.paths.annotation).toBe(join(directory, 'fig1.svg.annot.json'))
     expect(saved.paths.review).toBe(join(directory, 'fig1.svg.annotated.png'))
     expect(await readFile(saved.paths.review)).toEqual(Buffer.from([1, 2, 3]))
-    expect((await readAnnotation(figure))?.summary).toBe('五处问题')
+    expect((await readAnnotation(figure)).annotation?.summary).toBe('五处问题')
   })
 
   it('writes a document of pages into one sidecar, and its annotated copy beside it', async () => {
@@ -331,7 +347,7 @@ describe('sidecar round trip', () => {
     expect(saved.paths.annotation).toBe(join(directory, 'report.pdf.annot.json'))
     expect(saved.paths.review).toBe(join(directory, 'report.pdf.annotated.pdf'))
     expect(await readFile(saved.paths.review)).toEqual(Buffer.from([0x25, 0x50]))
-    expect(await readAnnotation(figure)).toMatchObject({ figure: { pageCount: 4 }, marks: [{ page: 1 }, { page: 3 }] })
+    expect((await readAnnotation(figure)).annotation).toMatchObject({ figure: { pageCount: 4 }, marks: [{ page: 1 }, { page: 3 }] })
   })
 
   it('refuses a review artifact whose kind contradicts the figure itself', async () => {
@@ -352,16 +368,67 @@ describe('sidecar round trip', () => {
   it('answers null for a missing and for an unreadable sidecar', async () => {
     const figure = join(directory, 'fig2.svg')
     await writeFile(figure, '<svg/>')
-    expect(await readAnnotation(figure)).toBeNull()
+    expect((await readAnnotation(figure)).annotation).toBeNull()
     await writeFile(join(directory, 'fig2.svg.annot.json'), '{ not json')
-    expect(await readAnnotation(figure)).toBeNull()
+    expect((await readAnnotation(figure)).annotation).toBeNull()
   })
 
-  it('ignores a sidecar too large to be one this plugin wrote', async () => {
+  it('names a sidecar too large to be one this plugin wrote', async () => {
+    // The write path used to accept a document this cap then refused, and the read
+    // answered "never annotated" — the reader's marks gone with the panel denying
+    // there had ever been any. The file is named so the panel can say which one it is.
     const figure = join(directory, 'fig3.svg')
     await writeFile(figure, '<svg/>')
-    await writeFile(join(directory, 'fig3.svg.annot.json'), `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
-    expect(await readAnnotation(figure)).toBeNull()
+    const sidecar = join(directory, 'fig3.svg.annot.json')
+    await writeFile(sidecar, `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
+    expect(await readAnnotation(figure)).toEqual({ annotation: null, unreadable: [sidecar] })
+  })
+})
+
+describe('clearing a figure whose sidecar an earlier version wrote', () => {
+  let directory: string
+  beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'dsh-figmark-clearpages-')) })
+  afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
+
+  it('names a per-page sidecar it could not read', async () => {
+    // A page file too large to read is a page's marks that exist and cannot be shown;
+    // what the merge reports has to reach the panel, or one page's loss is silent.
+    const figure = join(directory, 'report.pdf')
+    await writeFile(figure, '%PDF-1.7')
+    const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
+    await writeFile(join(directory, 'report.pdf.p1.annot.json'), JSON.stringify(forFigure))
+    const oversized = join(directory, 'report.pdf.p2.annot.json')
+    await writeFile(oversized, `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`)
+    const read = await readAnnotation(figure)
+    expect(read.annotation).not.toBeNull()
+    expect(read.unreadable).toEqual([oversized])
+  })
+
+  it('still clears when the directory cannot be listed at all', async () => {
+    // Listing is how the legacy page files are found; failing to list must not turn
+    // "a legacy file might be missed" into "the reader cannot clear". The two current
+    // names are attempted anyway, and that attempt is what would report a real problem.
+    const removed = await removeAnnotation(join(directory, 'gone', 'report.pdf'))
+    expect(removed.removed).toBe(false)
+  })
+
+  it('unlinks the legacy names too, so a cleared figure stays cleared', async () => {
+    // A clear used to remove only the two current names, while the read path still
+    // accepted the legacy base-name file and the per-page files. The read found what
+    // the delete had not removed, so a cleared figure reopened with its marks on it.
+    const figure = join(directory, 'report.pdf')
+    await writeFile(figure, '%PDF-1.7')
+    const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
+    const legacy = join(directory, 'report.annot.json')
+    const page = join(directory, 'report.pdf.p2.annot.json')
+    await writeFile(legacy, JSON.stringify(forFigure))
+    await writeFile(page, JSON.stringify(forFigure))
+    expect((await readAnnotation(figure)).annotation).not.toBeNull()
+    const removed = await removeAnnotation(figure)
+    expect(removed.removed).toBe(true)
+    expect(existsSync(legacy)).toBe(false)
+    expect(existsSync(page)).toBe(false)
+    expect((await readAnnotation(figure)).annotation).toBeNull()
   })
 })
 
@@ -385,14 +452,14 @@ describe('the per-page sidecars an earlier version wrote', () => {
     await writeFile(figure, '%PDF-1.7')
     await writeLegacyPage(figure, 3, { id: 'later', kind: 'rect', color: '#1971c2', points: [[1, 1], [2, 2]], detail: '第三页' })
     await writeLegacyPage(figure, 1, { id: 'first', kind: 'pen', color: '#2f9e44', points: [[3, 3], [4, 4]] })
-    const merged = defined(await readAnnotation(figure))
+    const merged = defined((await readAnnotation(figure)).annotation)
     expect(merged.marks.map(mark => [mark.page, mark.id])).toEqual([[1, 'first'], [3, 'later']])
     // The per-page files never recorded the document's real length; the highest page
     // found stands in until the browser half saves the document again.
     expect(merged.figure.pageCount).toBe(3)
     expect(merged.summary).toBe('五处问题')
     // The unified name is what a save writes, so this read is a courtesy, not a state.
-    expect(defined(await readAnnotation(figure)).figure.path).toBe(figure)
+    expect(defined((await readAnnotation(figure)).annotation).figure.path).toBe(figure)
   })
 
   it('also reads the spelling an even earlier version used', async () => {
@@ -400,13 +467,13 @@ describe('the per-page sidecars an earlier version wrote', () => {
     await writeFile(figure, '%PDF-1.7')
     await writeLegacyPage(figure, 2, { id: 'old', kind: 'pen', color: '#2f9e44', points: [[1, 1], [2, 2]] }, 'legacy')
     // `reportlegacy.p2.annot.json` belongs to a differently named figure, so nothing matches.
-    expect(await readAnnotation(figure)).toBeNull()
+    expect((await readAnnotation(figure)).annotation).toBeNull()
     await writeFile(join(directory, 'report.p2.annot.json'), JSON.stringify({
       ...document_,
       figure: { ...document_.figure, path: figure },
       marks: [{ id: 'old', kind: 'pen', color: '#2f9e44', points: [[1, 1], [2, 2]] }],
     }))
-    expect(defined(await readAnnotation(figure)).marks.map(mark => mark.page)).toEqual([2])
+    expect(defined((await readAnnotation(figure)).annotation).marks.map(mark => mark.page)).toEqual([2])
   })
 
   it('keeps the earliest creation and the latest update of the pages it merged', async () => {
@@ -423,7 +490,7 @@ describe('the per-page sidecars an earlier version wrote', () => {
     }
     await page(1, '2026-05-02T00:00:00.000Z', '2026-05-02T00:00:00.000Z')
     await page(2, '2026-01-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z')
-    const merged = defined(await readAnnotation(figure))
+    const merged = defined((await readAnnotation(figure)).annotation)
     expect(merged.createdAt).toBe('2026-01-01T00:00:00.000Z')
     expect(merged.updatedAt).toBe('2026-06-01T00:00:00.000Z')
   })
@@ -433,14 +500,14 @@ describe('the per-page sidecars an earlier version wrote', () => {
     await writeFile(figure, '%PDF-1.7')
     await writeFile(join(directory, 'report.pdf.annot.json'), JSON.stringify({ ...paged({ path: figure }), summary: '统一文档' }))
     await writeLegacyPage(figure, 1, { id: 'stale', kind: 'pen', color: '#2f9e44', points: [[1, 1], [2, 2]] })
-    expect((await readAnnotation(figure))?.summary).toBe('统一文档')
+    expect((await readAnnotation(figure)).annotation?.summary).toBe('统一文档')
   })
 
   it('does not read per-page files for a figure that never had pages', async () => {
     const figure = join(directory, 'fig1.svg')
     await writeFile(figure, '<svg/>')
     await writeLegacyPage(figure, 1, { id: 'x', kind: 'pen', color: '#2f9e44', points: [[1, 1], [2, 2]] })
-    expect(await readAnnotation(figure)).toBeNull()
+    expect((await readAnnotation(figure)).annotation).toBeNull()
   })
 
   it('answers null when every page file belongs to another figure', async () => {
@@ -450,13 +517,13 @@ describe('the per-page sidecars an earlier version wrote', () => {
       ...document_,
       figure: { ...document_.figure, path: join(directory, 'other.pdf') },
     }))
-    expect(await readAnnotation(figure)).toBeNull()
+    expect((await readAnnotation(figure)).annotation).toBeNull()
   })
 
   it('answers null when the directory cannot be listed', async () => {
     // A figure in a directory that is not there is the same answer as a figure with
     // no annotation: nothing to show, not a failure to open the preview.
-    expect(await readAnnotation(join(directory, 'missing', 'report.pdf'))).toBeNull()
+    expect((await readAnnotation(join(directory, 'missing', 'report.pdf'))).annotation).toBeNull()
   })
 })
 
@@ -495,7 +562,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
     const figure = join(directory, 'fig9.svg')
     await writeFile(figure, '<svg/>')
     await writeFile(join(directory, 'fig9.svg.annot.json'), JSON.stringify(v2Document(figure)))
-    const stored = defined(await readAnnotation(figure))
+    const stored = defined((await readAnnotation(figure)).annotation)
     expect(stored.figure.path).toBe(figure)
     expect(stored.figure.sha256).toBe('d'.repeat(64))
     expect(stored.summary).toBe('v2 总体说明')
@@ -513,7 +580,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
     await writeFile(figure, '<svg/>')
     const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
     await writeFile(join(directory, 'fig10.annot.json'), JSON.stringify(forFigure))
-    expect((await readAnnotation(figure))?.summary).toBe('五处问题')
+    expect((await readAnnotation(figure)).annotation?.summary).toBe('五处问题')
   })
 
   it('prefers the current name when both names hold a document', async () => {
@@ -522,7 +589,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
     const forFigure = { ...document_, figure: { ...document_.figure, path: figure } }
     await writeFile(join(directory, 'fig11.svg.annot.json'), JSON.stringify({ ...forFigure, summary: '当前名' }))
     await writeFile(join(directory, 'fig11.annot.json'), JSON.stringify({ ...forFigure, summary: '旧名' }))
-    expect((await readAnnotation(figure))?.summary).toBe('当前名')
+    expect((await readAnnotation(figure)).annotation?.summary).toBe('当前名')
   })
 
   it('refuses a legacy sidecar that belongs to a figure of the same base name', async () => {
@@ -535,8 +602,8 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
       join(directory, 'fig12.annot.json'),
       JSON.stringify({ ...document_, figure: { ...document_.figure, path: png } }),
     )
-    expect(await readAnnotation(svg)).toBeNull()
-    expect((await readAnnotation(png))?.summary).toBe('五处问题')
+    expect((await readAnnotation(svg)).annotation).toBeNull()
+    expect((await readAnnotation(png)).annotation?.summary).toBe('五处问题')
   })
 
   it('answers null for a document it cannot recognize', async () => {
@@ -552,7 +619,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
     ]
     for (const body of bodies) {
       await writeFile(sidecar, body)
-      expect(await readAnnotation(figure)).toBeNull()
+      expect((await readAnnotation(figure)).annotation).toBeNull()
     }
   })
 })

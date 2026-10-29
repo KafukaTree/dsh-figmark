@@ -29,6 +29,20 @@ export const ANNOTATION_VERSION = 1
 export const ANNOTATION_VERSION_V2 = 2
 
 /**
+ * Longest note one mark may carry, in characters.
+ *
+ * Lives in `shared` because both halves need the same number for different
+ * reasons: the browser stops the reader from typing past it, so the field cannot
+ * grow into a sidecar the Host will refuse; the Host refuses one anyway, so a
+ * client that forgot cannot write a file the next open cannot read. A single
+ * number in one place is what keeps those two from drifting apart.
+ */
+export const MAX_DETAIL_CHARS = 4000
+
+/** Longest overall note a document may carry, in characters. */
+export const MAX_SUMMARY_CHARS = 4000
+
+/**
  * One mark's shape kind.
  *
  * `point` is a bare position with a comment and nothing drawn around it: no box,

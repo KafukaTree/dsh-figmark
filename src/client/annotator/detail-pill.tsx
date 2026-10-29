@@ -10,7 +10,7 @@
  * @module dsh-figmark/client/annotator/detail-pill
  */
 import type { RefObject, ReactNode } from 'react'
-import type { AnnotationMark } from '../../shared/annotation'
+import { MAX_DETAIL_CHARS, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
 import { ChatIcon, SendIcon } from './icons'
 
@@ -58,6 +58,7 @@ export function DetailPill(props: DetailPillProps): ReactNode {
         value={mark.detail ?? ''}
         placeholder={hasDetail(mark) ? t('detailPlaceholder') : t('addComment')}
         rows={1}
+        maxLength={MAX_DETAIL_CHARS}
         onChange={(event) => { props.onWrite(event.target.value) }}
       />
       {hasDetail(mark) ? (
