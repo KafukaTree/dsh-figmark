@@ -181,8 +181,8 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-bar[data-static="true"]{bottom:8px}
 .da-bar[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
 .da-bar[data-dragging="true"] *{cursor:move !important}
-/* The bar's buttons are white glyphs on the dark strip. The one filled control is
-   still the way out. */
+/* The bar's buttons are white glyphs on the dark strip, and every state of them is a
+   veil of white: the accent is spent on the marks, not on the panel's chrome. */
 .da-bar .da-dock-btn{color:#fff}
 .da-bar .da-dock-btn:hover{background:rgba(255,255,255,.14)}
 .da-bar .da-dock-btn[aria-pressed="true"]{background:rgba(255,255,255,.22);color:#fff}
@@ -361,7 +361,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* --- the two cards under the figure ------------------------------------- */
 /* --- the dock ------------------------------------------------------------ */
 /* The dock's buttons are quiet circles in the bar: they are the actions that are
-   not tools, and a filled one is reserved for the way out. */
+   not tools, and the one that is chosen is only a shade darker than its neighbours. */
 .da-dock-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;
   color:inherit;cursor:pointer;flex:0 0 auto}
@@ -434,8 +434,10 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   color:var(--dsw-alias-label-primary,currentColor)}
 .da-comment-send-btn:disabled{opacity:.45;cursor:default}
 .da-comment-send-btn svg{width:15px;height:15px}
-.da-comment-send-primary{background:var(--da-accent,#176df2);color:#fff}
-.da-comment-send-primary:hover{background:var(--da-accent,#176df2);color:#fff;filter:brightness(1.08)}
+/* Both ways out of the pill are the same neutral chip. Which hand-off is "primary"
+   is the reader's judgement at the moment of sending, not something the panel gets to
+   pre-decide by painting one of them blue; the class stays on the send-to-agent button
+   as the hook the tests and the callers select it by. */
 .da-float textarea{width:100%;box-sizing:border-box;min-height:74px;max-height:200px;resize:vertical;border:0.5px solid var(--dsw-alias-border-l3,currentColor);border-radius:9px;background:var(--dsw-alias-bg-layer-2,transparent);color:inherit;font:inherit;font-size:12px;padding:8px 10px;line-height:1.65}
 .da-float textarea:focus{outline:none;border-color:var(--da-accent,#176df2)}
 .da-btn-count{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;

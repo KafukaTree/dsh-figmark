@@ -35,8 +35,11 @@ says "this one" without competing with the figure: the palette is the reader's c
 and the blue in this panel belongs to the marks. The same rule then covered the rest of
 the default chrome the reader pointed at: the bar's pressed dock buttons, the count badge
 on the list button and the "a goal is written" dot are neutral too — a grey pressed chip,
-a light badge with dark digits, a white dot — so the only blue left in the panel is on
-the figure and on the one primary way out (发送).
+a light badge with dark digits, a white dot. Then the reader circled the pill's two
+hand-offs — the paper plane blue, the speech bubble grey — and asked for one background:
+so the send-to-agent button lost its fill and both are the same neutral chip. Nothing in
+the panel wears the accent now except the marks on the figure, which is where it means
+something.
 
 ## Alternatives considered
 

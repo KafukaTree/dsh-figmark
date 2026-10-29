@@ -36,6 +36,15 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('outline-offset:-2px')
   })
 
+  it('gives both hand-offs off the pill the same neutral chip', () => {
+    // The reader put the two buttons side by side in a screenshot — the paper plane
+    // filled blue, the speech bubble grey — and asked for one background. Which
+    // hand-off is "primary" is the reader's call at the moment of sending, and the
+    // accent in this panel belongs to the marks.
+    expect(STYLES).not.toContain('da-comment-send-primary{')
+    expect(STYLES).not.toContain('da-comment-send-primary:hover')
+  })
+
   it('takes the armed accent from the token rather than the light theme colour', () => {
     // A hard-coded #176df2 stayed dark-blue in the dark theme while the dot beside it
     // followed the token — two accents one rule apart.
