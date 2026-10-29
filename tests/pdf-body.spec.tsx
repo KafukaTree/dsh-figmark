@@ -1351,18 +1351,15 @@ describe('the document magnified', () => {
 })
 
 describe('marking across the whole document', () => {
-  it('drops a mark from whichever page it was drawn on', async () => {
+  it('lists every page\'s marks, so the list is a map of what will be sent', async () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     await click(button(host, zh.nextPage))
     await edit([mark('m9', 2)])
     await click(button(host, zh.previousPage))
-    // The list is the file's, so its delete can name a mark on a page not in view.
+    // The list is the file's, so it names a mark on a page not in view.
     const body = currentProps()
     expect(body.documentMarks?.map(entry => entry.id)).toEqual(['m1', 'm9'])
-    defined(body.onDocumentRemove)('m9')
-    await settle()
-    expect(currentProps().documentMarks?.map(entry => entry.id)).toEqual(['m1'])
   })
 })
 
@@ -1402,15 +1399,15 @@ describe('a row of the list that names another page', () => {
 })
 
 describe('dropping a mark that is not there', () => {
-  // The list is the file's, so a delete can name a mark that is already gone — a
-  // second press, or a page the reader cleared meanwhile. Nothing changes, and the
-  // map that comes back is the same object so no page re-renders for nothing.
+  // Sending one mark from its pill leaves the survivors behind: the mark that was
+  // sent is dropped from the document, and a second press naming an id that is
+  // already gone must not disturb the rest.
   it('leaves the marks alone when the id matches nothing', async () => {
     await mount()
     await edit([mark('m1', 1)])
     const before = currentProps().documentMarks
-    defined(currentProps().onDocumentRemove)('ghost')
+    await act(async () => { defined(currentProps().onSendMark)(defined(before?.[0]), 'agent') })
     await settle()
-    expect(currentProps().documentMarks).toEqual(before)
+    expect(currentProps().documentMarks?.map(entry => entry.id)).not.toContain('m1')
   })
 })

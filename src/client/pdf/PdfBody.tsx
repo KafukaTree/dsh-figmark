@@ -225,11 +225,6 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     remember(shownPageRef.current, draft)
   }, [remember])
 
-  /** Drop one mark from wherever in the document it was drawn. */
-  const removeAnyMark = useCallback((id: string): void => {
-    setMarks(current => withoutMark(current, id))
-  }, [])
-
   /** Show a mark the reader pressed in the list, wherever in the document it is. */
   const revealMark = useCallback((mark: AnnotationMark): void => {
     setSelectedId(mark.id)
@@ -399,7 +394,6 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
           zoom={zoom}
           onZoom={setZoom}
           documentMarks={allMarks(marks)}
-          onDocumentRemove={removeAnyMark}
           onDocumentClear={clearDocument}
         />
       )}

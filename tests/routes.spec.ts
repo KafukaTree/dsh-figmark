@@ -399,7 +399,9 @@ describe('annotation route edge cases', () => {
       url: `/dsh-figmark/annotation?address=${encodeURIComponent(`dsh-resource://file/absolute/${directory}/not-a-file.png`)}`,
     })
     expect(answer.status).toBe(404)
-    expect(answer.body['error']).toContain('not a regular file')
+    // The same answer as a path that is not there: telling the two apart is an
+    // existence oracle for every same-origin page in the app.
+    expect(answer.body['error']).toContain('no such figure')
   })
 
   it('refuses a cross-site request and admits a same-origin one', async () => {

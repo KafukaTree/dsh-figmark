@@ -999,19 +999,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const addMark = useCallback((mark: AnnotationMark): void => { commit(appendedMarks(marks, mark)) }, [commit, marks])
 
   const removeMark = useCallback((id: string): void => {
-    // A mark on another page of the document cannot be removed from this page's own
-    // draft: the owner holds the other pages, so the owner is the one that drops it.
-    if (props.onDocumentRemove !== undefined && !marks.some(mark => mark.id === id)) {
-      props.onDocumentRemove(id)
-      return
-    }
+    // Only this surface's own marks reach here. A document's list used to offer the
+    // same ✕ on a row from another page, and this dropped that mark through the owner
+    // with no undo step behind it — the same gesture, undoable here and permanent
+    // there. Those rows carry no ✕ now, so there is nothing to forward.
     commit(removedMarks(marks, id))
     // Only the row that went takes the selection with it. The updater reads the
     // selection at the moment it runs, so pruning one row leaves the comment card of
     // another open — a reader who deletes mark 2 was losing the card they were typing
     // mark 1 into.
     setSelectedId(current => (current === id ? null : current))
-  }, [commit, marks, props.onDocumentRemove, setSelectedId])
+  }, [commit, marks, setSelectedId])
 
   /**
    * Write one mark's detail.
@@ -2002,6 +2000,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           selectedId={selectedId}
           onReveal={reveal}
           onRemove={removeMark}
+          // Undo covers the marks this body holds. A row from another page of a
+          // document cannot be walked back here, so it does not offer the ✕ that
+          // would drop it for good: pressing the row turns to its page instead. A
+          // mark with no page is a single figure's own, and this body holds them all.
+          canRemove={(mark) => mark.page === undefined || marks.some(own => own.id === mark.id)}
           onClear={() => { void clearAnnotation() }}
           onClose={() => { setOpenPanel(null) }}
           t={t}

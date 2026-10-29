@@ -156,8 +156,6 @@ export interface AnnotatorBodyProps {
    * different document than the one being delivered.
    */
   readonly documentMarks?: readonly AnnotationMark[] | undefined
-  /** Removes a mark by id, including one drawn on another page of the document. */
-  readonly onDocumentRemove?: ((id: string) => void) | undefined
   /**
    * Forgets the whole document's annotation, on screen and on disk.
    *

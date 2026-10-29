@@ -3429,21 +3429,36 @@ describe('a body that lists the whole document', () => {
   // The list is the map of what is about to be sent, and what is sent from a paged
   // document is every page's marks at once: a list of only this sheet would read as
   // "one mark" on a file carrying seven.
-  it('lists every mark the owner hands it, and deletes through the owner', async () => {
-    const removed: string[] = []
+  it('lists every mark the owner hands it, and only offers a delete it can undo', async () => {
+    // Undo lives in the page body and covers the page it shows. The same ✕ on a row
+    // from another page dropped that mark for good — one gesture, opposite
+    // consequences, and nothing on the row to say which. So the row this body cannot
+    // walk back carries no ✕; pressing the row turns to its page instead.
+    const revealed: string[] = []
     await svgBody({}, {
+      // The page this body shows holds `own`; the document holds one more.
+      draft: { marks: [{ id: 'own', kind: 'arrow', color: '#1971c2', points: [] }] },
       documentMarks: [
         { id: 'own', kind: 'arrow', color: '#1971c2', points: [] },
-        { id: 'other-page', kind: 'rect', color: '#e03131', points: [] },
+        { id: 'other-page', kind: 'rect', color: '#e03131', points: [], page: 3 },
       ],
-      onDocumentRemove: (id) => { removed.push(id) },
+      onRevealMark: (mark) => { revealed.push(mark.id) },
     })
     await openList(document.body)
     const rows = [...document.querySelectorAll('.da-mark')]
     expect(rows).toHaveLength(2)
-    // A mark this page is not holding is the owner's to drop, not this draft's.
-    await click(button(defined(rows[1] as HTMLElement), zh.delete))
-    expect(removed).toEqual(['other-page'])
+    const foreign = defined(rows[1] as HTMLElement)
+    expect(foreign.querySelector('.da-mark-del')).toBeNull()
+    // The way to it is still there: press the row and the owner turns to its page.
+    await click(defined(foreign.querySelector('.da-mark-text') as HTMLElement | null))
+    expect(revealed).toEqual(['other-page'])
+    // The page's own row keeps the ✕, and it is undoable here: the row goes, and the
+    // page body's history can bring it back — which is the whole difference between
+    // it and the foreign row.
+    await click(button(defined(rows[0] as HTMLElement), zh.delete))
+    expect(button(document.body, zh.undo).disabled).toBe(false)
+    await click(button(document.body, zh.undo))
+    expect(document.querySelectorAll('.da-mark')).toHaveLength(2)
   })
 })
 

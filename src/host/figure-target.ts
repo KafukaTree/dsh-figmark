@@ -65,11 +65,19 @@ export async function resolveTarget(
   const mediaType = figureMediaType(absolute)
   /* v8 ignore next -- isFigurePath already restricted the suffixes figureMediaType covers. */
   if (mediaType === undefined) return { ok: false, message: `no media type for ${absolute}` }
+  // One answer for both ways a path can fail to name a figure. Telling "no such
+  // figure" from "not a regular file" is the difference between nonexistence and
+  // existence, and this route is reachable by every same-origin page in the app — the
+  // reader's own figure arrives by exactly this call. The addresses this plugin
+  // handles are absolute paths by design (`dsh-resource://file/absolute/…` is what the
+  // preview tab sends), so the reading is intended and the oracle is not.
   try {
     const info = await stat(absolute)
-    if (!info.isFile()) return { ok: false, message: `not a regular file: ${absolute}` }
+    if (info.isFile()) {
+      return { ok: true, target: { address, path: absolute, mediaType, workspace: cwd ?? null } }
+    }
   } catch {
-    return { ok: false, message: `no such figure: ${absolute}` }
+    // Both failures answer below, and answer the same way.
   }
-  return { ok: true, target: { address, path: absolute, mediaType, workspace: cwd ?? null } }
+  return { ok: false, message: `no such figure: ${absolute}` }
 }

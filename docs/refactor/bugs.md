@@ -1662,6 +1662,29 @@ detail was allowed to stand in for the thing the reader meant.
   is", "marks the other side when the newline was added rather than removed", "spells
   the marker in the unified diff, on the side that lacks the terminator".
 
+### Two doors left ajar
+
+- **3.** `resolveTarget` answered three different things for a path that was not a
+  figure — "not a regular file", "no such figure", and nothing at all — which made the
+  route an existence oracle for the whole filesystem. Every same-origin page in the app
+  can reach it, and the reader's own figure arrives by exactly this call, so the reading
+  is intended and the oracle is not. Absolute addresses stay accepted, because that is
+  what the preview tab sends (`dsh-resource://file/absolute/…`); the difference that
+  leaked was between "there but not a file" and "not there", and both now answer
+  `no such figure`. `tests/routes.spec.ts` › "refuses a directory".
+- **20.** The document's mark list is the map of everything that will be sent, so it
+  shows every page's rows — but the ✕ on a row deletes through the *page body* that is
+  on screen, and undo lives in that body's history. For a row belonging to another page
+  the deletion was therefore permanent, while the identical gesture on the page's own
+  rows was undoable: one gesture with two consequences and nothing on the row to say
+  which. The ✕ now appears only on rows whose removal the visible page can walk back;
+  a row from another page still carries its number and comment and still turns to that
+  page when pressed, where the delete is undoable. The forwarding path
+  (`onDocumentRemove`, `removeAnyMark`) had no caller left and is gone.
+  `tests/annotator-body.spec.tsx` › "lists every mark the owner hands it, and only
+  offers a delete it can undo"; `tests/pdf-body.spec.tsx` › "lists every page's marks,
+  so the list is a map of what will be sent"; `tests/page-marks.spec.ts`.
+
 ### The menu
 
 - **53.** `.da-menu` is `role="menu"` with `role="menuitem"` rows, and announced a

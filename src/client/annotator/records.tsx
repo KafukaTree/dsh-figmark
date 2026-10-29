@@ -95,6 +95,16 @@ export interface MarkListProps {
   readonly onReveal: (mark: AnnotationMark) => void
   /** Drop one mark. */
   readonly onRemove: (id: string) => void
+  /**
+   * Whether this surface can take one row back after dropping it.
+   *
+   * A document's list holds every page's marks, but undo lives in the page body and
+   * covers only the page it shows. Offering the same ✕ on a row it cannot walk back
+   * made one gesture mean two things — undoable here, permanent there — with nothing
+   * on the row to say which. So a row this surface cannot undo carries no ✕ at all:
+   * pressing the row turns to its page, where the gesture means what it means.
+   */
+  readonly canRemove: (mark: AnnotationMark) => boolean
   /** Clear the whole annotation. */
   readonly onClear: () => void
   /** Put the list away. */
@@ -174,11 +184,15 @@ export function MarkList(props: MarkListProps): ReactNode {
             {mark.page === undefined ? null : (
               <span className="da-mark-page">{t('markPage', { page: mark.page })}</span>
             )}
-            <button type="button" className="da-mark-del" aria-label={t('delete')}
-              title={t('delete')}
-              onClick={(event) => { event.stopPropagation(); props.onRemove(mark.id) }}>
-              <span className="da-mark-del-x" aria-hidden="true">✕</span>
-            </button>
+            {/* Only where this surface can walk the removal back; elsewhere the row
+                itself is the way to it. */}
+            {props.canRemove(mark) ? (
+              <button type="button" className="da-mark-del" aria-label={t('delete')}
+                title={t('delete')}
+                onClick={(event) => { event.stopPropagation(); props.onRemove(mark.id) }}>
+                <span className="da-mark-del-x" aria-hidden="true">✕</span>
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
