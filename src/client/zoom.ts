@@ -17,13 +17,17 @@ export const MIN_ZOOM = 0.1
 export const MAX_ZOOM = 6
 
 /**
- * Top margin the surface keeps inside the scrollport, in CSS pixels.
+ * The padding `.da-stage` keeps around the surface, in CSS pixels.
  *
- * Mirrors `.da-surface{margin:12px auto}`: the vertical margins are fixed, so the
- * surface's content box always starts this far down whatever its width. The
- * horizontal margins are `auto`, and {@link surfaceOffset} is the resolved form.
+ * Both axes get it, and the two regimes differ: while the surface fits, `align` and
+ * `justify` with `safe center` centre it and the offset is `(box − surface) / 2`
+ * floored at zero; once it overflows, `safe` falls back to `start` and the offset is
+ * this padding instead of zero. This module used to assume a 12px vertical margin
+ * from a CSS rule that no longer exists and to assume zero horizontal padding in the
+ * overflowing case, so a wheel zoom slid the picture under the pointer by the
+ * difference — the horizontal one small, the vertical one large.
  */
-export const SURFACE_MARGIN = 12
+export const STAGE_PADDING = 14
 
 /** How long a pinch has to pause before its factor is taken as the settled one. */
 export const PINCH_SETTLE_DELAY_MS = 120
@@ -68,18 +72,26 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number, pageHeight = 
 
 /**
  * Where the surface's content box starts, in the scrollport's content coordinates.
- * @param viewportWidth - the scrollport's client width.
- * @param surfaceWidth - the surface's laid-out width.
- * @returns the horizontal offset the auto margins resolve to.
+ *
+ * One function for both axes, because the two axes are laid out by the same rule:
+ * centred while the surface fits, pinned at the stage's padding once it does not.
+ * @param viewportExtent - the scrollport's client width or height.
+ * @param surfaceExtent - the surface's laid-out width or height.
+ * @returns the offset the flex alignment resolves to.
  */
-export function surfaceOffset(viewportWidth: number, surfaceWidth: number): number {
-  return Math.max(0, (viewportWidth - surfaceWidth) / 2)
+export function surfaceOffset(viewportExtent: number, surfaceExtent: number): number {
+  // `safe center` centres while there is room, and falls back to `start` — which is
+  // the stage's padding, not zero — the moment there is not.
+  if (surfaceExtent > viewportExtent) return STAGE_PADDING
+  return (viewportExtent - surfaceExtent) / 2
 }
 
 /** What one scrollport reports about its own box and position. */
 export interface ScrollportMetrics {
   /** The scrollport's client width, in CSS pixels. */
   readonly clientWidth: number
+  /** The scrollport's client height, in CSS pixels. */
+  readonly clientHeight: number
   /** Current horizontal scroll offset. */
   readonly scrollLeft: number
   /** Current vertical scroll offset. */
@@ -117,17 +129,23 @@ export function anchoredScroll(
   pointer: { readonly clientX: number; readonly clientY: number },
   before: number,
   after: number,
-  figure: { readonly width: number },
+  figure: { readonly width: number; readonly height: number },
 ): ScrollTarget {
   const localX = pointer.clientX - viewport.left
   const localY = pointer.clientY - viewport.top
-  const offsetBefore = surfaceOffset(viewport.clientWidth, figure.width * before)
-  const offsetAfter = surfaceOffset(viewport.clientWidth, figure.width * after)
+  // Both axes use the same resolved offset, because `.da-stage` lays both out by the
+  // one rule. Hardcoding a vertical margin was the whole of finding 6: the constant
+  // described a CSS rule that does not exist, so the point under the cursor drifted
+  // vertically by the difference between the assumption and the layout.
+  const leftBefore = surfaceOffset(viewport.clientWidth, figure.width * before)
+  const leftAfter = surfaceOffset(viewport.clientWidth, figure.width * after)
+  const topBefore = surfaceOffset(viewport.clientHeight, figure.height * before)
+  const topAfter = surfaceOffset(viewport.clientHeight, figure.height * after)
   // The point the pointer is over, in figure pixels, before anything moves.
-  const figureX = (viewport.scrollLeft + localX - offsetBefore) / before
-  const figureY = (viewport.scrollTop + localY - SURFACE_MARGIN) / before
+  const figureX = (viewport.scrollLeft + localX - leftBefore) / before
+  const figureY = (viewport.scrollTop + localY - topBefore) / before
   return {
-    scrollLeft: Math.max(0, offsetAfter + figureX * after - localX),
-    scrollTop: Math.max(0, SURFACE_MARGIN + figureY * after - localY),
+    scrollLeft: Math.max(0, leftAfter + figureX * after - localX),
+    scrollTop: Math.max(0, topAfter + figureY * after - localY),
   }
 }

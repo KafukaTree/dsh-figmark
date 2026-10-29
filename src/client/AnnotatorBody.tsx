@@ -728,8 +728,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [])
 
   const scale = useMemo(
-    () => drawingScale({ zoom, fitWidth, size, ownerWidth: props.fitWidth }),
-    [zoom, fitWidth, size, props.fitWidth],
+    // The paper, not the figure: the paper is what the surface is laid out at, so
+    // fitting the figure left the panel wider than its box as soon as a mark reached
+    // past the figure's edge.
+    () => drawingScale({ zoom, fitWidth, surface: paper, ownerWidth: props.fitWidth }),
+    [zoom, fitWidth, paper, props.fitWidth],
   )
 
   /**
@@ -895,6 +898,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const target = anchoredScroll(
       {
         clientWidth: stage.clientWidth,
+        clientHeight: stage.clientHeight,
         scrollLeft: stage.scrollLeft,
         scrollTop: stage.scrollTop,
         left: rect.left,

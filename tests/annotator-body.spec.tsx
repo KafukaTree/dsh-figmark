@@ -1157,6 +1157,24 @@ describe('zoom', () => {
     }
   })
 
+  it('fits the paper, so a mark drawn past the figure is still visible', async () => {
+    // Fit used to divide the target width by the *figure's* width while the surface was
+    // laid out at the *paper's* — the two agree only while nothing reaches past the
+    // figure, which is exactly the case a grown paper exists for. The reader drew a
+    // mark outside the figure and had to scroll sideways to see the mark they had just
+    // drawn; fit stopped fitting at the moment a mark mattered.
+    mounted = await svgBody({
+      annotation: {
+        ...saved,
+        // A rectangle out at x≈600 on a 200-wide figure, so the paper grows well past it.
+        marks: [{ id: 'far', kind: 'rect', color: '#1971c2', points: [[500, 40], [600, 120]] }],
+      },
+    }, {}, { stageWidth: 500 })
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    // Whatever the paper is, the surface it is laid out on fits inside the 476px box.
+    expect(Number.parseFloat(surface.style.width)).toBeLessThanOrEqual(476 + 1)
+  })
+
   it('zooms by pinch instead of stepping through buttons', async () => {
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement

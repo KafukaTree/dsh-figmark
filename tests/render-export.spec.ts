@@ -513,6 +513,33 @@ describe('figure DOM', () => {
     expect(svgViewBox(defined(parseFigureSvg('<svg/>')), { width: 9, height: 8 })).toBe('0 0 9 8')
   })
 
+  it('converts a size declared in a physical unit instead of keeping only its digits', () => {
+    // `Number.parseFloat('6.4in')` is 6.4, and that bare number was written straight
+    // back onto the root as a pixel count — a 460-user-unit figure drawn into 6.4px,
+    // 72× too small, with its strokes pinned to the unit floor. It reads as a corrupt
+    // file rather than a mis-scaled one.
+    const inches = svgIntrinsicSize(defined(parseFigureSvg('<svg width="6.4in" height="4.8in" viewBox="0 0 460 345"/>')))
+    expect(inches.width).toBeCloseTo(614.4, 6)
+    expect(inches.height).toBeCloseTo(460.8, 6)
+    const millimetres = svgIntrinsicSize(defined(parseFigureSvg('<svg width="210mm" height="297mm"/>')))
+    expect(millimetres.width).toBeCloseTo(793.7, 1)
+    expect(millimetres.height).toBeCloseTo(1122.5, 1)
+    // A point is a physical unit too, and it is what matplotlib writes.
+    expect(svgIntrinsicSize(defined(parseFigureSvg('<svg width="720pt" height="540pt"/>')))).toEqual({ width: 960, height: 720 })
+  })
+
+  it('falls back to the viewBox for a size it cannot express in pixels', () => {
+    // A percentage or a viewport unit is not a size this figure has without a
+    // container to measure against, so guessing (100) is worse than the viewBox.
+    const percent = svgIntrinsicSize(defined(parseFigureSvg('<svg width="100%" height="100%" viewBox="0 0 30 40"/>')))
+    expect(percent).toEqual({ width: 30, height: 40 })
+    const viewport = svgIntrinsicSize(defined(parseFigureSvg('<svg width="80vw" height="60vh" viewBox="0 0 30 40"/>')))
+    expect(viewport).toEqual({ width: 30, height: 40 })
+    // An unparseable attribute is no size at all, which is the same answer.
+    expect(svgIntrinsicSize(defined(parseFigureSvg('<svg width="abc" height="def" viewBox="0 0 30 40"/>'))))
+      .toEqual({ width: 30, height: 40 })
+  })
+
   it('anchors a point to the smallest box, re-pointed at the element that names itself', () => {
     const container = document.createElement('div')
     document.body.append(container)

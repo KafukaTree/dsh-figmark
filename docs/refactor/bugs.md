@@ -1583,6 +1583,27 @@ shape too: each one is a place where the surface answered a question about the
   aiming at the middle is aiming at the mark, aiming at a corner is aiming at the
   corner. The reach is unchanged for a mark large enough to have a middle to aim at.
 
+### Where the picture sits
+
+Four findings about the geometry between a figure and the box it is shown in. They
+share a premise that stopped being true: the panel used to guess at the CSS instead
+of owning the same number the stylesheet does.
+
+- **6.** The wheel and pinch anchored their zoom on a vertical margin of 12px that no
+  rule in the stylesheet has — `.da-stage` pads 14px and centres with `safe center`.
+  Both axes now resolve the same offset through `surfaceOffset`, which knows the two
+  regimes: centred while the surface fits, pinned at the padding once it overflows.
+- **30.** Fit divided the target width by the *figure's* width and then laid the
+  *paper* out at the result. The two agree only while nothing reaches past the figure,
+  which is exactly what a grown paper is for — so fit stopped fitting the moment a
+  mark mattered. It now fits the paper.
+- **31.** Same offset, horizontal axis: `safe center` falls back to the stage's 14px
+  padding, not to zero, and the anchoring assumed zero. Fixed by the same change as 6.
+- **32.** `svgIntrinsicSize` used `Number.parseFloat`, so `width="6.4in"` became 6.4 —
+  a 460-user-unit figure drawn into 6.4 CSS px, 72× too small, with its strokes pinned
+  to the unit floor. Absolute units are converted now; a percentage or viewport unit
+  falls through to the viewBox rather than being guessed at.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.

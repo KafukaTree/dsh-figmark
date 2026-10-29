@@ -36,14 +36,22 @@ export type Zoom = 'fit' | number
 export function drawingScale(input: {
   readonly zoom: Zoom
   readonly fitWidth: number
-  readonly size: { readonly width: number } | null
+  /**
+   * The width fit has to fit: the *paper*, not the figure.
+   *
+   * The paper is what gets laid out (`surfaceBoxStyle` is `paper.width × scale`), so
+   * fitting the figure left the panel wider than its box the moment a mark reached
+   * past the figure's edge — exactly the case where a grown paper is the point. Fit
+   * stopped fitting at the moment a mark mattered.
+   */
+  readonly surface: { readonly width: number } | null
   readonly ownerWidth: number | undefined
 }): number {
-  if (input.size === null) return 1
+  if (input.surface === null) return 1
   if (input.zoom !== 'fit') return input.zoom
   const target = input.ownerWidth ?? input.fitWidth
   if (target <= 0) return 1
-  return Math.min(1.5, Math.max(0.05, target / input.size.width))
+  return Math.min(1.5, Math.max(0.05, target / input.surface.width))
 }
 
 /**

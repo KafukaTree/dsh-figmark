@@ -97,15 +97,55 @@ export interface FigureIntrinsicSize {
   readonly height: number
 }
 
+/** CSS pixels per unit, for the absolute lengths an SVG may declare its size in. */
+const UNIT_PIXELS: Readonly<Record<string, number>> = {
+  '': 1,
+  px: 1,
+  pt: 96 / 72,
+  pc: 16,
+  in: 96,
+  cm: 96 / 2.54,
+  mm: 96 / 25.4,
+  q: 96 / 101.6,
+}
+
+/**
+ * One SVG length attribute, in CSS pixels, or undefined when it is not absolute.
+ *
+ * `Number.parseFloat` stops at the first character it cannot read, which turns `6.4in`
+ * into the bare number 6.4 — 72 times too small once written back as a pixel count —
+ * and `100%` into 100. A percentage or a viewport-relative unit is not a size this
+ * figure has without a container to measure against, so those fall through to the
+ * viewBox instead of being guessed at.
+ * @param text - the attribute's text, or null when absent.
+ * @returns the length in CSS pixels.
+ */
+function absoluteLength(text: string | null): number | undefined {
+  if (text === null) return undefined
+  const match = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*([a-zA-Z%]*)\s*$/.exec(text)
+  /* v8 ignore next -- an unparseable attribute is handled as no size at all. */
+  if (match === null) return undefined
+  const value = Number(match[1])
+  // Group 2 matches the empty string for a unitless number, and `Number` on a matched
+  // group is always finite; the one thing left to reject is a non-positive length.
+  const scale = UNIT_PIXELS[(match[2] as string).toLowerCase()]
+  if (scale === undefined || value <= 0) return undefined
+  return value * scale
+}
+
 /**
  * Read one inline SVG's own size.
+ *
+ * An absolute unit is converted rather than stripped: a figure authored in `in`, `mm`
+ * or `pt` was rendering 72× (or 3.78×) too small, with its strokes pinned to the unit
+ * floor — which reads as a corrupt file rather than a mis-scaled one.
  * @param root - sanitized root element.
  * @returns the width/height from its attributes or viewBox, defaulting to 800x600.
  */
 export function svgIntrinsicSize(root: SVGSVGElement): FigureIntrinsicSize {
-  const attributeWidth = Number.parseFloat(root.getAttribute('width') ?? '')
-  const attributeHeight = Number.parseFloat(root.getAttribute('height') ?? '')
-  if (Number.isFinite(attributeWidth) && Number.isFinite(attributeHeight) && attributeWidth > 0 && attributeHeight > 0) {
+  const attributeWidth = absoluteLength(root.getAttribute('width'))
+  const attributeHeight = absoluteLength(root.getAttribute('height'))
+  if (attributeWidth !== undefined && attributeHeight !== undefined) {
     return { width: attributeWidth, height: attributeHeight }
   }
   const viewBox = (root.getAttribute('viewBox') ?? '').split(/[\s,]+/).map(Number)
