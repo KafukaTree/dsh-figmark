@@ -57,12 +57,18 @@ ordinal and writes the name itself (`箭头1`, `矩形1`, `椭圆1`, `单点1 �
 `手绘线1`, `元素1`), so the sentence starts with exactly the words and digit the
 picture carries.
 
-**The identifiers are named, and the goal says it is a goal.** `id=axes_1` on its own
-was a token the reader had to reverse-engineer — every other part of the anchor already
-had a noun in front of it (`元素标题`, `元素文字`, `选择器`), so the id reads
-`元素 id=axes_1` now (en: `element id=…`). And the line carrying the document's own note
-opens with `目标：` instead of `这张图是：`: that field is the reader's answer to "this
-figure should become…", which is a goal, not a description of the picture.
+**An anchor stops printing identifiers, and the goal says it is a goal.** The reader met
+`id=axes_1` in a mark line, did not know what it was, and asked for it to go. It is the
+wrong kind of name: the ids on a matplotlib SVG — `axes_1`, `line2d_11`, `figure_1` — are
+minted by the exporter and appear nowhere in the script the agent edits. So an anchor
+prints only what a source reader can use: a `title`, an element text short enough to be a
+name, or a selector that is a path (`#s > p:nth-of-type(1)`) rather than an id with a `#`
+in front. Ids are gone, `#id` selectors are gone, and an anchor that can offer nothing but
+a tag name is dropped whole. The mark list's second line uses the same words
+(`anchorWords`), which is where the reader saw an axes group's whole label soup run on
+under "（未写说明）". The line carrying the document's own note opens with `目标：`
+instead of `这张图是：`: that field is the reader's answer to "this figure should
+become…", a goal rather than a description of the picture.
 
 **A number on the picture is a place-marker's job.** Only a pin wears one: its filled
 head has room for the digit, and it is what a reader looks for when the list says

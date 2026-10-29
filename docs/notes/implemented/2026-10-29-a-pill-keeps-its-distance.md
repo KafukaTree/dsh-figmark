@@ -30,10 +30,13 @@ with no measured box is not an obstacle, so a panel that has not laid the palett
 does not move anything. The placement effect now also depends on the palette's parked
 spot, because dragging the palette changes the box it has to keep clear of.
 
-**The armed tool wears grey, not the accent.** `#4d4d4d`-ish — `rgba(255,255,255,.22)`
-over the dark strip — says "this one" without competing with the figure: the palette is
-the reader's controls, and the blue in this panel belongs to the marks. Hover stays a
-lighter veil, so the selected tile is still the one filled chip in the strip.
+**The chrome wears grey, not the accent.** `rgba(255,255,255,.22)` over the dark strip
+says "this one" without competing with the figure: the palette is the reader's controls,
+and the blue in this panel belongs to the marks. The same rule then covered the rest of
+the default chrome the reader pointed at: the bar's pressed dock buttons, the count badge
+on the list button and the "a goal is written" dot are neutral too — a grey pressed chip,
+a light badge with dark digits, a white dot — so the only blue left in the panel is on
+the figure and on the one primary way out (发送).
 
 ## Alternatives considered
 

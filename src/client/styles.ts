@@ -185,10 +185,10 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    still the way out. */
 .da-bar .da-dock-btn{color:#fff}
 .da-bar .da-dock-btn:hover{background:rgba(255,255,255,.14)}
-.da-bar .da-dock-btn[aria-pressed="true"]{background:var(--da-accent,#176df2);color:#fff}
+.da-bar .da-dock-btn[aria-pressed="true"]{background:rgba(255,255,255,.22);color:#fff}
 .da-bar .da-dock-sep{background:rgba(255,255,255,.22)}
-.da-bar .da-dock-dot{background:#4c8dff}
-.da-bar .da-dock-count{background:var(--da-accent,#176df2);color:#fff}
+.da-bar .da-dock-dot{background:rgba(255,255,255,.75)}
+.da-bar .da-dock-count{background:rgba(255,255,255,.85);color:#2d2d2d}
 .da-bar .da-style{width:30px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:#fff}
 .da-bar .da-style:hover{background:rgba(255,255,255,.14)}
 .da-bar .da-palette-grip{color:rgba(255,255,255,.55)}
@@ -366,7 +366,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;
   color:inherit;cursor:pointer;flex:0 0 auto}
 .da-dock-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
-.da-dock-btn[aria-pressed="true"]{background:var(--da-accent-soft,rgba(23,109,242,.12));color:var(--da-accent,#176df2)}
+.da-dock-btn[aria-pressed="true"]{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.16));color:inherit}
 .da-dock-btn svg{width:15px;height:15px}
 .da-dock-btn:disabled{opacity:.4;cursor:default}
 .da-dock-btn:disabled:hover{background:transparent}
@@ -374,7 +374,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* A dot, not a count: "there is a goal written" is all the bar needs to say about
    a field it is not a list of. */
 .da-dock-dot{position:absolute;top:3px;right:4px;width:5px;height:5px;border-radius:50%;
-  background:var(--da-accent,#176df2)}
+  background:var(--dsw-alias-label-tertiary,currentColor)}
 .da-dock-sep{width:1px;height:16px;margin:0 3px;background:var(--dsw-alias-border-l3,currentColor);opacity:.6;flex:0 0 auto}
 /* The count rides on the list's own button: it is the one thing about the list a
    reader wants without opening it. */
@@ -383,7 +383,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    on it, and a count that grows past two digits is capped rather than allowed to eat
    the icon: the number on the bar is a reminder, the list itself is one click away. */
 .da-dock-count{position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;
-  border-radius:7px;background:var(--da-accent,#176df2);color:#fff;
+  border-radius:7px;background:var(--dsw-alias-border-l4,#c9ced8);color:var(--dsw-alias-label-primary,#2d2d2d);
   font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 
 /* --- the floating records ------------------------------------------------ */

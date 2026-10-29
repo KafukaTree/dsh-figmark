@@ -253,12 +253,41 @@ function namesThePicture(anchor: MarkAnchor, figure: AnnotatedFigure | undefined
 }
 
 /**
+ * The words an anchor names its element with, if it has any.
+ *
+ * A title first (a Graphviz node's `102` is the name the source uses), then the
+ * element's own text when it is short enough to be a name. An `id` is deliberately not
+ * one of them: the ids on a matplotlib SVG — `axes_1`, `line2d_11`, `figure_1` — are
+ * minted by the exporter and appear nowhere in the script the agent edits, so naming
+ * one only adds a word the reader has to decode.
+ * @param anchor - the element the mark landed on.
+ * @returns the name in words, or an empty string when the anchor has none.
+ */
+export function anchorWords(anchor: MarkAnchor): string {
+  if (anchor.title !== undefined && anchor.title !== '') return anchor.title
+  const text = anchor.text ?? ''
+  return text !== '' && text.length <= NAMEABLE_TEXT ? text : ''
+}
+
+/**
+ * Whether a selector is nothing but an element's id with a `#` in front.
+ *
+ * `#axes_1` says what the id says; a path such as `#s > p:nth-of-type(1)` says where in
+ * the source to look. Only the second is worth printing.
+ * @param selector - the anchor's CSS path.
+ * @returns true when the selector carries no path beyond the id.
+ */
+function namesOnlyItsId(selector: string): boolean {
+  return /^#[\w-]+$/u.test(selector)
+}
+
+/**
  * Describe what a mark points at, when the figure exposed an element.
  *
- * Only the names that still say something are kept. A selector that is the id with a
- * `#` in front is the same name twice, and element text long enough to be a paragraph
- * locates nothing the id did not already locate — both were printed on every line
- * because the fields existed, not because they helped.
+ * Only the names that still say something are kept: a title, a short element text, or a
+ * selector that locates the element in the source. Ids are never printed, element text
+ * long enough to be a paragraph is not a name, and an anchor that can offer nothing but
+ * a tag name is dropped whole — `（<g>）` located nothing.
  * @param mark - the mark whose anchor is described.
  * @param locale - language of the surrounding message.
  * @param figure - the figure's size, when the document knows it.
@@ -269,17 +298,13 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale, figure?: An
   if (anchor === undefined) return ''
   if (mark.kind !== 'element' && namesThePicture(anchor, figure)) return ''
   const zh = locale === 'zh'
-  const id = anchor.id ?? ''
-  const text = anchor.text ?? ''
   const selector = anchor.selector ?? ''
   const parts: string[] = []
   if (anchor.title !== undefined && anchor.title !== '') parts.push(zh ? `元素标题「${anchor.title}」` : `element title "${anchor.title}"`)
-  // Named, not just dumped: `axes_1` on its own is an identifier the reader has to
-  // reverse-engineer, and the message is read by the person who drew the mark too.
-  if (id !== '') parts.push(zh ? `元素 id=${id}` : `element id=${id}`)
+  const text = anchor.text ?? ''
   if (text !== '' && text.length <= NAMEABLE_TEXT) parts.push(zh ? `元素文字「${text}」` : `element text "${text}"`)
-  if (selector !== '' && selector !== `#${id}`) parts.push(zh ? `选择器 ${selector}` : `selector ${selector}`)
-  if (parts.length === 0) parts.push(`<${anchor.tag}>`)
+  if (selector !== '' && !namesOnlyItsId(selector)) parts.push(zh ? `选择器 ${selector}` : `selector ${selector}`)
+  if (parts.length === 0) return ''
   // The parentheses follow the message's own language: an English message dotted with
   // full-width brackets reads like a translation that lost its last pass.
   return zh ? `（${parts.join('，')}）` : ` (${parts.join(', ')})`

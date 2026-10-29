@@ -642,7 +642,7 @@ describe('a sidecar written beside one figure in a shared workbench', () => {
 describe('model-facing summary', () => {
   it('describes every mark kind with its geometry and note', () => {
     expect(describeMark(defined(document_.marks[0]), 1, 'zh'))
-      .toBe('箭头1 (300,225) → (100,66)（元素标题「102」，元素 id=node102，元素文字「导柱」），批注：这个标号应指向滑套 34')
+      .toBe('箭头1 (300,225) → (100,66)（元素标题「102」，元素文字「导柱」），批注：这个标号应指向滑套 34')
     expect(describeMark(defined(document_.marks[1]), 1, 'zh')).toBe('手绘线1 (1,2)-(5,6)，（未写说明）')
     expect(describeMark(defined(document_.marks[2]), 1, 'zh')).toBe('椭圆1 (10,20)-(30,40)，批注：轮廓多余')
     expect(describeMark(defined(document_.marks[3]), 1, 'zh')).toBe('矩形1 (5,5)-(50,60)，（未写说明）')
@@ -758,20 +758,21 @@ describe('model-facing summary', () => {
         selector: '#lead',
       },
     }
-    // The selector that is the id spelled again is the same name twice, so it is
-    // dropped; the one that carries a path a source reader needs still travels.
+    // Only the words and the source path are printed. The id is an exporter's name —
+    // `lead` here, `axes_1` on a matplotlib figure — and a selector that is that id
+    // with a `#` in front adds nothing to it.
     expect(describeMark(mark, 1, 'zh'))
-      .toBe('矩形1 (10,20)-(60,90)（元素 id=lead，元素文字「第一段」），批注：这段要改')
-    expect(describeMark(mark, 1, 'en')).toContain('(element id=lead, element text')
+      .toBe('矩形1 (10,20)-(60,90)（元素文字「第一段」），批注：这段要改')
+    expect(describeMark(mark, 1, 'en')).toContain('(element text')
     expect(describeMark(mark, 1, 'en')).not.toContain('selector')
     const pathed: AnnotationMark = {
       ...mark,
       anchor: { tag: 'p', bbox: [0, 0, 1024, 200], id: 'lead', selector: '#lead > p:nth-of-type(2)' },
     }
     expect(describeMark(pathed, 1, 'en')).toContain('selector #lead > p:nth-of-type(2)')
-    // An anchor with nothing but a tag still names the element it points at.
+    // An anchor that can only offer a tag name says nothing, so it says nothing.
     const bare: AnnotationMark = { ...mark, anchor: { tag: 'p', bbox: [0, 0, 1, 1] } }
-    expect(describeMark(bare, 1, 'zh')).toContain('（<p>）')
+    expect(describeMark(bare, 1, 'zh')).toBe('矩形1 (10,20)-(60,90)，批注：这段要改')
   })
 
   it('names the element an element mark selected, without reading it as a region', () => {
@@ -783,16 +784,22 @@ describe('model-facing summary', () => {
       detail: '这条线要加粗',
       anchor: { tag: 'path', bbox: [10, 20, 50, 70], id: 'line2d_10' },
     }
-    // The box locates the element on the picture; the anchor says which one it is.
-    // The phrase names the kind it is rather than a region that was drawn, and it is
-    // numbered like every other mark so the reader can find its badge on the figure.
+    // The box locates the element on the picture; the anchor would say which one it is,
+    // and an id minted by the exporter is not a name the source reader can use — so
+    // only its words travel, and this anchor has none.
     expect(describeMark(mark, 1, 'zh'))
-      .toBe('元素1 (10,20)-(60,90)（元素 id=line2d_10），批注：这条线要加粗')
+      .toBe('元素1 (10,20)-(60,90)，批注：这条线要加粗')
     expect(describeMark(mark, 1, 'en')).toContain('element 1 (10,20)-(60,90)')
+    // What the anchor does keep is a human name: a title or the element's own words.
+    const named: AnnotationMark = {
+      ...mark,
+      anchor: { tag: 'path', bbox: [10, 20, 50, 70], id: 'line2d_10', text: 'tau=1.0' },
+    }
+    expect(describeMark(named, 1, 'zh')).toContain('（元素文字「tau=1.0」）')
     // A half-recorded selection still says what it is, and says no box rather than
     // inventing one from the single corner it has.
     const one: AnnotationMark = { ...mark, points: [[10, 20]] }
-    expect(describeMark(one, 1, 'zh')).toBe('元素1（元素 id=line2d_10），批注：这条线要加粗')
+    expect(describeMark(one, 1, 'zh')).toBe('元素1，批注：这条线要加粗')
   })
 
   it('keeps an anchor to the names that still say something', () => {
@@ -807,25 +814,27 @@ describe('model-facing summary', () => {
     )
     const axesText = '2 4 6 8 Time (s) 0 20 40 60 80 Normalized intensity (%) Decay curves tau=1.0'
     expect(at({ tag: 'g', id: 'axes_1', bbox: [40, 40, 300, 200], text: axesText, selector: '#axes_1' }, document_.figure))
-      .toBe('矩形1 (0,0)-(1,1)（元素 id=axes_1），（未写说明）')
+      .toBe('矩形1 (0,0)-(1,1)，（未写说明）')
     // A short text is a name, and stays.
     const label = 'x'.repeat(30)
     expect(at({ tag: 'text', bbox: [0, 0, 1, 1], text: label })).toContain('元素文字')
+    // A path is where the source is, so it travels even when there are no words.
+    expect(at({ tag: 'p', bbox: [0, 0, 1, 1], selector: '#s > p:nth-of-type(1)' })).toContain('选择器')
     // An anchor that covers the whole figure names the picture the header already
     // named, and on a matplotlib SVG it carries the whole picture's labels with it.
-    const whole = { tag: 'svg', id: 'figure_1', bbox: [0, 0, 400, 300] as const, text: axesText }
+    const whole = { tag: 'svg', id: 'figure_1', bbox: [0, 0, 400, 300] as const, text: axesText, selector: '#figure_1 > g:nth-of-type(1)' }
     expect(at(whole, document_.figure)).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
     // An element mark keeps its anchor even then: there the anchor is the mark.
     const element: AnnotationMark = {
       id: 'e', kind: 'element', color: '#000', points: [[0, 0], [400, 300]], anchor: whole,
     }
-    expect(describeMark(element, 1, 'zh', document_.figure)).toContain('id=figure_1')
+    expect(describeMark(element, 1, 'zh', document_.figure)).toContain('选择器')
     // Without a measured figure there is nothing to compare against, so it stays.
-    expect(at(whole)).toContain('id=figure_1')
+    expect(at(whole)).toContain('选择器')
     const unmeasured: AnnotationDocument['figure'] = {
       address: 'a', path: '/w/r.pdf', mediaType: 'application/pdf', sha256: 'x', pageCount: 2,
     }
-    expect(at(whole, unmeasured)).toContain('id=figure_1')
+    expect(at(whole, unmeasured)).toContain('选择器')
   })
 
   it('says how far a mark was turned, so the model knows its angle', () => {
@@ -866,16 +875,20 @@ describe('model-facing summary', () => {
     expect(describeMark(none('point'), 1, 'en')).toBe('point 1, (no detail)')
   })
 
-  it('names an anchor by whatever it knows: title, id, text, or just the tag', () => {
+  it('names an anchor only by the words or paths that still say something', () => {
     const withAnchor = (anchor: AnnotationMark['anchor']): string =>
       describeMark({ id: 'a', kind: 'rect', color: '#000', points: [[0, 0], [1, 1]], ...(anchor === undefined ? {} : { anchor }) }, 1, 'zh')
-    expect(withAnchor({ tag: 'g', bbox: [0, 0, 1, 1] })).toContain('（<g>）')
-    expect(withAnchor({ tag: 'g', id: 'n1', bbox: [0, 0, 1, 1] })).toContain('（元素 id=n1）')
-    expect(withAnchor({ tag: 'text', text: '导柱', bbox: [0, 0, 1, 1] })).toContain('（元素文字「导柱」）')
+    // A title is the name the source uses (Graphviz writes its node names here).
     expect(withAnchor({ tag: 'g', title: '102', bbox: [0, 0, 1, 1] })).toContain('（元素标题「102」）')
+    // The element's own words are a name when they are short enough to be one.
+    expect(withAnchor({ tag: 'text', text: '导柱', bbox: [0, 0, 1, 1] })).toContain('（元素文字「导柱」）')
+    // An id, or a selector that is an id with a `#`, names nothing the source can use.
+    expect(withAnchor({ tag: 'g', id: 'n1', bbox: [0, 0, 1, 1] })).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
+    expect(withAnchor({ tag: 'path', bbox: [0, 0, 1, 1], selector: '#lead' }))
+      .toBe('矩形1 (0,0)-(1,1)，（未写说明）')
+    // And a tag on its own is not a name either.
+    expect(withAnchor({ tag: 'g', bbox: [0, 0, 1, 1] })).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
     expect(withAnchor(undefined)).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
-    // An element with a name but no id, text or title falls back to the tag.
-    expect(withAnchor({ tag: 'path', bbox: [0, 0, 1, 1], selector: '#lead' })).toContain('选择器 #lead')
   })
 })
 

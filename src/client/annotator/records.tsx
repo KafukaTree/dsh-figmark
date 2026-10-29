@@ -13,7 +13,7 @@ import type { ReactNode } from 'react'
 import { MAX_SUMMARY_CHARS, markOrdinals, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
 import { BoxIcon, GoalIcon, ListIcon, ToolIcon } from './icons'
-import { anchorName } from './mark-labels'
+import { anchorWords } from '../../shared/mark-summary'
 import type { RecordPlacement } from '../popover'
 import { recordStyle } from './placement'
 import { TOOL_COPY } from './tokens'
@@ -177,8 +177,11 @@ export function MarkList(props: MarkListProps): ReactNode {
               <span className="da-mark-title">
                 {mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail : t('emptyDetail')}
               </span>
-              {anchorName(mark) === '' ? null : (
-                <span className="da-mark-meta">{anchorName(mark)}</span>
+              {/* The same words the message names the element with — a title or a
+                  short text, never an id: a row that printed `axes_1`'s whole label
+                  soup said less than the one line it had room for. */}
+              {mark.anchor === undefined || anchorWords(mark.anchor) === '' ? null : (
+                <span className="da-mark-meta">{anchorWords(mark.anchor)}</span>
               )}
             </button>
             {/* The page at the end of the row, where a list puts the number that
