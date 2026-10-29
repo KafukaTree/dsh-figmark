@@ -1186,11 +1186,29 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   // --- export and delivery --------------------------------------------------
 
-  const exportPng = useCallback(async (target: FigureLayer): Promise<Blob> => {
+  /**
+   * Rasterize the picture the message is about.
+   *
+   * The marks handed in are the ones being sent, not the ones on the panel. Those are
+   * the same thing for a whole-figure hand-off and deliberately not the same for a
+   * one-mark one: a picture of the whole surface shipped beside a message naming one
+   * mark handed the agent a record containing marks the reader had left behind, and
+   * numbered from the picture's own order while the prose numbered from the document's
+   * — so the two disagreed about which mark was which.
+   * @param target - the figure layer to place under the marks.
+   * @param sending - the marks this picture is about.
+   * @param numbering - each mark's number in the document the reader is reading.
+   * @returns the PNG bytes.
+   */
+  const exportPng = useCallback(async (
+    target: FigureLayer,
+    sending: readonly AnnotationMark[] = marks,
+    numbering?: ReadonlyMap<string, number>,
+  ): Promise<Blob> => {
     // The picture carries the numbers as the reader sized them: the agent reads the
     // same number the reader did, at the same place on the same shape.
-    const svg = composeReviewSvg(target, marks)
-    const paper = reviewSize(target, marks)
+    const svg = composeReviewSvg(target, sending, numbering)
+    const paper = reviewSize(target, sending)
     const exportScale = Math.min(2, Math.max(1, 2400 / Math.max(paper.width, paper.height)))
     return await rasterizePng(svg, paper.width, paper.height, exportScale)
   }, [marks])
@@ -1347,7 +1365,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // A picture is only needed when the marks claim an extent. A figure whose
       // marks are all points carries its whole meaning in the numbered list, and a
       // rendered document cannot be flattened at all — both travel as text.
-      const review = layer === null || !needsReviewImage(document_) ? undefined : await exportPng(layer)
+      const review = layer === null || !needsReviewImage(document_)
+        ? undefined
+        // Numbered from the scope's own order, which is the order the message numbers
+        // it in: the picture says ① next to the shape the prose calls ①.
+        : await exportPng(layer, scope)
       const saved = await saveAnnotation(address, document_, review)
       // The delivered document is what is on disk now; a pending draft write would
       // only repeat it (or, worse, race the delete that follows the hand-off).
@@ -1829,6 +1851,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             width={paper.width}
             height={paper.height}
             origin={[-paper.x, -paper.y]}
+            // The pen is the figure's, not the paper's: a mark drawn past the edge
+            // grows the paper, and a pen that grew with it drew thicker than the
+            // picture the agent receives.
+            figureSize={size}
             marks={marks}
             tool={tool}
             color={color}

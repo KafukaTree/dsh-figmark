@@ -394,38 +394,50 @@ export function markOutline(mark: AnnotationMark, unit = 1): MarkBox | undefined
   if (straight === undefined) return undefined
   // A turned mark covers the box its corners sweep, which is not the box the points
   // came in with; only the drawn extent says where the mark really reaches.
+  //
+  // Measured by turning the *corners of the box*, not the points: the extent of a
+  // turned rectangle is not the extent of a turned diagonal. Re-bounding two turned
+  // points measured a line segment, so a turned rect at 45° reported a box 12px wide
+  // where it really swept 233px — the paper never grew for it, its corner was clipped
+  // by the viewBox in the panel and in the export, and its comment pill was placed
+  // from a box far too narrow.
   const radians = markRadians(mark)
-  const box = radians === 0 ? straight : turnedBox(geometry, straight, radians)
+  const box = radians === 0 ? straight : turnedBox(straight, radians)
   const grow = strokeWidthOf(mark, unit) / 2
   return { x: box.x - grow, y: box.y - grow, width: box.width + grow * 2, height: box.height + grow * 2 }
 }
 
 /**
- * The box points cover once they are turned, as a mark's rotation turns them.
+ * The box a box covers once it is turned, as a mark's rotation turns it.
  *
- * The centre they turn around is their own box's, which is also the centre the
- * control frame puts its rotation handle at, so the frame and the drawing agree about
- * where a turned mark sits.
+ * The centre it turns around is the box's own, which is also the centre the control
+ * frame puts its rotation handle at, so the frame and the drawing agree about where a
+ * turned mark sits. All four corners are turned rather than the shape's own points:
+ * what a turned rectangle sweeps is bounded by its corners, and two opposite corners
+ * only ever describe a diagonal.
  *
- * @param points - the points to turn.
- * @param box - the box the points cover, whose centre they turn around.
+ * @param box - the upright box to turn.
  * @param radians - clockwise angle in radians.
- * @returns the box the turned points cover.
+ * @returns the box the turned corners cover.
  */
-function turnedBox(points: readonly FigurePoint[], box: MarkBox, radians: number): MarkBox {
+function turnedBox(box: MarkBox, radians: number): MarkBox {
   const cos = Math.cos(radians)
   const sin = Math.sin(radians)
   const centreX = box.x + box.width / 2
   const centreY = box.y + box.height / 2
-  const turned = points.map((point) => {
-    const dx = point[0] - centreX
-    const dy = point[1] - centreY
+  const corners: readonly FigurePoint[] = [
+    [box.x, box.y],
+    [box.x + box.width, box.y],
+    [box.x + box.width, box.y + box.height],
+    [box.x, box.y + box.height],
+  ]
+  const turned = corners.map((corner) => {
+    const dx = corner[0] - centreX
+    const dy = corner[1] - centreY
     return [centreX + dx * cos - dy * sin, centreY + dx * sin + dy * cos] as FigurePoint
   })
-  // The turned run is as long as the original and the caller only asks once it knows
-  // the original is not empty, so there is always a box to return.
   const first = turned[0]
-  /* v8 ignore next -- reached only for an empty run, which the caller has excluded. */
+  /* v8 ignore next -- the four corners above are never an empty run. */
   if (first === undefined) return box
   let left = first[0]
   let right = first[0]

@@ -41,11 +41,16 @@ export function Canvas(props: CanvasProps): ReactNode {
   /**
    * How big everything is drawn here, as a multiple of the base sizes.
    *
-   * Derived from the surface rather than passed in: every mark on this canvas shares
-   * one figure, so one number decides the pen for all of them, and a caller that
-   * forgot to thread it through could not make a mark disagree with its hit area.
+   * Measured from the *figure*, not from the paper this surface draws on: the paper
+   * grows to hold a mark drawn past the figure's edge, and a pen sized from the grown
+   * paper got thicker for it. The exported picture was always sized from the figure,
+   * so sizing from the paper meant the panel and the record of what the reader
+   * approved drew the same mark at different weights. Omitted `figureSize` is the
+   * ordinary case where nothing grew the paper and the two sizes are one.
    */
-  const unit = figureUnit(width, height)
+  const drawnWidth = props.figureSize?.width ?? width
+  const drawnHeight = props.figureSize?.height ?? height
+  const unit = figureUnit(drawnWidth, drawnHeight)
   const gesture = useCanvasGesture(props, { width, height, originX, originY })
   const { handlers } = gesture
 

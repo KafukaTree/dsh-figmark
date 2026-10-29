@@ -33,6 +33,7 @@ interface MountOptions {
   readonly origin?: FigurePoint
   readonly width?: number
   readonly height?: number
+  readonly figureSize?: { readonly width: number; readonly height: number }
 }
 
 /** Render the surface over a stubbed viewport. */
@@ -56,6 +57,7 @@ function mount(options: MountOptions): {
         {...(options.origin === undefined ? {} : { origin: options.origin })}
         width={options.width ?? 400}
         height={options.height ?? 300}
+        {...(options.figureSize === undefined ? {} : { figureSize: options.figureSize })}
         marks={options.marks ?? []}
         tool={options.tool}
         color="#e03131"
@@ -1239,6 +1241,24 @@ describe('a mark drawn past the edge of the figure', () => {
     const group = defined(mounted.svg.querySelector('g[transform]'))
     expect(group.getAttribute('transform')).toBe('translate(20 30)')
     expect(defined(mounted.svg).getAttribute('style')).toBeNull()
+  })
+
+  it('keeps the pen the figure sized it to, when the paper grows', () => {
+    // The paper grows to hold a mark drawn past the edge; the pen must not grow with
+    // it. Sized from the paper, an 800×600 plot with one rectangle out at x≈1980 drew
+    // its strokes 2.5× thicker than the same mark in the exported picture — the panel
+    // and the record of what the reader approved disagreeing about one figure's pen.
+    mounted = mount({
+      tool: 'select',
+      width: 1993,
+      height: 600,
+      figureSize: { width: 800, height: 600 },
+      marks: [{ id: 'm', kind: 'arrow', color: '#e03131', points: [[10, 10], [200, 100]] }],
+    })
+    const stroke = defined(mounted.svg.querySelector('path[stroke="#e03131"]'))
+    // unit is the figure's (800 / 800 = 1), so the default-weight stroke is exactly
+    // the base width rather than 2.49 times it.
+    expect(stroke.getAttribute('stroke-width')).toBe('2.5')
   })
 
   it('reads a press in figure coordinates even with the paper grown', () => {

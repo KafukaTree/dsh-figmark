@@ -1521,6 +1521,28 @@ disk and the panel were allowed to disagree.
   counter as well as the pid and clock, so two saves started in the same
   millisecond cannot take the same scratch name.
 
+### The delivered picture
+
+The five below are one finding in different clothes: the picture the agent receives
+was allowed to differ from the picture the reader approved. Each is a place where
+the export path took a different route to a number the panel already had.
+
+- **11.** The pen was sized from the paper in the panel and from the figure in the
+  export, so a mark that grew the paper was drawn thicker on screen than in the
+  record of it. `Canvas` now takes the figure's own size (`figureSize`) and measures
+  the pen from that, which is the number the export always used.
+- **23.** A pill hand-off rasterized every mark on the surface and shipped that
+  beside a message naming one. `exportPng` now takes the marks it is drawing, and
+  `run()` passes it the scope it is sending.
+- **27.** `markSvg` drew `markPathData`, which knows nothing about rotation, so a
+  turned mark arrived axis-aligned on paper measured for the turned shape. It now
+  wraps the stroke in `markTransform`, the same function the overlay uses.
+- **28.** `markOutline` turned the mark's own two points and re-bounded them, which
+  measures a diagonal rather than a swept box. `turnedBox` now turns all four
+  corners of the upright box.
+- **34.** The delivered pin was one stroke at `2 × unit`, matching neither the
+  panel's `4.5 × unit` disc nor its `1.5 × unit` body. It now draws both.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.

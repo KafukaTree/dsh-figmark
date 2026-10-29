@@ -114,6 +114,23 @@ describe('mark geometry', () => {
     expect(penOutline.x).toBeLessThan(0)
   })
 
+  it('measures a turned box by the corners it sweeps, not by a turned diagonal', () => {
+    // The extent of a rotated rectangle is not the extent of a rotated diagonal.
+    // Re-bounding two turned points measured a line: this rect reported a box 12.1px
+    // wide where it really swept 233.3px, so the paper never grew for it, its corner
+    // was clipped by the viewBox in the panel and in the export, and its comment pill
+    // was placed from a box far too narrow.
+    const turned: AnnotationMark = {
+      id: 't', kind: 'rect', color: '#000', points: [[620, 220], [790, 380]], rotation: 45,
+    }
+    const box = defined(markOutline(turned))
+    // 170×160 turned 45° sweeps 233.3 in both directions, minus half a stroke's growth.
+    expect(box.width).toBeCloseTo(233.3 + STROKE_WIDTH, 1)
+    expect(box.height).toBeCloseTo(233.3 + STROKE_WIDTH, 1)
+    // The drawn corners reach x = 821.7; the outline has to contain them.
+    expect(box.x + box.width).toBeGreaterThan(821.7)
+  })
+
   it('measures a point mark by the pin standing on it', () => {
     const point: AnnotationMark = { id: 'p', kind: 'point', color: '#000', points: [[40, 60]] }
     // A point has no extent of its own, so its outline is its pin's.
@@ -345,6 +362,37 @@ describe('review image', () => {
     )
     expect(svg).toContain('stroke="#ffffff"')
     expect(svg).toContain('stroke="#e03131"')
+  })
+
+  it('stands a pin on the same two strokes the panel draws it with', () => {
+    // The pin's white disc is what separates it from dark line work. The picture used
+    // to draw one stroke at 2× the figure unit — a number that matched neither the
+    // disc's 4.5 nor the body's 1.5 — so on a dense figure the delivered pins were
+    // thinner than the ones the reader approved, and harder to find.
+    const svg = composeReviewSvg(
+      // A reference-edge figure, so the unit is exactly 1 and the numbers in the
+      // markup are the constants themselves rather than a multiple of them.
+      { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 800, height: 800 },
+      [{ id: 'p', kind: 'point', color: '#e03131', points: [[400, 400]] }],
+    )
+    expect(svg).toContain('stroke-width="4.5"')
+    expect(svg).toContain('stroke-width="1.5"')
+    expect(svg).not.toContain('stroke-width="2"')
+  })
+
+  it('turns a mark the way the panel turns it', () => {
+    // `markPathData` knows nothing about rotation, and the paper is measured with the
+    // turn applied. Without the transform the reader approved a tilted box and the
+    // agent was handed an axis-aligned one on a sheet sized for the turned shape,
+    // with prose beside it saying "(rotated 45°)".
+    const turned: AnnotationMark = {
+      id: 'r', kind: 'rect', color: '#e03131', points: [[100, 100], [300, 200]], rotation: 45,
+    }
+    const svg = composeReviewSvg(
+      { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
+      [turned],
+    )
+    expect(svg).toContain('transform="rotate(45 200 150)"')
   })
 
   it('inlines a vector layer that declares no viewBox', () => {

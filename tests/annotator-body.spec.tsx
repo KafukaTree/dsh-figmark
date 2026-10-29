@@ -15,6 +15,7 @@ import { PINCH_SETTLE_DELAY_MS } from '../src/client/zoom'
 import { readPreferences } from '../src/client/preferences'
 import { STROKE_WIDTH } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
+import { reviewSize } from '../src/client/export'
 import { STYLES } from '../src/client/styles'
 import { defined, stubRasterizer, stubRect } from './dom'
 
@@ -325,6 +326,30 @@ async function openStyle(host: HTMLElement): Promise<void> {
  * The surface opens on `select`, so the arrow tool is armed first — the reader can no
  * longer draw by dragging until they have said they want to.
  */
+/**
+ * Draw one arrow between two points of the surface.
+ *
+ * `drawArrow` always draws the same arrow, which is fine for "there is a mark" and
+ * useless for telling a picture of one mark from a picture of two: the two have to
+ * land in different places for their combined extent to differ.
+ * @param host - the panel.
+ * @param from - where the press starts, in surface pixels.
+ * @param to - where it ends.
+ */
+async function drawArrowAt(host: HTMLElement, from: readonly [number, number], to: readonly [number, number]): Promise<void> {
+  await click(button(host, zh.toolArrow))
+  const overlay = defined(host.querySelector('svg.da-overlay')) as SVGSVGElement
+  stubRect(overlay, { left: 0, top: 0, width: 200, height: 100 })
+  for (const [type, x, y] of [['pointerdown', from[0], from[1]], ['pointermove', to[0], to[1]], ['pointerup', to[0], to[1]]] as const) {
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y }))
+    })
+  }
+  await act(async () => {
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: to[0], clientY: to[1] }))
+  })
+}
+
 async function drawArrow(host: HTMLElement): Promise<void> {
   await click(button(host, zh.toolArrow))
   const overlay = defined(host.querySelector('svg.da-overlay')) as SVGSVGElement
@@ -2006,6 +2031,50 @@ describe('the hand-off inside the comment', () => {
     const body = JSON.stringify(postBody(sent))
     expect(body).toContain('第二条')
     expect(body).not.toContain('第一条')
+  })
+
+  it('pictures only the mark it is sending, not the whole surface', async () => {
+    // The picture is the record of what was sent. Rasterizing every mark on the panel
+    // handed the agent a record containing marks the reader had deliberately left
+    // behind — and numbered from the picture's own order while the prose numbered from
+    // the document's, so the two disagreed about which mark was which.
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { sessions })
+    mounted = result
+    // Two arrows at different places, so a picture of both is measurably bigger than a
+    // picture of one: the second reaches further right and further down.
+    await drawArrowAt(result.host, [20, 20], [120, 80])
+    await type(detailBox(result.host), '第一条')
+    await drawArrowAt(result.host, [140, 30], [300, 160])
+    await type(detailBox(result.host), '第二条')
+    const raster = stubRasterizer()
+    await click(defined(result.host.querySelector('.da-comment-send-primary')))
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const sent = defined(postBody(defined(writes[writes.length - 1]))['annotation'] as AnnotationDocument | undefined)
+    const sentMarks = sent.marks
+    const figure = {
+      width: defined(sent.figure.width),
+      height: defined(sent.figure.height),
+    }
+    // The document carried one mark, not the two on the panel.
+    expect(sentMarks).toHaveLength(1)
+    // And the picture was drawn on paper sized from exactly those marks, which is the
+    // second one — the one the pill belonged to, out at x=300.
+    const layer = { kind: 'raster' as const, dataUrl: '', width: figure.width, height: figure.height }
+    const one = reviewSize(layer, sentMarks)
+    // A mark set that reaches further than the sent one, so this assertion can tell
+    // the two apart rather than passing on any surface at all.
+    const wider = reviewSize(layer, [
+      ...sentMarks,
+      { id: 'outside', kind: 'arrow', color: '#e03131', points: [[0, 0], [figure.width + 200, figure.height]] },
+    ])
+    const scale = Math.min(2, Math.max(1, 2400 / Math.max(one.width, one.height)))
+    expect(defined(raster.canvasSizes[0])).toEqual({
+      width: Math.max(1, Math.round(one.width * scale)),
+      height: Math.max(1, Math.round(one.height * scale)),
+    })
+    // A picture of anything reaching further would have come out wider than that.
+    expect(wider.width).toBeGreaterThan(one.width)
   })
 })
 

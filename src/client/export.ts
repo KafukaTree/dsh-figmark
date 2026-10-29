@@ -10,7 +10,7 @@
 import type { AnnotationMark } from '../shared/annotation'
 import {
   PIN_FONT_FAMILY, PIN_NUMBER_COLOR, pinFontSizeOf, strokeWidthOf,
-  markPathData, pinNumberCentre, pinPathData,
+  markPathData, markTransform, pinNumberCentre, pinPathData,
 } from './render'
 import { figureUnit } from './scale'
 import { lightMarkup } from './spotlight'
@@ -54,11 +54,19 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
   const path = markPathData(mark, unit)
   const parts: string[] = []
   if (path !== undefined) {
+    // Turned here exactly as the overlay turns it. `markPathData` knows nothing about
+    // rotation, so without this the reader approved a tilted box and the agent was
+    // shown an axis-aligned one on paper measured for the turned shape — while the
+    // message beside it said "(rotated 45°)".
+    const transform = markTransform(mark)
+    const open = transform === undefined ? '' : `<g transform="${transform}">`
     parts.push(
+      open,
       `<path d="${path}" fill="none" stroke="#ffffff" stroke-width="${strokeWidthOf(mark, unit) + 2.5 * unit}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
       `<path d="${path}" fill="none" stroke="${mark.color}" stroke-width="${strokeWidthOf(mark, unit)}"`
       + ' stroke-linecap="round" stroke-linejoin="round"/>',
+      transform === undefined ? '' : '</g>',
     )
   }
   // A point mark has no stroke: it is the marker standing on its one coordinate.
@@ -67,7 +75,14 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
   const pin = mark.kind === 'point' ? pinPathData(mark, unit) : undefined
   const centre = mark.kind === 'point' ? pinNumberCentre(mark, unit) : undefined
   if (pin !== undefined && centre !== undefined) {
-    parts.push(`<path d="${pin}" fill="${mark.color}" stroke="#ffffff" stroke-width="${2 * unit}" stroke-linejoin="round"/>`)
+    // The same two strokes the overlay draws: a white disc under the pin so it reads
+    // over dark line work, then the body. One stroke at 2×unit matched neither
+    // constant, so the pins on the picture the agent got were thinner and blended
+    // into the artwork they were standing on.
+    parts.push(
+      `<path d="${pin}" fill="#ffffff" stroke="#ffffff" stroke-width="${4.5 * unit}" stroke-linejoin="round"/>`,
+      `<path d="${pin}" fill="${mark.color}" stroke="#ffffff" stroke-width="${1.5 * unit}" stroke-linejoin="round"/>`,
+    )
     if (number !== undefined) {
       parts.push(
         `<text x="${centre[0]}" y="${centre[1]}" font-family="${PIN_FONT_FAMILY}"`

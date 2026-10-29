@@ -80,6 +80,17 @@ export interface CanvasProps {
   /** Height of the paper, in figure pixels. */
   readonly height: number
   /**
+   * The figure's own size, which decides how thick one pen stroke is.
+   *
+   * The paper and the figure are two different sizes the moment a mark reaches past
+   * the figure's edge: the paper has to grow to hold the mark, and the pen must not
+   * grow with it. Sized from the paper, an 800×600 plot with one rectangle out at
+   * x≈1980 got a pen 2.5× thicker than the same mark got in the exported picture —
+   * the two disagreed about a number that is supposed to be one figure's. Omitted
+   * means the paper *is* the figure, which is the case whenever no mark grew it.
+   */
+  readonly figureSize?: { readonly width: number; readonly height: number } | undefined
+  /**
    * Where figure coordinate `(0, 0)` sits on this paper.
    *
    * A mark drawn past the figure's top-left edge needs paper to sit on, so the
