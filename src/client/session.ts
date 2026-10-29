@@ -154,7 +154,7 @@ interface AttachInput {
  *
  * @param input - the upload seats, the parts being built, and the file.
  */
-async function attachFile(input: AttachInput): Promise<void> {
+async function attachFile(input: AttachInput): Promise<boolean> {
   const { zh } = input
   const { noun } = input.attachment
   const fileUpload = input.fileUpload
@@ -162,23 +162,25 @@ async function attachFile(input: AttachInput): Promise<void> {
     input.warnings.push(zh
       ? `本次组合没有附件服务，${noun.zh}未随消息发送。`
       : `This composition has no upload service, so the ${noun.en} was not attached.`)
-    return
+    return false
   }
   if (input.session?.address !== undefined) {
     input.warnings.push(zh
       ? `当前会话是子会话，不接受文件附件，${noun.zh}未随消息发送。`
       : `This session is a subagent continuation and takes no file attachments, so the ${noun.en} was not attached.`)
-    return
+    return false
   }
   try {
     const uploaded = await fileUpload.upload(input.sessionId, input.attachment.bytes, input.attachment.name)
     if (!uploaded.ok) throw new Error(uploaded.error.message ?? 'the upload was refused')
     input.content.push({ type: 'file', attachment: uploaded.value.file })
+    return true
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     input.warnings.push(zh
       ? `${noun.zh}未能随消息发送：${reason}`
       : `The ${noun.en} was not attached: ${reason}`)
+    return false
   }
 }
 
@@ -194,13 +196,14 @@ async function attachAnnotatedPdf(
   session: SessionFaceLike | undefined,
   content: unknown[],
   warnings: string[],
-): Promise<void> {
-  const bytes = input.annotatedPdf
-  if (bytes === undefined) return
+): Promise<boolean> {
+  // Present by the caller's own check, which needs the answer before it can decide
+  // whether the message says a PDF travelled.
+  const bytes = input.annotatedPdf as Uint8Array
   const name = input.paths.reviewPath === null
     ? `${baseNameOf(input.document.figure.path)}.annotated.pdf`
     : baseNameOf(input.paths.reviewPath)
-  await attachFile({
+  return await attachFile({
     fileUpload: input.fileUpload,
     session,
     sessionId: input.sessionId,
@@ -248,7 +251,10 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
   const content: unknown[] = []
   const live = input.sessions.scope(input.sessionId)
   const session = live === undefined ? undefined : input.sessions.sessionOf(live)
-  await attachAnnotatedPdf(input, session, content, warnings)
+  // The message says whether the PDF travels with it, so the attachment is attempted
+  // before the text is composed. The paths only say what the Host wrote to disk.
+  const pdfAttached = input.annotatedPdf === undefined
+    || await attachAnnotatedPdf(input, session, content, warnings)
   const shown = input.pageImages.slice(0, MAX_PAGE_IMAGES)
   const paged = input.document.figure.pageCount !== undefined
   for (const entry of shown) {
@@ -263,7 +269,7 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
     const hidden = input.pageImages.length - shown.length
     warnings.push(zh ? `另有 ${hidden} 页标注未附图，请看带批注 PDF。` : `${hidden} more annotated pages are not attached as images; see the annotated PDF.`)
   }
-  content.push({ type: 'text', text: buildAnnotationMessage(input.document, input.paths, input.locale) })
+  content.push({ type: 'text', text: buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached) })
   await promptSession(input.sessions, input.sessionId, session, content, 'the session refused the annotation message')
   return warnings
 }
@@ -308,8 +314,12 @@ export async function deliverEdit(input: EditDeliveryInput): Promise<readonly st
   const live = input.sessions.scope(input.sessionId)
   const session = live === undefined ? undefined : input.sessions.sessionOf(live)
   const fitted = fitDiff(input.documentPath, input.diff)
+  // Asked before the text is composed, because the message says whether a copy travels
+  // with it: a sentence written first and contradicted by a warning afterwards leaves
+  // the agent hunting an attachment that is not there.
+  let attached = false
   if (fitted.hidden > 0) {
-    await attachFile({
+    attached = await attachFile({
       fileUpload: input.fileUpload,
       session,
       sessionId: input.sessionId,
@@ -331,6 +341,7 @@ export async function deliverEdit(input: EditDeliveryInput): Promise<readonly st
       fitted,
       notes: input.notes,
       stale: input.stale,
+      attached,
       locale: input.locale,
     }),
   })

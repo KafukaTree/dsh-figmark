@@ -1607,6 +1607,23 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### What the message promises
+
+- **42.** The edit message told the agent "完整结果见随本消息发送的
+  `notes.md.edited.md`" whenever more hunks were hidden than the cap allows — a
+  sentence decided from `fitted.hidden > 0` alone. Whether a file part travels is
+  decided later by `attachFile`, which declines silently in three cases (no upload
+  service, a subagent continuation, a refused upload) and reports them only to the
+  reader's status line. So the agent was pointed at an attachment that was not there,
+  and the hidden hunks had no instructions at all. The attachment is now attempted
+  before the text is composed, and `buildEditMessage` is told whether it travelled;
+  when it did not, the message says so and sends the agent back to the diff. The
+  neighbouring `buildAnnotationMessage` had the same shape — `paths.reviewPath !== null`
+  is a fact about what the Host wrote to disk, not about what the session accepted —
+  and takes the same answer now.
+  `tests/session.spec.ts` › "says the copy did not travel, rather than pointing at a
+  file that is not there".
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code

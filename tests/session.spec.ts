@@ -258,6 +258,24 @@ describe('a document that has pages', () => {
     expect(warnings).toEqual(['另有 2 页标注未附图，请看带批注 PDF。'])
   })
 
+  it('names the PDF after the figure when the Host wrote no review path', async () => {
+    // The save decides where the artifact goes, and a save that reported no review path
+    // still produced bytes: the attachment has to be named from the figure rather than
+    // reading a path that is not there.
+    const upload = stubUpload()
+    const stub = stubSessions()
+    await deliverAnnotation({
+      ...delivery(),
+      sessions: stub.sessions,
+      fileUpload: upload.fileUpload,
+      document: pagedDocument,
+      paths: { annotationPath: '/w/report.pdf.annot.json', reviewPath: null },
+      annotatedPdf: new Uint8Array([1, 2]),
+      pageImages: [],
+    })
+    expect(upload.uploads[0]?.name).toBe('report.pdf.annotated.pdf')
+  })
+
   it('warns instead of failing when the composition has no upload service', async () => {
     const stub = stubSessions()
     const warnings = await deliverAnnotation({
@@ -513,13 +531,13 @@ describe('the edit message the agent reads', () => {
   it('names the document, its hunk count, and both line counts', () => {
     const diff = editedDiff()
     const fitted = fitDiff('/w/docs/report.md', diff)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'zh' })
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' })
     expect(zh).toContain('【文档修改建议】/w/docs/report.md（Markdown，改动 1 处，+1 −1 行）')
     expect(zh).toContain('```diff')
     expect(zh).toContain('-b')
     expect(zh).toContain('+B')
     expect(zh).toContain('没有落盘')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'en' })
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' })
     expect(en).toContain('[document edits] /w/docs/report.md (Markdown, 1 hunks, +1 -1 lines)')
     expect(en).toContain('did **not** write them to disk')
   })
@@ -527,29 +545,44 @@ describe('the edit message the agent reads', () => {
   it('warns that the loaded version moved while the reader was editing', () => {
     const diff = editedDiff()
     const fitted = fitDiff('/w/docs/report.md', diff)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, locale: 'zh' })
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, attached: true, locale: 'zh' })
     expect(zh).toContain('文件在编辑期间被改动过')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, locale: 'en' })
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, attached: true, locale: 'en' })
     expect(en).toContain('the file changed while it was being edited')
   })
 
   it('names the attachment when the message could not carry every hunk', () => {
     const diff = wideDiff()
     const fitted = fitDiff('/w/docs/report.md', diff, 20)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'zh' })
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' })
     expect(zh).toContain(`另有 ${fitted.hidden} 处改动未在本消息里展开`)
     expect(zh).toContain('report.md.edited.md')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'en' })
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' })
     expect(en).toContain(`${fitted.hidden} more hunks are not expanded here`)
     expect(en).toContain('report.md.edited.md')
+  })
+
+  it('says the copy did not travel, rather than pointing at a file that is not there', () => {
+    // The message is composed before anyone knows whether this session takes a file
+    // part. Telling the agent to read the attachment when the upload was declined left
+    // the hidden hunks with no instructions at all — the diff is capped, the copy never
+    // arrived, and the only place that knew was the reader's status line.
+    const diff = wideDiff()
+    const fitted = fitDiff('/w/docs/report.md', diff, 20)
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: false, locale: 'zh' })
+    expect(zh).toContain(`另有 ${fitted.hidden} 处改动未展开`)
+    expect(zh).not.toContain('随本消息发送的 report.md.edited.md')
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: false, locale: 'en' })
+    expect(en).not.toContain('is attached as report.md.edited.md')
+    expect(en).toContain('could not be attached')
   })
 
   it('says a difference too large for the exact algorithm reads as one block', () => {
     const diff = { ...editedDiff(), coarse: true }
     const fitted = fitDiff('/w/docs/report.md', diff)
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'zh' }))
+    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' }))
       .toContain('diff 以整块替换呈现')
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'en' }))
+    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' }))
       .toContain('reads as one replacement block')
   })
 })
@@ -757,16 +790,16 @@ describe('the notes a reader attaches to a change', () => {
     const diff = diffLines('a\nb\nc', 'a\nB\nc')
     const fitted = fitDiff('/w/docs/report.md', diff)
     const key = hunkKey(defined(diff.hunks[0]))
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: '参数要留空' }, stale: false, locale: 'zh' })
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: '参数要留空' }, stale: false, attached: true, locale: 'zh' })
     expect(zh).toContain('改动 1 处，+1 −1 行，说明 1 条')
     expect(zh).toContain('我的说明：')
     expect(zh).toContain('1. 第 2 行（@@ -1,3 +1,3 @@）：参数要留空')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: 'leave it empty' }, stale: false, locale: 'en' })
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: 'leave it empty' }, stale: false, attached: true, locale: 'en' })
     expect(en).toContain('1 hunks, +1 -1 lines, 1 notes')
     expect(en).toContain('My notes:')
     expect(en).toContain('1. line 2 (@@ -1,3 +1,3 @@): leave it empty')
     // No notes, no section: the message stays as short as it was.
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'zh' }))
+    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' }))
       .not.toContain('我的说明')
   })
 

@@ -31,12 +31,19 @@ export type DeliveredPaths = SidecarWriteResult
  * @param document - the saved document.
  * @param paths - sidecar paths the Host wrote.
  * @param locale - message language.
+ * @param attachment - whether the review artifact actually travels with the message.
+ *   The paths say what the *Host wrote to disk*; whether the session accepted the file
+ *   part is a different fact, known only once the attachment has been attempted. The
+ *   message is composed after that attempt so its one sentence about the attachment can
+ *   be true. Defaults to "it travelled", for the callers that build a message from paths
+ *   alone.
  * @returns the message text.
  */
 export function buildAnnotationMessage(
   document: AnnotationDocument,
   paths: DeliveredPaths,
   locale: SummaryLocale,
+  attachment = true,
 ): string {
   // The paths themselves are never printed: the sidecars are deleted once the
   // annotation has been delivered, so a path in the message would be a dead
@@ -69,11 +76,12 @@ export function buildAnnotationMessage(
     ? `${kind}${figure.path}（${scope === '' ? '' : `${scope}，`}${size}${marked}标注 ${marks.length} 处）`
     : `${kind} ${figure.path} (${scope === '' ? '' : `${scope}, `}${size}${marked}${marks.length} marks)`
   const paged = figure.pageCount !== undefined
-  // A written review artifact is the evidence that a picture travels with this
-  // message: the save names it, so a message that claims an attachment cannot be
-  // describing one the Host declined to write.
-  const pictured = paths.reviewPath !== null
-  const attachment = !pictured
+  // A written review artifact is the first half of the evidence that a picture travels
+  // with this message: the Host writes it, and the session then has to accept the file
+  // part. Both have to be true, or the message would be naming an attachment the agent
+  // cannot find.
+  const pictured = paths.reviewPath !== null && attachment
+  const attachmentLines = !pictured
     ? []
     : [paged
       ? (zh ? '带批注 PDF 已作为本条消息的附件发送，可直接在阅读器里核对。' : 'The annotated PDF is attached to this message; you can check it in any reader.')
@@ -97,5 +105,5 @@ export function buildAnnotationMessage(
     : paged
       ? (zh ? '逐条处理该 PDF。' : 'Work through the PDF, mark by mark.')
       : (zh ? '逐条改生成源。' : 'Edit the generating source, mark by mark.')
-  return [header, ...attachment, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closer].join('\n')
+  return [header, ...attachmentLines, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closer].join('\n')
 }

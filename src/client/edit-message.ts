@@ -66,6 +66,17 @@ export interface EditMessageInput {
   readonly notes: Readonly<Record<number, string>>
   /** Whether the loaded baseline moved while the reader was editing. */
   readonly stale: boolean
+  /**
+   * Whether the copy of the edited file actually travels with this message.
+   *
+   * Asked of the delivery rather than assumed from the diff: the copy is attached
+   * before the text is composed, because whether this session takes a file part is a
+   * fact about the session (no upload service, a subagent continuation, a refused
+   * upload) and not about the diff. Deciding it from `fitted.hidden > 0` alone told the
+   * agent to read an attachment that was never there, and the only place that knew
+   * otherwise was the reader's status line.
+   */
+  readonly attached: boolean
   /** Message language. */
   readonly locale: SummaryLocale
 }
@@ -152,9 +163,16 @@ export function buildEditMessage(input: EditMessageInput): string {
   }
   if (fitted.hidden > 0) {
     const name = `${baseNameOf(input.documentPath)}.edited.md`
-    warnings.push(zh
-      ? `另有 ${fitted.hidden} 处改动未在本消息里展开，完整结果见随本消息发送的 ${name}。`
-      : `${fitted.hidden} more hunks are not expanded here; the complete result is attached as ${name}.`)
+    // Only the branch that is true: the agent acts on this sentence, and a file it was
+    // told to consult but cannot find leaves the hidden hunks with no instructions at
+    // all. When the copy did not travel, the message says the diff is what there is.
+    warnings.push(input.attached
+      ? (zh
+        ? `另有 ${fitted.hidden} 处改动未在本消息里展开，完整结果见随本消息发送的 ${name}。`
+        : `${fitted.hidden} more hunks are not expanded here; the complete result is attached as ${name}.`)
+      : (zh
+        ? `另有 ${fitted.hidden} 处改动未展开，本消息也未能附上 ${name}：请按上面这段 diff 处理，未展开的改动需要我另行提供。`
+        : `${fitted.hidden} more hunks are not expanded here, and ${name} could not be attached: work from the diff above; I will have to supply the rest another way.`))
   }
   const closing = zh
     ? '我已在文档预览里改好，但**没有落盘**：请把这段 diff 应用到源文件，或据此复核我的改动；diff 之外的部分不要动，改完逐处回应。'
