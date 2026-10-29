@@ -58,14 +58,52 @@ describe('an unchanged text', () => {
     expect(diffLines('a\nb\n', 'a\nb\n')).toEqual(EMPTY_DIFF)
   })
 
-  it('reports a difference a line diff cannot show, and leaves the hunks empty', () => {
-    // The texts differ, but only in the newline no line carries: the caller has
-    // to say so rather than showing an empty diff as "no change".
+  it('spells a difference in the final newline as the change it is', () => {
+    // The line lists are identical but the texts are not, so the difference is the
+    // terminator. Reporting `changed: true` with no hunk left every consumer to defend
+    // against it separately — the header said "改动 0 处 · +0 −0 行", the diff view
+    // showed nothing, and send and copy both returned in silence. Unified diff has a
+    // way to spell this: the last line again, marked on the side that lacks it.
     const diff = diffLines('a\nb\n', 'a\nb')
     expect(diff.changed).toBe(true)
-    expect(diff.hunks).toEqual([])
-    expect(diff.added).toBe(0)
-    expect(diff.removed).toBe(0)
+    expect(diff.added).toBe(1)
+    expect(diff.removed).toBe(1)
+    expect(diff.hunks).toHaveLength(1)
+    const lines = defined(diff.hunks[0]).lines
+    expect(lines.map(line => line.kind)).toEqual(['context', 'remove', 'add'])
+    expect(lines[1]).toMatchObject({ kind: 'remove', text: 'b' })
+    expect(lines[1]?.noNewline).toBeUndefined()
+    expect(lines[2]).toMatchObject({ kind: 'add', text: 'b', noNewline: true })
+  })
+
+  it('keeps context above the final newline when the file is longer', () => {
+    // The hunk is the last line, with as much of the file above it as the context
+    // window allows — the same shape a one-line change in the middle gets.
+    const before = ['1', '2', '3', '4', '5'].join('\n') + '\n'
+    const after = ['1', '2', '3', '4', '5'].join('\n')
+    const diff = diffLines(before, after)
+    const hunk = defined(diff.hunks[0])
+    expect(hunk.lines.map(line => line.kind)).toEqual([
+      'context', 'context', 'context', 'remove', 'add',
+    ])
+    expect(hunk.oldStart).toBe(2)
+    expect(hunk.oldCount).toBe(4)
+  })
+
+  it('spells the marker in the unified diff, on the side that lacks the terminator', () => {
+    // Without the marker the diff is a removal and an addition of one and the same
+    // line, which is a change with no explanation of what the change was.
+    const text = formatUnifiedDiff('/w/notes.md', diffLines('a\nb\n', 'a\nb'))
+    // The line that lost its terminator is the newer one, so the marker follows the
+    // added line; the removed line is the one that had it.
+    expect(text).toContain('-b\n+b\n\\ No newline at end of file')
+  })
+
+  it('marks the other side when the newline was added rather than removed', () => {
+    const diff = diffLines('a\nb', 'a\nb\n')
+    const lines = defined(diff.hunks[0]).lines
+    expect(lines[1]).toMatchObject({ kind: 'remove', noNewline: true })
+    expect(lines[2]?.noNewline).toBeUndefined()
   })
 })
 

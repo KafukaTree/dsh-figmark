@@ -1607,6 +1607,22 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### The diff's own words
+
+- **61.** `diffLines` compared the two texts only after `textLines` had dropped one
+  trailing newline, so removing or adding a file's final newline left both sides with
+  the same lines: `{changed: true, hunks: [], added: 0, removed: 0}`. Every consumer
+  then had to defend against a difference with nothing in it, and none did: the toolbar
+  read "改动 0 处 · +0 −0 行", the diff view showed no hunk, all three buttons were
+  live, and send and copy both returned without setting `busy` or a status line. The
+  root was upstream of those guards — a difference object that is `changed` with no
+  hunks should not exist. It is a real difference and unified diff spells it, so the
+  last line is now removed and added again, with `\ No newline at end of file` after
+  whichever side lacks the terminator (`DiffLine.noNewline`).
+  `tests/text-diff.spec.ts` › "spells a difference in the final newline as the change it
+  is", "marks the other side when the newline was added rather than removed", "spells
+  the marker in the unified diff, on the side that lacks the terminator".
+
 ### The menu
 
 - **53.** `.da-menu` is `role="menu"` with `role="menuitem"` rows, and announced a

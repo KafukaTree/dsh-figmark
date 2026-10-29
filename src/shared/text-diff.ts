@@ -32,6 +32,15 @@ export interface DiffLine {
   readonly oldLine?: number
   /** 1-based line number in the newer text; absent on a removed line. */
   readonly newLine?: number
+  /**
+   * Whether this line has no terminator at the end of its text.
+   *
+   * Only ever set on the last line of a side that the reader has left without a
+   * final newline, and only reported when the other side has one: a unified diff
+   * spells that difference as a remove and an add of the same line, with the marker
+   * `\ No newline at end of file` after whichever one lacks the terminator.
+   */
+  readonly noNewline?: boolean
 }
 
 /** One run of changed lines with the context around it. */
@@ -81,6 +90,9 @@ export const DEFAULT_MAX_CELLS = 1_000_000
 
 /** A difference that never changes, for a body that has no edit yet. */
 export const EMPTY_DIFF: TextDiff = { hunks: [], added: 0, removed: 0, changed: false, coarse: false }
+
+/** The marker a diff puts after a line that the file does not terminate. */
+const NO_NEWLINE = '\\ No newline at end of file'
 
 /** The character a line carries in unified-diff text. */
 const SIGNS: Readonly<Record<DiffLineKind, string>> = { context: ' ', add: '+', remove: '-' }
@@ -290,13 +302,80 @@ export function diffLines(before: string, after: string, options: DiffOptions = 
   }
   for (let index = older.length - suffix; index < older.length; index += 1) equal(lineAt(older, index))
   const hunks = groupHunks(lines, context)
+  // A file whose only difference is its final newline has the same lines on both
+  // sides, so the grouping above finds no change to report — and a difference object
+  // that says `changed` with no hunks is one every consumer downstream has to defend
+  // against separately: the header read "改动 0 处 · +0 −0 行", the diff view showed
+  // nothing, and send and copy both returned in silence. It is a real difference and
+  // unified diff has a way to spell it, so it gets a hunk of its own.
+  const terminator = hunks.length === 0 ? endedWithoutNewline(before, after, older, newer, context) : null
   return {
-    hunks,
-    added: lines.filter(line => line.kind === 'add').length,
-    removed: lines.filter(line => line.kind === 'remove').length,
+    hunks: terminator === null ? hunks : [terminator],
+    added: terminator === null ? lines.filter(line => line.kind === 'add').length : 1,
+    removed: terminator === null ? lines.filter(line => line.kind === 'remove').length : 1,
     changed: true,
     coarse: exact === undefined,
   }
+}
+
+/**
+ * The hunk for a file that differs only in its final newline, or null when the two
+ * sides differ in something the line lists would have shown.
+ *
+ * Reached only when the line lists are equal and the texts are not, which is exactly
+ * the final-newline case. The last line is removed and added again — the same text on
+ * both sides — because that is how unified diff carries a terminator: the marker after
+ * the line that lacks it says which side is missing it.
+ * @param before - the older text, as the reader had it.
+ * @param after - the newer text.
+ * @param older - the older side's lines.
+ * @param newer - the newer side's lines.
+ * @param context - unchanged lines to keep above the change.
+ * @returns the one hunk, or null when there is no last line to speak of.
+ */
+function endedWithoutNewline(
+  before: string,
+  after: string,
+  older: readonly string[],
+  newer: readonly string[],
+  context: number,
+): DiffHunk | null {
+  const count = older.length
+  // An empty older side cannot reach here: with no lines on that side, every line the
+  // newer one has is a difference the line diff already found, so the hunk list would
+  // not have been empty.
+  /* v8 ignore next -- unreachable: see above. */
+  if (count === 0) return null
+  const last = count - 1
+  const first = Math.max(0, last - context)
+  const lines: DiffLine[] = []
+  for (let index = first; index < last; index += 1) {
+    lines.push({ kind: 'context', text: lineAt(older, index), oldLine: index + 1, newLine: index + 1 })
+  }
+  const olderKept = endsWithNewline(before)
+  const newerKept = endsWithNewline(after)
+  lines.push({ kind: 'remove', text: lineAt(older, last), oldLine: count, ...(olderKept ? {} : { noNewline: true }) })
+  lines.push({ kind: 'add', text: lineAt(newer, last), newLine: count, ...(newerKept ? {} : { noNewline: true }) })
+  const kept = last - first
+  return {
+    oldStart: first + 1,
+    oldCount: kept + 1,
+    newStart: first + 1,
+    newCount: kept + 1,
+    lines,
+  }
+}
+
+/**
+ * Whether a text ends with a line terminator.
+ *
+ * The one thing {@link textLines} throws away, and the only difference two texts can
+ * have while producing the same lines.
+ * @param text - the text to look at.
+ * @returns whether its last line is terminated.
+ */
+function endsWithNewline(text: string): boolean {
+  return text.endsWith('\n')
 }
 
 /**
@@ -383,7 +462,13 @@ export function formatUnifiedDiff(displayPath: string, diff: TextDiff): string {
   const lines = [`--- a/${name}`, `+++ b/${name}`]
   for (const hunk of diff.hunks) {
     lines.push(formatHunkHeader(hunk))
-    for (const line of hunk.lines) lines.push(`${SIGNS[line.kind]}${line.text}`)
+    for (const line of hunk.lines) {
+      lines.push(`${SIGNS[line.kind]}${line.text}`)
+      // Unified diff says which side is missing the terminator by marking the line
+      // itself; without it the diff reads as a removal and an addition of one and the
+      // same line, which is a change with no explanation.
+      if (line.noNewline === true) lines.push(NO_NEWLINE)
+    }
   }
   return lines.join('\n')
 }
