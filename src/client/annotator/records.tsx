@@ -10,7 +10,7 @@
  * @module dsh-figmark/client/annotator/records
  */
 import type { ReactNode } from 'react'
-import { MAX_SUMMARY_CHARS, type AnnotationMark } from '../../shared/annotation'
+import { MAX_SUMMARY_CHARS, markOrdinals, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
 import { BoxIcon, GoalIcon, ListIcon, ToolIcon } from './icons'
 import { anchorName } from './mark-labels'
@@ -123,6 +123,10 @@ export interface MarkListProps {
  */
 export function MarkList(props: MarkListProps): ReactNode {
   const { t } = props
+  // The row's number is the number the picture draws on that mark: the mark's ordinal
+  // among marks of its kind, not its position in this list. A list that counted rows
+  // was the third reader numbering the same marks a third way.
+  const numbering = markOrdinals(props.marks)
   return (
     <div className="da-float da-float-record da-float-list" role="group" aria-label={t('marks')}
       style={recordStyle(props.at)}>
@@ -148,7 +152,7 @@ export function MarkList(props: MarkListProps): ReactNode {
             <div className="da-empty-title">{t('noMarks')}</div>
             <div className="da-empty-hint">{t('noMarksHint')}</div>
           </div>
-        ) : props.marks.map((mark, index) => (
+        ) : props.marks.map(mark => (
           <div className="da-mark" key={mark.id} data-selected={mark.id === props.selectedId}
             onClick={() => { props.onReveal(mark) }}>
             {/* Two light strokes, one colour: the number and the shape are
@@ -163,7 +167,7 @@ export function MarkList(props: MarkListProps): ReactNode {
                 decode. It is neutral; the shape beside it keeps the mark's
                 colour, which is the one thing colour is actually carrying
                 here — which of the four tools drew this. */}
-            <span className="da-mark-n">{index + 1}</span>
+            <span className="da-mark-n">{numbering.get(mark.id)}</span>
             <span className="da-mark-glyph" style={{ color: mark.color }}
               title={t('markKindLabel', { kind: t(TOOL_COPY[mark.kind]) })}>
               {ToolIcon(mark.kind)}

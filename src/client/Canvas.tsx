@@ -14,6 +14,7 @@
  * @module dsh-figmark/client/Canvas
  */
 import type { ReactNode } from 'react'
+import { markOrdinals } from '../shared/annotation'
 import { figureUnit } from './scale'
 import { useCanvasGesture } from './canvas/gesture'
 import { MarkLayer } from './canvas/overlay'
@@ -31,13 +32,14 @@ export function Canvas(props: CanvasProps): ReactNode {
   const { width, height, marks, tool } = props
   const [originX, originY] = props.origin ?? [0, 0]
   /**
-   * Each mark's number, by id.
+   * Each mark's number, by id, counted inside the mark's own kind.
    *
-   * A page's marks are drawn from a slice of the document's list, so the numbers
-   * come from the document when it supplies them and from the slice's own order
-   * otherwise.
+   * A page's marks are drawn from a slice of the document's list, so the numbers come
+   * from the document when it supplies them and from the slice's own count otherwise.
+   * The document's map wins where both have the mark: a PDF page's pins have to
+   * continue the document's numbering, not restart it.
    */
-  const numbers = new Map(marks.map((mark, index) => [mark.id, props.numbering?.get(mark.id) ?? index + 1]))
+  const numbers = new Map([...markOrdinals(marks), ...(props.numbering ?? [])])
   /**
    * How big everything is drawn here, as a multiple of the base sizes.
    *

@@ -256,6 +256,45 @@ export function needsReviewImage(document: AnnotationDocument): boolean {
   return document.marks.some(mark => mark.kind !== 'point')
 }
 
+/**
+ * Each mark's number inside its own kind, 1 for the first of that kind.
+ *
+ * The number a mark is drawn with and the number its sentence starts with are the
+ * same number, so the list and the picture have to count the same things. They count
+ * *kinds*: a figure holding two arrows and one box reads 箭头1, 箭头2, 矩形1 — not 1,
+ * 2, 3 — because the shape already says which kind it is, and one counter for the
+ * whole file was a number the reader had to decode rather than read. "The second
+ * arrow" and "the second box" are two different marks; one counter called them the
+ * third and the fifth.
+ *
+ * One function rather than one per surface, because the message, the overlay, the
+ * exported picture and the document's list all have to agree on which mark is "1".
+ * @param marks - the marks in the order the document reads them.
+ * @returns each mark id's 1-based ordinal among marks of its own kind.
+ */
+export function markOrdinals(marks: readonly AnnotationMark[]): ReadonlyMap<string, number> {
+  const counted = new Map<MarkKind, number>()
+  const ordinals = new Map<string, number>()
+  for (const mark of marks) {
+    const ordinal = (counted.get(mark.kind) ?? 0) + 1
+    counted.set(mark.kind, ordinal)
+    ordinals.set(mark.id, ordinal)
+  }
+  return ordinals
+}
+
+/**
+ * How much of the surface an element has to cover to be the paper rather than a thing
+ * on it.
+ *
+ * Almost all rather than exactly all: a document's background often sits a rounding
+ * error short of its frame, and a figure's own background is the one answer a reader
+ * never means — a mark around the whole drawing says nothing about any part of it.
+ * Two questions are asked with this number: whether a pick named the paper, and
+ * whether an elected anchor names the picture the message already named.
+ */
+export const PAPER_COVERAGE = 0.98
+
 /** The sidecar document persisted beside one figure. */
 export interface AnnotationDocument {
   /** Schema version. */

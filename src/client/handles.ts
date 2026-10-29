@@ -1,10 +1,11 @@
 /**
  * The control frame around a selected mark.
  *
- * A selected mark is not just highlighted — it is surrounded by the eight resize
- * handles and the rotation handle that say what can be done to it. This module is
- * the arithmetic of that frame: where the handles sit, which one a press grabbed,
- * and what a drag of one of them does to the mark's geometry.
+ * A selected mark is not just highlighted — it is surrounded by the handles that say
+ * what can be done to it: eight resize grips and a turn grip around a box, or one
+ * grip on each end of a line for the marks that are a line. This module is the
+ * arithmetic of that frame: where the handles sit, which one a press grabbed, and
+ * what a drag of one of them does to the mark's geometry.
  *
  * Everything here works in figure pixels, so a handle means the same thing at any
  * zoom, and every function is free of React: the surface decides when to call
@@ -19,12 +20,19 @@ import { boxCentre, keepAnchored, markBounds, markRadians, normalizeDegrees, rot
  * Which handle a gesture grabbed.
  *
  * The eight box handles are named for the corner or edge they sit on, in the
- * mark's own un-rotated frame; `rotate` sits above the top edge.
+ * mark's own un-rotated frame; `rotate` sits above the top edge. A two-point mark —
+ * an arrow — gets the third kind instead: one grip on each end of the line it draws.
  */
-export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate'
+export type HandleId = BoxHandleId | 'rotate' | EndHandleId
 
-/** Every handle, in the order a renderer walks them. */
-export const HANDLE_IDS: readonly HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+/** A handle on the frame around a mark's box: its four corners and four edges. */
+export type BoxHandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+
+/** A grip on one end of a two-point mark. */
+export type EndHandleId = 'tail' | 'tip'
+
+/** Every box handle, in the order a renderer walks them. */
+export const HANDLE_IDS: readonly BoxHandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
 
 /**
  * Side length of one handle's square, in *screen* pixels.
@@ -56,12 +64,36 @@ export interface Handle {
   readonly point: FigurePoint
 }
 
+/** A box handle, placed. */
+export interface BoxHandle extends Handle {
+  /** Which corner or edge of the frame this is. */
+  readonly id: BoxHandleId
+}
+
+/** The turn grip, placed. */
+export interface RotateHandle extends Handle {
+  /** The one grip that turns the mark rather than resizing it. */
+  readonly id: 'rotate'
+}
+
+/** A handle on a box's control frame: the eight resize grips and the turn grip. */
+export type FrameHandle = BoxHandle | RotateHandle
+
+/** Which frame handle a press grabbed. */
+export type FrameHandleId = BoxHandleId | 'rotate'
+
+/** An end grip, placed. */
+export interface EndHandle extends Handle {
+  /** Which end of the marked line this is. */
+  readonly id: EndHandleId
+}
+
 /**
  * The unit directions two opposite edges of a box lie in.
  * @param id - a box handle.
  * @returns which sides it moves: `-1` is the low side, `1` the high side, `0` neither.
  */
-function edgesOf(id: Exclude<HandleId, 'rotate'>): { readonly x: -1 | 0 | 1; readonly y: -1 | 0 | 1 } {
+function edgesOf(id: BoxHandleId): { readonly x: -1 | 0 | 1; readonly y: -1 | 0 | 1 } {
   switch (id) {
     case 'nw': return { x: -1, y: -1 }
     case 'n': return { x: 0, y: -1 }
@@ -84,20 +116,46 @@ function edgesOf(id: Exclude<HandleId, 'rotate'>): { readonly x: -1 | 0 | 1; rea
  * @param rotation - the mark's rotation in degrees.
  * @returns the handles.
  */
-export function handlesFor(box: MarkBox, rotation: number, size = HANDLE_SIZE): Handle[] {
+export function handlesFor(box: MarkBox, rotation: number, size = HANDLE_SIZE): FrameHandle[] {
   const centre = boxCentre(box)
   const radians = (rotation * Math.PI) / 180
   const at = (x: number, y: number): FigurePoint => rotateAround([x, y], centre, radians)
   const right = box.x + box.width
   const bottom = box.y + box.height
-  const placed: Handle[] = HANDLE_IDS.map(id => {
-    const edges = edgesOf(id as Exclude<HandleId, 'rotate'>)
+  const placed: FrameHandle[] = HANDLE_IDS.map(id => {
+    const edges = edgesOf(id)
     const x = edges.x === -1 ? box.x : edges.x === 1 ? right : centre[0]
     const y = edges.y === -1 ? box.y : edges.y === 1 ? bottom : centre[1]
     return { id, point: at(x, y) }
   })
   placed.push({ id: 'rotate', point: at(centre[0], box.y - armFor(size)) })
   return placed
+}
+
+/**
+ * Where the two end grips of a two-point mark sit.
+ *
+ * An arrow is a line with an arrowhead, not a box: eight corner handles around the
+ * rectangle its ends span ask the reader to resize a shape that has no width, and
+ * they cover four square corners the arrow never draws. Its two ends are the whole
+ * of its geometry, so they are the whole of its control frame. The ends are turned
+ * with the mark, like the box handles, so they sit on the line as it is drawn.
+ * @param points - the mark's stored geometry: tail first, then tip.
+ * @param rotation - the mark's rotation in degrees.
+ * @returns the two grips, empty for a mark with fewer than two points.
+ */
+export function endHandles(points: readonly FigurePoint[], rotation: number): EndHandle[] {
+  const [tail, tip] = points
+  if (tail === undefined || tip === undefined) return []
+  const box = markBounds(points)
+  /* v8 ignore next -- two points always make a box. */
+  if (box === undefined) return []
+  const centre = boxCentre(box)
+  const radians = (rotation * Math.PI) / 180
+  return [
+    { id: 'tail', point: rotateAround(tail, centre, radians) },
+    { id: 'tip', point: rotateAround(tip, centre, radians) },
+  ]
 }
 
 /**
@@ -149,8 +207,8 @@ export function handleAt(
   at: FigurePoint,
   reach = HANDLE_SIZE,
   size = HANDLE_SIZE,
-): HandleId | undefined {
-  let best: HandleId | undefined
+): FrameHandleId | undefined {
+  let best: FrameHandleId | undefined
   let bestDistance = reach
   for (const handle of handlesFor(box, rotation, size)) {
     const distance = Math.hypot(handle.point[0] - at[0], handle.point[1] - at[1])
@@ -186,7 +244,7 @@ export function gripAt(
   at: FigurePoint,
   reach = HANDLE_SIZE,
   size = HANDLE_SIZE,
-): HandleId | undefined {
+): FrameHandleId | undefined {
   const near = handleAt(box, rotation, at, reach, size)
   if (near === undefined) return undefined
   const centre = boxCentre(box)
@@ -198,10 +256,83 @@ export function gripAt(
   return toGrip <= toCentre ? near : undefined
 }
 
+/**
+ * The end grip a press may take, if the press was aimed at one.
+ *
+ * The same two conditions the box grips use: within reach, and nearer the grip than
+ * the middle of the line. An arrow is thin, so its two grips are close to each other
+ * on a short arrow — aiming at the shaft is still aiming at the mark.
+ * @param points - the mark's stored geometry: tail first, then tip.
+ * @param rotation - the mark's rotation in degrees.
+ * @param at - where the press landed, in figure pixels.
+ * @param reach - how far from a grip the press still counts, in figure pixels.
+ * @returns the end grip the press took, or undefined to leave it to the shape.
+ */
+export function endAt(
+  points: readonly FigurePoint[],
+  rotation: number,
+  at: FigurePoint,
+  reach = HANDLE_SIZE,
+): EndHandleId | undefined {
+  let best: EndHandleId | undefined
+  let bestDistance = reach
+  for (const handle of endHandles(points, rotation)) {
+    const distance = Math.hypot(handle.point[0] - at[0], handle.point[1] - at[1])
+    if (distance <= bestDistance) {
+      best = handle.id
+      bestDistance = distance
+    }
+  }
+  if (best === undefined) return undefined
+  const box = markBounds(points)
+  /* v8 ignore next -- an end grip is only placed for a mark with two points. */
+  if (box === undefined) return undefined
+  const centre = boxCentre(box)
+  const toCentre = Math.hypot(at[0] - centre[0], at[1] - centre[1])
+  const grip = endHandles(points, rotation).find(handle => handle.id === best)
+  /* v8 ignore next -- `endHandles` just placed this grip. */
+  if (grip === undefined) return undefined
+  const toGrip = Math.hypot(at[0] - grip.point[0], at[1] - grip.point[1])
+  return toGrip <= toCentre ? best : undefined
+}
+
+/** The change one end drag asks for, before it is applied. */
+export interface EndRequest {
+  /** The end the drag is holding. */
+  readonly end: EndHandleId
+  /** Where the pointer is now, in figure pixels. */
+  readonly at: FigurePoint
+  /** The mark's geometry when the drag began, in figure pixels. */
+  readonly origin: readonly FigurePoint[]
+  /** The mark's rotation in degrees. */
+  readonly rotation: number
+}
+
+/**
+ * Move one end of a two-point mark to the pointer.
+ *
+ * The other end is the fixed point: dragging the tip turns the arrow about its tail
+ * rather than sliding the whole line, which is what a grip on one end means. The
+ * pointer is turned back by the mark's rotation first, so a turned arrow's drawn end
+ * still follows the hand.
+ * @param request - the end, the pointer, and the geometry it started from.
+ * @returns the new geometry, in figure pixels.
+ */
+export function movedEnd(request: EndRequest): readonly FigurePoint[] {
+  const { end, at, origin, rotation } = request
+  const [tail, tip] = origin
+  if (tail === undefined || tip === undefined) return origin
+  const box = markBounds(origin)
+  /* v8 ignore next -- two points always make a box. */
+  if (box === undefined) return origin
+  const local = rotateAround(at, boxCentre(box), -markRadians({ rotation }))
+  return end === 'tail' ? [local, tip] : [tail, local]
+}
+
 /** The change one handle drag asks for, before it is applied. */
 export interface ResizeRequest {
   /** The handle the drag is holding. */
-  readonly handle: Exclude<HandleId, 'rotate'>
+  readonly handle: BoxHandleId
   /** Where the pointer is now, in figure pixels. */
   readonly at: FigurePoint
   /** The mark's geometry when the drag began, in figure pixels. */
@@ -313,6 +444,10 @@ const TURN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
 )}") 12 12, crosshair`
 
 const CURSORS: Readonly<Record<HandleId, string>> = {
+  // An end grip drags one point of a line, which is a move rather than a resize: the
+  // cursor says "this moves" because that is exactly what it does to the shape.
+  tail: 'move',
+  tip: 'move',
   nw: 'nwse-resize',
   n: 'ns-resize',
   ne: 'nesw-resize',

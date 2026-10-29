@@ -7,7 +7,7 @@
  * @module dsh-figmark/client/export
  */
 
-import type { AnnotationMark, FigurePoint } from '../shared/annotation'
+import { markOrdinals, type AnnotationMark, type FigurePoint } from '../shared/annotation'
 import {
   PIN_FONT_FAMILY, PIN_NUMBER_COLOR, badgeGeometry, markPathData, markTransform,
   pinFontSizeOf, pinNumberCentre, pinPathData, strokeWidthOf,
@@ -184,7 +184,9 @@ export function composeReviewSvg(
   marks: readonly AnnotationMark[],
   numbering?: ReadonlyMap<string, number>,
 ): string {
-  const numbers = new Map(marks.map((mark, index) => [mark.id, numbering?.get(mark.id) ?? index + 1]))
+  // The document's numbers win: this picture may be a page of a longer document,
+  // whose pins have to carry the document's count rather than this slice's.
+  const numbers = new Map([...markOrdinals(marks), ...(numbering ?? [])])
   // Measured from the figure, not from this call's marks: the export has to look like
   // the overlay, and the overlay sizes every mark by the surface they share.
   const unit = figureUnit(layer.width, layer.height)

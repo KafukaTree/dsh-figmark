@@ -339,11 +339,14 @@ describe('review image', () => {
       [
         { id: 'a', kind: 'arrow', color: '#e03131', points: [[100, 100], [200, 100]] },
         { id: 'b', kind: 'point', color: '#1971c2', points: [[150, 200]] },
+        { id: 'c', kind: 'arrow', color: '#f08c00', points: [[100, 240], [200, 240]] },
       ],
     )
-    expect([...svg.matchAll(/>\d<\/text>/gu)].map(match => match[0])).toEqual(['>1</text>', '>2</text>'])
-    // One disc, for the arrow: the pin's number sits in its own body.
-    expect(svg.match(/<circle /gu)).toHaveLength(1)
+    // Numbers count inside each kind: the second arrow is "2" beside the point's "1",
+    // because the shape already says which kind it is and the digit says which one.
+    expect([...svg.matchAll(/>\d<\/text>/gu)].map(match => match[0])).toEqual(['>1</text>', '>1</text>', '>2</text>'])
+    // Two discs, for the two arrows: the pin's number sits in its own body.
+    expect(svg.match(/<circle /gu)).toHaveLength(2)
   })
 
   it('places a stroke mark number clear of the mark, on the side its corner is', () => {
@@ -365,14 +368,24 @@ describe('review image', () => {
     expect(cy + radius).toBeLessThanOrEqual(100)
   })
 
-  it('leaves an element mark unnumbered on the picture as it is in the panel', () => {
-    // An element mark lights the figure's own artwork; it has no outline of its own,
-    // so there is no corner to stand a disc beside — and its box can span the plot.
+  it('numbers an element mark inside its own box, where the paper certainly is', () => {
+    // An element mark lights the figure's own artwork and paints no outline, so there is
+    // no corner to stand a disc *beside*. It used to get no number at all, which left
+    // the one mark whose whole point is a name as the only one a reader could not find
+    // by number. Its disc sits just inside the box's top-left corner: a full-figure
+    // element's box is the paper's own edge, and a disc outside the paper is invisible.
     const svg = composeReviewSvg(
       { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
       [{ id: 'e', kind: 'element', color: '#1971c2', points: [[0, 0], [400, 300]] }],
     )
-    expect(svg).not.toContain('<circle ')
+    const circle = /<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([-\d.]+)"/u.exec(svg)
+    expect(circle).not.toBeNull()
+    const [cx, cy, radius] = [Number(circle?.[1]), Number(circle?.[2]), Number(circle?.[3])]
+    expect(cx).toBeGreaterThanOrEqual(radius)
+    expect(cy).toBeGreaterThanOrEqual(radius)
+    expect(cx).toBeLessThan(400)
+    expect(cy).toBeLessThan(300)
+    expect(svg).toContain('>1</text>')
   })
 
   it('numbers a pin by the document, when the marks are a slice of it', () => {

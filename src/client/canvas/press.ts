@@ -14,7 +14,7 @@
 
 import type { AnnotationMark, FigurePoint, MarkKind } from '../../shared/annotation'
 import { boxCentre, markBounds, shiftPoints } from '../mark-geometry'
-import { resizeBy, rotationTo, type HandleId } from '../handles'
+import { movedEnd, resizeBy, rotationTo, type HandleId } from '../handles'
 import type { MarkPatch } from './types'
 
 /**
@@ -70,6 +70,14 @@ export function editFor(held: Press, point: FigurePoint, dx: number, dy: number)
   if (handle === 'rotate') {
     const rotation = rotationTo(boxCentre(box), point, held.snap)
     return { points: undefined, rotation }
+  }
+  // An end grip moves one end of the line and leaves the other where it was; a box
+  // grip resizes the shape as a whole.
+  if (handle === 'tail' || handle === 'tip') {
+    return {
+      points: movedEnd({ end: handle, at: point, origin: held.origin, rotation: held.originRotation }),
+      rotation: undefined,
+    }
   }
   return {
     points: resizeBy({ handle, at: point, origin: held.origin, rotation: held.originRotation }),

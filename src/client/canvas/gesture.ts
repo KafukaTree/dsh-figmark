@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annotation'
 import { WEIGHT_DEFAULT, describesARegion } from '../../shared/annotation'
-import { gripAt, type HandleId } from '../handles'
+import { endAt, gripAt, type HandleId } from '../handles'
 import { controlSizes, type ControlSizes } from './controls'
 import { controlBox, elementNamedBy, sameAnchor } from './hit'
 import {
@@ -210,9 +210,12 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // Marks with a fixed extent are framed by a dashed box instead of handles: a
     // point has no extent to resize, and an element's box belongs to the element.
     if (hasFixedExtent(mark.kind)) return false
-    const grabbed = gripAt(
-      controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * sizes.grip, sizes.grip,
-    )
+    // A two-point mark is controlled by its ends; everything else by the frame
+    // around its box. The surface asks the same question of either: which grip is
+    // the pointer on, and is it nearer that grip than the middle of the mark.
+    const grabbed = mark.kind === 'arrow'
+      ? endAt(mark.points, mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * sizes.grip)
+      : gripAt(controlBox(mark), mark.rotation ?? 0, pressedAt.current.value, HANDLE_REACH * sizes.grip, sizes.grip)
     if (grabbed === undefined) return false
     beginGesture(mark, event, grabbed)
     return true

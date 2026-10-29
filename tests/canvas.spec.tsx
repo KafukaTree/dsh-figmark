@@ -1089,6 +1089,59 @@ describe('the control frame around a selected mark', () => {
     expect(handle('rotate')).toBeDefined()
   })
 
+  it('frames a selected arrow with its two ends, not a box it never draws', () => {
+    // An arrow is a line. The rectangle its two ends span is not a shape the figure
+    // has, and eight grips on it asked the reader to stretch something with no width;
+    // the tail and the tip are the whole of its geometry, so they are the whole frame.
+    const arrow: AnnotationMark = { id: 'a1', kind: 'arrow', color: '#e03131', points: [[100, 100], [200, 160]] }
+    mounted = mount({ tool: 'select', marks: [arrow], selectedId: 'a1' })
+    const grips = [...mounted.svg.querySelectorAll('rect[data-da-handle]')]
+    expect(grips.map(grip => grip.getAttribute('data-da-handle'))).toEqual(['tail', 'tip'])
+    expect(mounted.svg.querySelector('rect[data-da-handle="rotate"]')).toBeNull()
+    // Each grip sits on its own end of the drawn line, not on a corner of a box.
+    expect(Number(handle('tail').getAttribute('x'))).toBeCloseTo(100 - HANDLE_SIZE / 2, 6)
+    expect(Number(handle('tail').getAttribute('y'))).toBeCloseTo(100 - HANDLE_SIZE / 2, 6)
+    expect(Number(handle('tip').getAttribute('x'))).toBeCloseTo(200 - HANDLE_SIZE / 2, 6)
+    expect(Number(handle('tip').getAttribute('y'))).toBeCloseTo(160 - HANDLE_SIZE / 2, 6)
+    // Circles rather than squares: a grip on a point of a line is not a corner.
+    expect(Number(handle('tail').getAttribute('rx'))).toBeCloseTo(HANDLE_SIZE / 2, 6)
+  })
+
+  it('takes a press on the arrow itself near its end as that end\'s grip', () => {
+    // The grips are small targets and the line is the shape: a press on the shaft near
+    // the tip has to mean "move the tip", the same way a press at a box corner means
+    // "resize from there".
+    const onUpdate = vi.fn()
+    const arrow: AnnotationMark = { id: 'a1', kind: 'arrow', color: '#e03131', points: [[100, 100], [200, 160]] }
+    mounted = mount({ tool: 'select', marks: [arrow], selectedId: 'a1', onUpdate })
+    const hit = defined(mounted.svg.querySelector('path[stroke="transparent"]'))
+    // On the shaft, ten pixels back from the tip and inside the grip's reach.
+    pointer(hit, 'pointerdown', 190, 154)
+    pointer(mounted.svg, 'pointermove', 250, 154)
+    pointer(mounted.svg, 'pointerup', 250, 154)
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+    const patch = defined(onUpdate.mock.calls[0] as [string, MarkPatch] | undefined)[1]
+    expect(patch.points?.[0]).toEqual([100, 100])
+    expect(patch.points?.[1]?.[0]).toBeCloseTo(250, 6)
+  })
+
+  it('moves one end of an arrow and leaves the other end where it was', () => {
+    // Dragging a grip on one end says "this end goes here". The other end is the fixed
+    // point, which is what a grip on a line means — a box resize would have moved both.
+    const onUpdate = vi.fn()
+    const arrow: AnnotationMark = { id: 'a1', kind: 'arrow', color: '#e03131', points: [[100, 100], [200, 160]] }
+    mounted = mount({ tool: 'select', marks: [arrow], selectedId: 'a1', onUpdate })
+    dragHandle('tip', 40, 0)
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+    const [id, patch] = defined(onUpdate.mock.calls[0] as [string, MarkPatch] | undefined)
+    expect(id).toBe('a1')
+    expect(patch.points?.[0]).toEqual([100, 100])
+    expect(patch.points?.[1]?.[0]).toBeCloseTo(240, 6)
+    expect(patch.points?.[1]?.[1]).toBeCloseTo(160, 6)
+    // Moving an end does not turn the mark.
+    expect(patch.rotation).toBeUndefined()
+  })
+
   it('draws the same-size handle whatever the paper is scaled to', () => {
     // A handle is a target for a pointer, not part of the drawing: on a figure shown at
     // a quarter size, a frame drawn in figure pixels would come out under two screen
@@ -1299,13 +1352,16 @@ describe('the control frame around a selected mark', () => {
         { id: 'm1', kind: 'arrow', color: '#e03131', points: [[20, 20], [80, 20]] },
         { id: 'm2', kind: 'rect', color: '#0f0', points: [[20, 100], [80, 140]] },
         { id: 'm3', kind: 'point', color: '#1971c2', points: [[40, 60]] },
+        { id: 'm4', kind: 'arrow', color: '#f08c00', points: [[100, 20], [160, 20]] },
       ],
     })
+    // The numbers count inside each kind, so the second arrow is "2" beside the first
+    // arrow's "1" — the shape says which kind, the digit says which one of it.
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['1', '2', '3'])
-    // Two discs, for the arrow and the box; the pin's number lives inside its head
-    // and needs none.
-    expect(mounted.svg.querySelectorAll('circle').length).toBe(2)
+    expect(letters).toEqual(['1', '1', '1', '2'])
+    // Three discs, for the two arrows and the box; the pin's number lives inside its
+    // head and needs none.
+    expect(mounted.svg.querySelectorAll('circle').length).toBe(3)
   })
 
   it('draws no lettering for any mark, however much it has to say', () => {
@@ -1319,7 +1375,7 @@ describe('the control frame around a selected mark', () => {
     // list say "②" and have the figure mean the same thing. The sentences themselves
     // are what the agent reads, and painting them would bury the line work.
     const letters = [...mounted.svg.querySelectorAll('text')].map(node => node.textContent)
-    expect(letters).toEqual(['1', '2'])
+    expect(letters).toEqual(['1', '1'])
     expect(mounted.svg.querySelectorAll('tspan')).toHaveLength(0)
     expect(mounted.svg.textContent).not.toContain('缺图形')
     expect(mounted.svg.textContent).not.toContain('刻度标错')

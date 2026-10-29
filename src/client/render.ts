@@ -140,6 +140,13 @@ export function pinFontSizeOf(unit = 1): number {
  * covers the line work it names. It is placed from the *drawn* box, so a turned mark
  * carries its number beside the turned shape rather than beside where its points were
  * before the turn.
+ *
+ * An `element` mark used to get no number at all: it paints nothing but the light on
+ * the element it names, so there was "no corner to stand beside". That left the one
+ * kind of mark whose whole point is a name as the only kind a reader could not find by
+ * number — a list numbered 1, 2, 3 beside a picture numbered 1, 2. It now wears its
+ * number just inside its own top-left corner: inside, because the element's box may be
+ * the figure's own edge and a disc outside the paper is a disc nobody sees.
  * @param mark - the mark to number.
  * @param unit - the figure's size multiple.
  * @returns the disc's centre and radius, or undefined for a mark that wears its number
@@ -149,14 +156,11 @@ export function badgeGeometry(mark: AnnotationMark, unit = 1): { readonly centre
   // A pin carries its number inside its head: a disc beside it would be a second
   // marker for one coordinate.
   if (mark.kind === 'point') return undefined
-  // An element mark is light on the figure's own artwork. It paints no outline, so
-  // there is no corner to stand beside — and its box can cover half the plot, which
-  // would put the number nowhere near the thing it names.
-  if (mark.kind === 'element') return undefined
   const box = markOutline(mark, unit)
   /* v8 ignore next -- every kind reaching here has points, so it has a box. */
   if (box === undefined) return undefined
   const radius = BADGE_RADIUS * unit
+  if (mark.kind === 'element') return { centre: [box.x + radius, box.y + radius], radius }
   // Up and to the left, by one radius plus a hair of clear space, so the disc clears
   // the stroke rather than sitting on it.
   const gap = radius + strokeWidthOf(mark, unit) / 2 + BADGE_GAP * unit

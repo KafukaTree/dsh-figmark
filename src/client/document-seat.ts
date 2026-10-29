@@ -11,7 +11,7 @@
  * reaches the chunk's runtime.
  * @module dsh-figmark/client/document-seat
  */
-import { ANNOTATION_VERSION, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
+import { ANNOTATION_VERSION, markOrdinals, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
 import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { deliverToComposer, type ComposerLike } from './composer'
@@ -241,9 +241,10 @@ async function renderPageImages(
   pages: readonly PageImage[],
 ): Promise<DeliveredPageImage[]> {
   const images: DeliveredPageImage[] = []
-  // A page's pins carry the numbers its sentences carry, and those number the
-  // whole document rather than the page; the map is built once for the document.
-  const numbering = new Map(document.marks.map((mark, index) => [mark.id, index + 1]))
+  // A page's pins carry the numbers its sentences carry, and those number marks
+  // inside their own kind across the whole document rather than the page; the map is
+  // built once for the document.
+  const numbering = markOrdinals(document.marks)
   for (const page of pages) {
     const layer = { kind: 'raster' as const, dataUrl: page.dataUrl, width: page.width, height: page.height }
     const marks = document.marks.filter(mark => mark.page === page.page)

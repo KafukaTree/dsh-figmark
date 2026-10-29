@@ -21,7 +21,7 @@ import { writeFileSync } from 'node:fs'
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, it, vi } from 'vitest'
-import type { AnnotationDocument, AnnotationMark } from '../../src/shared/annotation'
+import { markOrdinals, type AnnotationDocument, type AnnotationMark } from '../../src/shared/annotation'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from '../../src/client/autosave'
 import { figureUnit } from '../../src/client/scale'
 import type { AnnotatorBodyProps } from '../../src/client/AnnotatorBody'
@@ -114,6 +114,7 @@ function pdfProps(overrides: Partial<PdfBodyProps> = {}): PdfBodyProps {
     annotationSignature,
     autosaveDelayMs: AUTOSAVE_DELAY_MS,
     figureUnit,
+    markOrdinals,
     t: translate,
     ...overrides,
   }

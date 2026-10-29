@@ -7,6 +7,13 @@
  * stores marks must not carry the phrases, and the phrases must be free to change
  * without touching a sidecar field.
  *
+ * A mark's line starts with its *name*: the kind of mark it is and its number among
+ * marks of that kind ("箭头1", "矩形2", "单点1 位于 (40,60)"). That is the same number
+ * the picture draws beside the same mark, so the reader looking at the figure and the
+ * agent reading the message can say the same thing about it. One counter for the
+ * whole file could not: a circled ③ is a number nobody can find on a picture that
+ * carries a pin, an arrow and a box.
+ *
  * Two rules hold the wording together. A mark's detail is the only field that says
  * what to change, so a mark without one still gets a line that names its position:
  * the list staying numbered and complete is what lets the agent point at the mark it
@@ -15,7 +22,10 @@
  * reads like a translation that lost its last pass.
  * @module dsh-figmark/shared/mark-summary
  */
-import type { AnnotatedFigure, AnnotationDocument, AnnotationMark, FigurePoint, SummaryLocale } from './annotation'
+import type {
+  AnnotatedFigure, AnnotationDocument, AnnotationMark, FigurePoint, MarkAnchor, MarkKind, SummaryLocale,
+} from './annotation'
+import { PAPER_COVERAGE, markOrdinals } from './annotation'
 
 /**
  * Describe how many pages a paged figure has.
@@ -31,6 +41,43 @@ export function describeFigureScope(figure: AnnotatedFigure, locale: SummaryLoca
 /** Round one figure coordinate for model-facing text. */
 function round(value: number): number {
   return Math.round(value)
+}
+
+/**
+ * The noun one kind of mark is called.
+ *
+ * The names are what the reader calls the shapes on the toolbar, not the names this
+ * code uses: a box is a 矩形, not a "框选", because the thing on the picture is a
+ * rectangle and the reader is being told which rectangle to look at.
+ * @param kind - the mark's kind.
+ * @param locale - language of the surrounding message.
+ * @returns the noun, without the number that follows it.
+ */
+function kindName(kind: MarkKind, locale: SummaryLocale): string {
+  const zh = locale === 'zh'
+  switch (kind) {
+    case 'arrow': return zh ? '箭头' : 'arrow'
+    case 'rect': return zh ? '矩形' : 'box'
+    case 'ellipse': return zh ? '椭圆' : 'ellipse'
+    case 'pen': return zh ? '手绘线' : 'freehand stroke'
+    case 'point': return zh ? '单点' : 'point'
+    case 'element': return zh ? '元素' : 'element'
+  }
+}
+
+/**
+ * One mark's name: its kind and its number among marks of that kind.
+ *
+ * Chinese runs the two together ("箭头1"); English needs the space ("arrow 1"). The
+ * number is the one the picture carries, so this is the phrase a reader can point at.
+ * @param mark - the mark being named.
+ * @param ordinal - its 1-based position among marks of its own kind.
+ * @param locale - language of the surrounding message.
+ * @returns the name as it is written at the start of the mark's line.
+ */
+function markName(mark: AnnotationMark, ordinal: number, locale: SummaryLocale): string {
+  const noun = kindName(mark.kind, locale)
+  return locale === 'zh' ? `${noun}${ordinal}` : `${noun} ${ordinal}`
 }
 
 /**
@@ -132,8 +179,17 @@ function overhang(
     : ` (off the figure: ${escapes.join(', ')} px)`
 }
 
-/** Describe one mark's shape in words, for the model-facing summary. */
-function describeShape(mark: AnnotationMark, locale: SummaryLocale): string {
+/**
+ * Describe one mark's geometry after its name, for the model-facing summary.
+ *
+ * The name has already said what the mark is, so this says only where: a leading
+ * space keeps it a separate word when it survives, and an empty string keeps the
+ * line readable when there is no geometry to add.
+ * @param mark - the mark to describe.
+ * @param locale - language of the surrounding message.
+ * @returns the fragment that follows the mark's name, possibly empty.
+ */
+function describeGeometry(mark: AnnotationMark, locale: SummaryLocale): string {
   const [first, second] = mark.points
   const zh = locale === 'zh'
   const turned = mark.rotation === undefined || mark.rotation === 0
@@ -142,44 +198,85 @@ function describeShape(mark: AnnotationMark, locale: SummaryLocale): string {
   switch (mark.kind) {
     case 'arrow':
       return first !== undefined && second !== undefined
-        ? (zh ? `箭头 (${round(first[0])},${round(first[1])}) → (${round(second[0])},${round(second[1])})${turned}`
-          : `arrow (${round(first[0])},${round(first[1])}) → (${round(second[0])},${round(second[1])})${turned}`)
-        : (zh ? '箭头' : 'arrow')
+        ? ` (${round(first[0])},${round(first[1])}) → (${round(second[0])},${round(second[1])})${turned}`
+        : turned
     case 'rect':
-      return (zh ? '框选' : 'box') + extents(first, second) + turned
+      return extents(first, second) + turned
     case 'ellipse':
-      return (zh ? '圈选' : 'ellipse') + extents(first, second) + turned
-    case 'pen': {
-      // A stroke's point count says nothing about where it is: a reader told only
-      // "37 points" cannot find the line on the figure at all. Its box is the one
-      // thing that locates it, and it costs no more than the count did.
-      const box = strokeExtents(mark.points)
-      const noun = zh ? '手绘线' : 'freehand stroke'
-      return `${noun}${box}${turned}`
-    }
+      return extents(first, second) + turned
+    // A stroke's point count says nothing about where it is: a reader told only
+    // "37 points" cannot find the line on the figure at all. Its box is the one
+    // thing that locates it, and it costs no more than the count did.
+    case 'pen':
+      return strokeExtents(mark.points) + turned
     case 'point':
-      return first !== undefined
-        ? (zh ? `单点位于 (${round(first[0])},${round(first[1])})` : `at (${round(first[0])},${round(first[1])})`)
-        : (zh ? '单点' : 'a point')
+      return first === undefined
+        ? ''
+        : (zh ? ` 位于 (${round(first[0])},${round(first[1])})` : ` at (${round(first[0])},${round(first[1])})`)
     case 'element':
       // The box is carried so the mark can be found on the picture, but it is not
       // what the mark is about: the anchor that follows this phrase names the
       // element, and naming the box first would invite the agent to read a region
       // where the reader meant a thing.
-      return `${zh ? '选中元素' : 'element'}${extents(first, second)}`
+      return extents(first, second)
   }
 }
 
-/** Describe what a mark points at, when the figure exposed an element. */
-function describeAnchor(mark: AnnotationMark, locale: SummaryLocale): string {
+/**
+ * Longest element text that still reads as a name rather than a passage.
+ *
+ * The anchor carries whatever words the element holds, capped for the sidecar. On a
+ * matplotlib SVG a group holds every label under it, so the text of the axes is the
+ * tick values, both axis titles and the legend run together — twice the length of
+ * the sentence it would push onto the mark's line. A name is a label ("导柱", "保存");
+ * anything past this is a passage, and the selector or id already locates the element.
+ */
+const NAMEABLE_TEXT = 30
+
+/**
+ * Whether an anchor names the whole picture rather than something in it.
+ *
+ * A mark that lands on a figure's root element names the sheet itself, which the
+ * message has already named in its header. On a matplotlib figure that anchor also
+ * carries the concatenation of every label in the picture, so the line spends its
+ * whole length saying "this figure" a second time. An `element` mark keeps its anchor
+ * even then: there, the anchor *is* the mark, and the box is just where it sits.
+ * @param anchor - the element the mark landed on.
+ * @param figure - the figure's size, when the document knows it.
+ * @returns true when the anchor covers essentially the whole figure.
+ */
+function namesThePicture(anchor: MarkAnchor, figure: AnnotatedFigure | undefined): boolean {
+  if (figure === undefined) return false
+  const { width, height } = figure
+  if (width === undefined || height === undefined) return false
+  return anchor.bbox[2] >= width * PAPER_COVERAGE && anchor.bbox[3] >= height * PAPER_COVERAGE
+}
+
+/**
+ * Describe what a mark points at, when the figure exposed an element.
+ *
+ * Only the names that still say something are kept. A selector that is the id with a
+ * `#` in front is the same name twice, and element text long enough to be a paragraph
+ * locates nothing the id did not already locate — both were printed on every line
+ * because the fields existed, not because they helped.
+ * @param mark - the mark whose anchor is described.
+ * @param locale - language of the surrounding message.
+ * @param figure - the figure's size, when the document knows it.
+ * @returns the bracketed fragment, or nothing when the anchor adds no name.
+ */
+function describeAnchor(mark: AnnotationMark, locale: SummaryLocale, figure?: AnnotatedFigure): string {
   const anchor = mark.anchor
   if (anchor === undefined) return ''
+  if (mark.kind !== 'element' && namesThePicture(anchor, figure)) return ''
   const zh = locale === 'zh'
+  const id = anchor.id ?? ''
+  const text = anchor.text ?? ''
+  const selector = anchor.selector ?? ''
   const parts: string[] = []
   if (anchor.title !== undefined && anchor.title !== '') parts.push(zh ? `元素标题「${anchor.title}」` : `element title "${anchor.title}"`)
-  if (anchor.id !== undefined && anchor.id !== '') parts.push(zh ? `id=${anchor.id}` : `id=${anchor.id}`)
-  if (anchor.text !== undefined && anchor.text !== '') parts.push(zh ? `元素文字「${anchor.text}」` : `element text "${anchor.text}"`)
-  if (anchor.selector !== undefined && anchor.selector !== '') parts.push(zh ? `选择器 ${anchor.selector}` : `selector ${anchor.selector}`)
+  if (id !== '') parts.push(`id=${id}`)
+  if (text !== '' && text.length <= NAMEABLE_TEXT) parts.push(zh ? `元素文字「${text}」` : `element text "${text}"`)
+  if (selector !== '' && selector !== `#${id}`) parts.push(zh ? `选择器 ${selector}` : `selector ${selector}`)
   if (parts.length === 0) parts.push(`<${anchor.tag}>`)
   // The parentheses follow the message's own language: an English message dotted with
   // full-width brackets reads like a translation that lost its last pass.
@@ -189,17 +286,37 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale): string {
 /**
  * Render one mark as a numbered line the model reads.
  *
- * A mark carries one string: what should change here. It is the whole payload —
- * the shape only says where. A mark that says nothing still names its position,
- * so the list stays numbered and the agent can say which mark is mute.
+ * The number is the mark's number among marks of its kind, the same one the picture
+ * draws on it. A mark carries one string — what should change here — and it is the
+ * whole payload; the shape only says where. A mark that says nothing still names its
+ * position, so the list stays complete and the agent can say which mark is mute.
  *
  * @param mark - the mark to describe.
- * @param index - zero-based position in the document, rendered as a circled number.
+ * @param ordinal - its 1-based position among marks of its own kind.
  * @param locale - language of the surrounding message.
  * @param figure - the figure these marks belong to, when its size is known; a mark
  *   that reaches past it then says so rather than leaving the sign to be noticed.
  * @returns one line of the annotation summary.
  */
+export function describeMark(
+  mark: AnnotationMark,
+  ordinal: number,
+  locale: SummaryLocale,
+  figure?: AnnotatedFigure,
+): string {
+  const zh = locale === 'zh'
+  // A mark that names a page carries it, so one list can span the pages of a
+  // document without its coordinates becoming ambiguous.
+  const page = mark.page === undefined ? '' : (zh ? `第 ${mark.page} 页 ` : `page ${mark.page} `)
+  const detail = flattenNote(mark.detail)
+  const escape = figure === undefined ? '' : overhang(mark, figure, locale)
+  const named = `${page}${markName(mark, ordinal, locale)}${describeGeometry(mark, locale)}${describeAnchor(mark, locale, figure)}${escape}`
+  const parts: string[] = [named]
+  if (detail !== '') parts.push(zh ? `批注：${detail}` : `note: ${detail}`)
+  if (detail === '') parts.push(zh ? '（未写说明）' : '(no detail)')
+  return parts.join(zh ? '，' : ', ')
+}
+
 /**
  * One note, on one line.
  *
@@ -221,31 +338,17 @@ function flattenNote(detail: string | undefined): string {
   return detail.replace(/\s+/gu, ' ').trim()
 }
 
-export function describeMark(
-  mark: AnnotationMark,
-  index: number,
-  locale: SummaryLocale,
-  figure?: AnnotatedFigure,
-): string {
-  const zh = locale === 'zh'
-  const marker = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'][index] ?? `${index + 1}.`
-  // A mark that names a page carries it, so one numbered list can span the pages
-  // of a document without its coordinates becoming ambiguous.
-  const page = mark.page === undefined ? '' : (zh ? `第 ${mark.page} 页 ` : `page ${mark.page} `)
-  const detail = flattenNote(mark.detail)
-  const escape = figure === undefined ? '' : overhang(mark, figure, locale)
-  const parts: string[] = [`${marker} ${page}${describeShape(mark, locale)}${describeAnchor(mark, locale)}${escape}`]
-  if (detail !== '') parts.push(zh ? `批注：${detail}` : `note: ${detail}`)
-  if (detail === '') parts.push(zh ? '（未写说明）' : '(no detail)')
-  return parts.join(zh ? '，' : ', ')
-}
-
 /**
  * Render every mark as the numbered list carried into the Session.
  * @param document - the saved annotation document.
  * @param locale - language of the surrounding message.
- * @returns one line per mark.
+ * @returns one line per mark, in the document's own order.
  */
 export function describeMarks(document: AnnotationDocument, locale: SummaryLocale): string[] {
-  return document.marks.map((mark, index) => describeMark(mark, index, locale, document.figure))
+  const ordinals = markOrdinals(document.marks)
+  return document.marks.map((mark) => {
+    /* v8 ignore next -- the map was built from these same marks. */
+    const ordinal = ordinals.get(mark.id) ?? 0
+    return describeMark(mark, ordinal, locale, document.figure)
+  })
 }

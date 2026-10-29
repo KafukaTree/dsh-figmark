@@ -60,18 +60,34 @@ describe('following the pointer that drags a strip', () => {
     expect(spot.y).toBeCloseTo(0.5)
   })
 
-  it('clamps to the room the strip needs, so it cannot be dragged off the panel', () => {
-    // The usable range is what is left of the pane once the strip's own body is taken
-    // out of it; without that clamp the fraction would mean "my near edge is here",
-    // and 1 would put the strip entirely outside.
+  it('lets a strip dragged past the middle reach the far edge, keeping a hair of gap', () => {
+    // Past the middle the strip hangs from its far corner, so its body is already
+    // behind the pointer and the only thing left to keep it off is the edge itself.
+    // Measuring the clamp by the strip's own width there was what stopped a palette
+    // parked on the right a whole palette-width short of the right edge — "this is as
+    // far as it goes", 40px from an edge that looked like it should be next to it.
     const spot = draggedSpot(
       { pointerId: 1, origin: { x: 0.5, y: 0.5 }, box: { left: 0, top: 0 } },
       { clientX: 10_000, clientY: 10_000 },
       panel,
       strip,
     )
-    expect(spot.x).toBeCloseTo(1 - strip.width / panel.width)
-    expect(spot.y).toBeCloseTo(1 - strip.height / panel.height)
+    expect(spot.x).toBeCloseTo(1 - 8 / panel.width)
+    expect(spot.y).toBeCloseTo(1 - 8 / panel.height)
+  })
+
+  it('keeps a strip hanging from its near edge inside the pane', () => {
+    // Before the middle the body hangs down and to the right of its point, so the room
+    // it needs is its own width: a wide strip is stopped short of the far edge rather
+    // than left hanging outside it.
+    const spot = draggedSpot(
+      { pointerId: 1, origin: { x: 0.1, y: 0.1 }, box: { left: 0, top: 0 } },
+      { clientX: 100, clientY: 60 },
+      panel,
+      { width: 300, height: 100 },
+    )
+    expect(spot.x).toBeCloseTo((panel.width - 300) / panel.width)
+    expect(spot.y).toBeCloseTo(0.2)
   })
 
   it('clamps the other way too, so no travel puts a strip past the near edge', () => {

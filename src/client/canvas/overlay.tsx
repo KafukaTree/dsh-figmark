@@ -16,7 +16,7 @@
 
 import type { ReactNode } from 'react'
 import type { AnnotationMark } from '../../shared/annotation'
-import { cursorFor, handlesFor, tetherFor, type HandleId } from '../handles'
+import { cursorFor, endHandles, handlesFor, tetherFor, type HandleId } from '../handles'
 import type { MarkBox } from '../mark-geometry'
 import {
   PIN_FONT_FAMILY, PIN_NUMBER_COLOR, badgeGeometry, hasFixedExtent, pinFontSizeOf,
@@ -202,6 +202,42 @@ function Handles(props: {
   )
 }
 
+/**
+ * The two end grips of a selected arrow.
+ *
+ * An arrow's controls are its ends: the line is the whole shape, and its tail and
+ * tip are the only points that say where it is. It used to be framed like a box —
+ * eight grips on the rectangle its ends span, plus a turn grip — which asked the
+ * reader to stretch a line that has no width and put handles on four corners the
+ * arrow never draws. The grips are drawn as circles rather than squares, so a grip
+ * on a point of the line does not read as a corner of a box.
+ */
+function EndHandles(props: {
+  readonly mark: AnnotationMark
+  readonly sizes: ControlSizes
+  readonly onPressHandle: MarkLayerProps['onPressHandle']
+}): ReactNode {
+  const { mark, sizes, onPressHandle } = props
+  const { grip, hairline } = sizes
+  const half = grip / 2
+  return (
+    <>
+      {endHandles(mark.points, mark.rotation ?? 0).map(handle => (
+        <g key={handle.id}>
+          <rect
+            data-da-handle={handle.id}
+            x={handle.point[0] - half} y={handle.point[1] - half}
+            width={grip} height={grip} rx={half}
+            fill="#ffffff" stroke="#4c8dff" strokeWidth={1.5 * hairline}
+            style={{ pointerEvents: 'all', cursor: cursorFor(handle.id) }}
+            onPointerDown={(event) => { onPressHandle(mark, event, handle.id) }}
+          />
+        </g>
+      ))}
+    </>
+  )
+}
+
 /** One mark: its shape, its hit area, and whatever its selection asks for. */
 function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; readonly isDraft: boolean }): ReactNode {
   const { mark, isDraft, selectedId, numbers, unit, sizes, onPressMark, onEdit } = props
@@ -246,7 +282,10 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
       {hitArea}
       {isDraft ? null : <Badge mark={shown} unit={unit} number={numbers.get(mark.id)} />}
       {selected && !isDraft && isPoint ? <FixedFrame box={pointMarkBox(shown, unit)} hairline={sizes.hairline} /> : null}
-      {selected && !isDraft && !hasFixedExtent(mark.kind) ? (
+      {selected && !isDraft && mark.kind === 'arrow' ? (
+        <EndHandles mark={shown} sizes={sizes} onPressHandle={props.onPressHandle} />
+      ) : null}
+      {selected && !isDraft && mark.kind !== 'arrow' && !hasFixedExtent(mark.kind) ? (
         <Handles mark={shown} sizes={sizes} onPressHandle={props.onPressHandle} />
       ) : null}
     </g>

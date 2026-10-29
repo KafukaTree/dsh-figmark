@@ -440,8 +440,8 @@ describe('a message that carries no picture', () => {
     // The figure's own path is the index that replaces the picture.
     expect(zh).toContain('【附图标注】/w/fig1.svg')
     // This fixture's figure is 10x10, so both points sit outside it and say so.
-    expect(zh).toContain('① 单点位于 (10,20)（超出图面：下 10 像素），批注：图号应在这里')
-    expect(zh).toContain('② 单点位于 (30,40)（超出图面：右 20、下 30 像素），批注：这条曲线缺图例')
+    expect(zh).toContain('单点1 位于 (10,20)（超出图面：下 10 像素），批注：图号应在这里')
+    expect(zh).toContain('单点2 位于 (30,40)（超出图面：右 20、下 30 像素），批注：这条曲线缺图例')
     expect(zh).not.toContain('附件')
   })
 
@@ -473,8 +473,8 @@ describe('the message the agent reads', () => {
   it('names the pages a document has, and where its annotated copy is', () => {
     const zh = buildAnnotationMessage(pagedDocument, pagedPaths, 'zh')
     expect(zh).toContain('（共 12 页，其中 2 页有标注，标注 3 处')
-    expect(zh).toContain('① 第 1 页 箭头 (1,1) → (2,2)，批注：第一页')
-    expect(zh).toContain('② 第 3 页 框选 (3,3)-(4,4)')
+    expect(zh).toContain('第 1 页 箭头1 (1,1) → (2,2)，批注：第一页')
+    expect(zh).toContain('第 3 页 矩形1 (3,3)-(4,4)')
     expect(zh).toContain('这张图是：标号要往左')
     const en = buildAnnotationMessage(pagedDocument, pagedPaths, 'en')
     expect(en).toContain('(12 pages, 2 pages marked, 3 marks')
@@ -485,7 +485,7 @@ describe('the message the agent reads', () => {
   it('measures a single-surface figure instead of counting pages', () => {
     const zh = buildAnnotationMessage(document_, paths, 'zh')
     expect(zh).toContain('（图面 10×10，标注 1 处')
-    expect(zh).toContain('① 箭头 (1,1) → (2,2)，批注：指错了')
+    expect(zh).toContain('箭头1 (1,1) → (2,2)，批注：指错了')
     expect(zh).not.toContain('带批注 PDF')
     expect(buildAnnotationMessage(document_, paths, 'en')).toContain('(figure 10x10, 1 marks')
   })
@@ -502,7 +502,7 @@ describe('the message the agent reads', () => {
     expect(zh).not.toContain('.annot.json')
     // Nothing was flattened: there is no annotated image to point at.
     expect(zh).not.toContain('标注图：')
-    expect(zh).toContain('① 框选 (10,20)-(60,90)（元素文字「第一段」，选择器 #s > p:nth-of-type(1)），批注：这段要改')
+    expect(zh).toContain('矩形1 (10,20)-(60,90)（元素文字「第一段」，选择器 #s > p:nth-of-type(1)），批注：这段要改')
     // The closing tells the agent where the marks really live and what to change.
     expect(zh).toContain('HTML 生成源')
     // How to locate an element inside that source is a standing rule in the prompt

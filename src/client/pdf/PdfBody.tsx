@@ -64,6 +64,14 @@ export interface PdfBodyInjected {
    * the browser factory cannot load.
    */
   readonly figureUnit: (width: number, height: number) => number
+  /**
+   * Each mark's number among marks of its own kind.
+   *
+   * Injected for the same reason as the writer: the number a page's pins carry has to
+   * be the number the message and the reader's list use, and this module cannot import
+   * that function from the entry bundle without splitting it into a chunk of its own.
+   */
+  readonly markOrdinals: (marks: readonly AnnotationMark[]) => ReadonlyMap<string, number>
 }
 
 /** Everything the PDF body renders with. */
@@ -102,7 +110,7 @@ interface Status {
 export function PdfBody(props: PdfBodyProps): ReactNode {
   const { AnnotatorBody, seat, t } = props
   const address = props.resourceAddress ?? ''
-  const { createAutosave, annotationSignature, autosaveDelayMs, figureUnit } = props
+  const { createAutosave, annotationSignature, autosaveDelayMs, figureUnit, markOrdinals } = props
   const bytes = props.content?.kind === 'bytes' ? props.content.data : undefined
   const pane = usePaneWidth()
   const [error, setError] = useState<string | null>(null)
@@ -319,7 +327,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
 
   // --- render ---------------------------------------------------------------
 
-  const numbering = numberingOf(marks)
+  const numbering = numberingOf(marks, markOrdinals)
   const pageProps = {
     resourceAddress: props.resourceAddress,
     scrollportRef: props.scrollportRef,

@@ -67,13 +67,22 @@ export function allMarks(marks: MarksByPage): AnnotationMark[] {
  * The numbering the whole document shares.
  *
  * The list numbers marks across the document, so a page's pins continue the counting
- * rather than restarting it: "③" on page 2 has to be the third sentence.
+ * rather than restarting it: "箭头2" on page 2 has to be the second arrow, not the
+ * second mark of page 2. The counting itself is the entry bundle's `markOrdinals` —
+ * the one the message and the single-figure overlay use — and it arrives as a
+ * parameter because this module is inside the lazy chunk: a runtime import of it
+ * here would make rolldown split the counter into a chunk of its own, and the
+ * browser factory cannot resolve a sibling chunk with a synchronous `require`.
  *
  * @param marks - every page's marks.
- * @returns each mark's number, in the order the list reads them.
+ * @param ordinals - each mark's number among marks of its own kind.
+ * @returns each mark's number, counted across the document.
  */
-export function numberingOf(marks: MarksByPage): ReadonlyMap<string, number> {
-  return new Map(allMarks(marks).map((mark, index) => [mark.id, index + 1]))
+export function numberingOf(
+  marks: MarksByPage,
+  ordinals: (marks: readonly AnnotationMark[]) => ReadonlyMap<string, number>,
+): ReadonlyMap<string, number> {
+  return ordinals(allMarks(marks))
 }
 
 /**

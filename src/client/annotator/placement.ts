@@ -41,10 +41,14 @@ export interface ScreenBox {
  * measured against the panel rather than the strip, because moving the strip must
  * not move the frame the next position is measured in.
  *
- * The clamp is the part that makes a fraction mean what it looks like. The strip is
- * placed from a corner and hangs from it, so a fraction of 1 puts its *near* edge on
- * the far edge of the pane — its body entirely outside. The usable range is what is
- * left of the pane once the strip's own width or height is taken out of it.
+ * The clamp is the part that makes a fraction mean what it looks like — and it has to
+ * follow the side the strip hangs from. Before the middle the strip hangs down and to
+ * the right of its point, so the usable range is what is left of the pane once its own
+ * body is taken out of it. Past the middle it hangs up and to the left instead, so its
+ * body is behind the point and the only thing left to keep it off is the far edge.
+ * Clamping both halves by the body's own size was what stopped a strip parked on the
+ * right a whole strip-width short of it — "this is as far as it goes", at 40px from an
+ * edge it looked like it should touch.
  * @param press - the press being followed.
  * @param pointer - where the pointer is now, in client coordinates.
  * @param panel - the box the fractions are of, in client coordinates.
@@ -57,13 +61,19 @@ export function draggedSpot(
   panel: ScreenBox,
   strip: { readonly width: number; readonly height: number },
 ): PaletteSpot {
-  const x = press.origin.x + (pointer.clientX - press.box.left) / Math.max(1, panel.width)
-  const y = press.origin.y + (pointer.clientY - press.box.top) / Math.max(1, panel.height)
-  const roomX = Math.max(0, panel.width - strip.width) / Math.max(1, panel.width)
-  const roomY = Math.max(0, panel.height - strip.height) / Math.max(1, panel.height)
+  const width = Math.max(1, panel.width)
+  const height = Math.max(1, panel.height)
+  const x = press.origin.x + (pointer.clientX - press.box.left) / width
+  const y = press.origin.y + (pointer.clientY - press.box.top) / height
+  // Across the middle the strip hangs from its far corner, so it only has to stop
+  // short of that edge; before it, its whole body has to fit inside the pane.
+  const roomX = Math.max(0, panel.width - strip.width) / width
+  const roomY = Math.max(0, panel.height - strip.height) / height
+  const farX = Math.max(0, 1 - STRIP_EDGE / width)
+  const farY = Math.max(0, 1 - STRIP_EDGE / height)
   return {
-    x: Math.min(roomX, Math.max(0, x)),
-    y: Math.min(roomY, Math.max(0, y)),
+    x: Math.min(x >= 0.5 ? farX : roomX, Math.max(0, x)),
+    y: Math.min(y >= 0.5 ? farY : roomY, Math.max(0, y)),
   }
 }
 

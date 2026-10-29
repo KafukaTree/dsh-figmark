@@ -19,6 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { AnnotatorBody } from './AnnotatorBody'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from './autosave'
+import { markOrdinals } from '../shared/annotation'
 import { figureUnit } from './scale'
 import type { AnnotatorInjected } from './AnnotatorBody'
 import type { RemoteLike } from './host-actions'
@@ -152,6 +153,7 @@ export function apply(ctx: Context): void {
       annotationSignature,
       autosaveDelayMs: AUTOSAVE_DELAY_MS,
       figureUnit,
+      markOrdinals,
       // The chunk cannot import these, and the two of them are all it needs from
       // the preferences: how a document was last read, and where to record it.
       seat: createDocumentSeat({

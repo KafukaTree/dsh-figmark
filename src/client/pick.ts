@@ -17,6 +17,8 @@
  * always sees what the reach takes.
  * @module dsh-figmark/client/pick
  */
+import { PAPER_COVERAGE } from '../shared/annotation'
+
 
 /**
  * How far around the pointer a pick still counts as a hit, in surface pixels.
@@ -54,16 +56,6 @@ const PROBES: readonly (readonly [number, number])[] = (() => {
   }
   return offsets.sort((one, other) => Math.hypot(one[0], one[1]) - Math.hypot(other[0], other[1]))
 })()
-
-/**
- * How much of the surface an element has to cover to be the paper rather than a thing
- * on it.
- *
- * Almost all rather than exactly all: a document's background often sits a rounding
- * error short of its frame, and a figure's own background is the one answer a reader
- * never means — a mark around the whole drawing says nothing about any part of it.
- */
-const PAPER_COVERAGE = 0.98
 
 /**
  * Whether an element is the sheet the surface is drawn on.

@@ -1078,13 +1078,13 @@ describe('moving marks', () => {
     }
   }
 
-  it('records a resize as one undo step, and walks it back', async () => {
+  it('records an end drag as one undo step, and walks it back', async () => {
     mounted = await svgBody({ annotation: saved })
     await click(button(document.body, zh.toolSelect))
-    // Select the arrow, which is what draws its control frame.
+    // Select the arrow, which is what draws its control frame: one grip on each end.
     await selectFirstMark(document.body)
-    expect(document.querySelectorAll('rect[data-da-handle]')).toHaveLength(9)
-    await dragHandle(document.body, 'e', 40, 0)
+    expect(document.querySelectorAll('rect[data-da-handle]')).toHaveLength(2)
+    await dragHandle(document.body, 'tip', 40, 0)
     // The new geometry is what the list reports, and one undo takes it all back.
     await click(button(document.body, zh.undo))
     await openList(document.body)
@@ -1092,7 +1092,13 @@ describe('moving marks', () => {
   })
 
   it('records a rotation as one undo step, and walks it back', async () => {
-    mounted = await svgBody({ annotation: saved })
+    // A box is the mark that has a turn grip: an arrow's frame is its two ends, so a
+    // turn would have nothing to grab.
+    const boxOnly: AnnotationDocument = {
+      ...saved,
+      marks: [{ id: 'b1', kind: 'rect', color: '#e03131', points: [[10, 10], [60, 40]], detail: '框错了' }],
+    }
+    mounted = await svgBody({ annotation: boxOnly })
     await click(button(document.body, zh.toolSelect))
     await selectFirstMark(document.body)
     await dragHandle(document.body, 'rotate', 40, 60)
@@ -1111,7 +1117,7 @@ describe('moving marks', () => {
     mounted = await svgBody({ annotation: two })
     await click(button(document.body, zh.toolSelect))
     await selectFirstMark(document.body)
-    await dragHandle(document.body, 'e', 40, 0)
+    await dragHandle(document.body, 'tip', 40, 0)
     await openList(document.body)
     const entries = [...document.querySelectorAll('.da-mark-text')].map(element => element.textContent ?? '')
     expect(entries[0]).toContain('第一条')

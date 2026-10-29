@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument, AnnotationMark } from '../src/shared/annotation'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from '../src/client/autosave'
 import { figureUnit } from '../src/client/scale'
+import { markOrdinals } from '../src/shared/annotation'
 import type { AnnotatorBodyProps } from '../src/client/AnnotatorBody'
 import type { DocumentSeat, PagedAnnotationInput, PageImage } from '../src/client/document-seat'
 import type { PdfBodyProps } from '../src/client/pdf/PdfBody'
@@ -200,6 +201,7 @@ function bodyProps(props: Partial<PdfBodyProps> = {}): PdfBodyProps {
     annotationSignature,
     autosaveDelayMs: AUTOSAVE_DELAY_MS,
     figureUnit,
+    markOrdinals,
       t: copy,
     ...props,
   } as PdfBodyProps

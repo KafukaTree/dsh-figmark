@@ -7,6 +7,7 @@ import type { AnnotatorBodyProps } from '../src/client/AnnotatorBody'
 import { LazyPdfBody, type LazyPdfBodyProps } from '../src/client/LazyPdfBody'
 import { annotationSignature, createAutosave } from '../src/client/autosave'
 import { figureUnit } from '../src/client/scale'
+import { markOrdinals } from '../src/shared/annotation'
 import { en, zh } from '../src/client/locales'
 // For its side effect: React only flushes a lazy boundary from act() when the
 // environment says the test is an act environment, and that flag is global.
@@ -64,6 +65,7 @@ function renderSync(props: Partial<LazyPdfBodyProps> = {}): { readonly host: HTM
     annotationSignature,
     autosaveDelayMs: 600,
     figureUnit,
+    markOrdinals,
     // The chunk's two ways of touching the reader's own preferences: neither has a
     // fallback the chunk could invent, so both have to be handed to it.
     readPageFlow: () => undefined,

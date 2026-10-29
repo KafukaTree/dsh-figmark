@@ -8,9 +8,12 @@ import {
   MIN_MARK_SIZE,
   ROTATE_ARM,
   cursorFor,
+  endAt,
+  endHandles,
   gripAt,
   handleAt,
   handlesFor,
+  movedEnd,
   resizeBy,
   rotationTo,
   tetherFor,
@@ -300,6 +303,50 @@ describe('rotationTo', () => {
 
 })
 
+describe('the grip on each end of a line', () => {
+  const line: readonly FigurePoint[] = [[10, 20], [110, 20]]
+
+  it('puts one grip on each stored point, and none on the box between them', () => {
+    expect(endHandles(line, 0).map(handle => handle.id)).toEqual(['tail', 'tip'])
+    expect(endHandles(line, 0).map(handle => handle.point)).toEqual([[10, 20], [110, 20]])
+    // A half-drawn arrow has no line to put a grip on.
+    expect(endHandles([[10, 20]], 0)).toEqual([])
+    expect(endHandles([], 0)).toEqual([])
+  })
+
+  it('turns the grips with the mark, around the line it spans', () => {
+    // A quarter turn about the middle of the line puts the tail below it and the tip
+    // above it — the same frame the drawing turns the arrow in.
+    const turned = endHandles(line, 90).map(handle => handle.point)
+    expect(turned[0]?.[0]).toBeCloseTo(60, 6)
+    expect(turned[0]?.[1]).toBeCloseTo(-30, 6)
+    expect(turned[1]?.[0]).toBeCloseTo(60, 6)
+    expect(turned[1]?.[1]).toBeCloseTo(70, 6)
+  })
+
+  it('takes a press aimed at an end, and leaves a press at the middle to the shape', () => {
+    expect(endAt(line, 0, [12, 20])).toBe('tail')
+    expect(endAt(line, 0, [108, 20])).toBe('tip')
+    // Out of reach of either grip.
+    expect(endAt(line, 0, [60, 200])).toBeUndefined()
+    // Near the tip of a short line but nearer its middle: the mark is being dragged,
+    // not resized. The same rule the box grips use, said about two points.
+    expect(endAt([[0, 0], [10, 0]], 0, [5, 0], 8)).toBeUndefined()
+  })
+
+  it('moves the held end and leaves the other one alone', () => {
+    expect(movedEnd({ end: 'tail', at: [5, 25], origin: line, rotation: 0 })).toEqual([[5, 25], [110, 20]])
+    expect(movedEnd({ end: 'tip', at: [120, 30], origin: line, rotation: 0 })).toEqual([[10, 20], [120, 30]])
+    // A turned arrow's pointer is read in the mark's own frame, so the drawn end lands
+    // under the hand rather than where the unturned line would have put it.
+    const turned = movedEnd({ end: 'tip', at: [60, 70], origin: line, rotation: 90 })
+    expect(turned[1]?.[0]).toBeCloseTo(110, 6)
+    expect(turned[1]?.[1]).toBeCloseTo(20, 6)
+    // A mark that lost a point has no end to move; the geometry it has comes back.
+    expect(movedEnd({ end: 'tip', at: [5, 5], origin: [[1, 1]], rotation: 0 })).toEqual([[1, 1]])
+  })
+})
+
 describe('cursorFor', () => {
   it('gives every handle a cursor that describes its drag', () => {
     expect(cursorFor('nw')).toBe('nwse-resize')
@@ -315,5 +362,8 @@ describe('cursorFor', () => {
     expect(cursorFor('rotate')).toContain('data:image/svg+xml')
     expect(decodeURIComponent(cursorFor('rotate'))).toContain('A7 7 0 1 1 8.6 6.1')
     expect(cursorFor('rotate')).toContain('12 12, crosshair')
+    // An end grip drags a point of the line, which is a move rather than a stretch.
+    expect(cursorFor('tail')).toBe('move')
+    expect(cursorFor('tip')).toBe('move')
   })
 })
