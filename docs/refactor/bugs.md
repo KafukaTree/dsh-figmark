@@ -1607,6 +1607,28 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### Line endings and limits
+
+- **43.** `textLines` split on `\n` alone and kept the `\r` as part of the line's
+  text. The two sides of a diff come from different readers — the baseline is what
+  `readFile` returned, which keeps a Windows file's `\r\n`, and the edited side is a
+  `<textarea>`'s value, which normalises to `\n` on the way in — so every line differed
+  before the reader had touched anything. The first keystroke in a CRLF document was
+  reported as "改动 1 处 · +5 −5 行" on a five-line file, and the agent was told to apply
+  a diff that rewrote every line and converted the file to LF on the way. A terminator is
+  now a terminator, whichever of the two it is, and it is dropped as a whole (slicing
+  one character off `\r\n` would leave the carriage return behind as a last line).
+  `tests/text-diff.spec.ts` › "reads one keystroke in a Windows file as one changed
+  line, not a rewrite".
+- **45.** The goal field rendered `{summary.length}/300` — a fraction that reads as an
+  enforced boundary — with no `maxLength`, no truncation, and no length rule in the
+  sidecar schema, so the count could reach `420/300` and the overshoot travelled into
+  the message as-is. The field now has `maxLength` from the shared
+  `MAX_SUMMARY_CHARS` (`shared/annotation.ts`), the same number the Host's
+  `store-schema` enforces on read-back, and the count is only shown once the note is
+  close enough to the limit for it to be worth knowing.
+  `tests/annotator-body.spec.tsx` › the goal record's own length case.
+
 ### The press that says nothing
 
 - **40.** An autosave decided whether it could use `keepalive` by comparing

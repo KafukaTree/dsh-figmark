@@ -25,6 +25,28 @@ describe('splitting text into lines', () => {
     expect(textLines('a\nb')).toEqual(['a', 'b'])
   })
 
+  it('ends a line at a Windows terminator too, without carrying the carriage return', () => {
+    // The two sides of a diff come from different readers: the baseline is what
+    // `readFile` returned, which keeps `\r\n` in a Windows-authored file, and the
+    // edited side is a textarea's value, which normalises to `\n`. Reading the
+    // carriage return as part of the line made every line differ before the reader
+    // had typed anything, so one keystroke was reported as a rewrite of the file.
+    expect(textLines('a\r\nb\r\n')).toEqual(['a', 'b'])
+    expect(textLines('a\r\nb')).toEqual(['a', 'b'])
+    expect(textLines('a\r\n')).toEqual(['a'])
+  })
+
+  it('reads one keystroke in a Windows file as one changed line, not a rewrite', () => {
+    // The reader's one real edit used to arrive as "改动 1 处 · +5 −5 行" on a five-line
+    // file: the baseline carried `\r\n` and the textarea's value did not, so every line
+    // differed. With the terminator read as a terminator, the same keystroke is the one
+    // line it is.
+    const diff = diffLines('title\r\n\r\nbody\r\nlast\r\n', 'title\r\n\r\nbody\r\nlast!\r\n')
+    expect(diff.hunks).toHaveLength(1)
+    expect(diff.added).toBe(1)
+    expect(diff.removed).toBe(1)
+  })
+
   it('keeps the empty lines inside the text', () => {
     expect(textLines('\n')).toEqual([''])
     expect(textLines('a\n\nb')).toEqual(['a', '', 'b'])

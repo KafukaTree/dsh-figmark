@@ -87,13 +87,23 @@ const SIGNS: Readonly<Record<DiffLineKind, string>> = { context: ' ', add: '+', 
 
 /**
  * Split text into lines, dropping exactly one trailing newline.
+ *
+ * A line ends at `\n` or at `\r\n`: the terminator is a property of the file that was
+ * read, not part of the line's text. This matters because the two sides of a diff come
+ * from different places — the baseline is what `readFile` returned, which keeps whatever
+ * the file had, and the edited side is a `<textarea>`'s value, which normalises CRLF to
+ * LF on the way in. Splitting on `\n` alone left the `\r` attached to every baseline
+ * line, so a Windows-authored file read as "every line changed" the first time the
+ * reader typed a character into it.
  * @param text - the text to split.
  * @returns its lines; empty for an empty text.
  */
 export function textLines(text: string): string[] {
   if (text === '') return []
-  const body = text.endsWith('\n') ? text.slice(0, -1) : text
-  return body.split('\n')
+  // The terminator goes as a whole: dropping only the `\n` of a `\r\n` would leave the
+  // carriage return behind as a last line's worth of text.
+  const body = text.endsWith('\n') ? text.slice(0, text.endsWith('\r\n') ? -2 : -1) : text
+  return body.split(/\r?\n/u)
 }
 
 /**
