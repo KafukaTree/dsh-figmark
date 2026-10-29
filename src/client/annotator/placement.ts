@@ -74,20 +74,40 @@ export function draggedSpot(
 export const DEFAULT_PALETTE: PaletteSpot = { x: 0.02, y: 0.04 }
 
 /**
+ * The gap a strip keeps from the panel edge it could otherwise run into.
+ *
+ * A strip is placed from a fraction of the panel and then hangs from that point, so on
+ * a short panel the far end of a tall strip reaches past the edge — and the panel clips
+ * it, because the strips are absolutely positioned outside the one child that scrolls.
+ * Eight pixels is the least that keeps the edge from looking like a cut.
+ */
+const STRIP_EDGE = 8
+
+/**
  * A strip's box, in percentages of the panel.
  *
  * Percentages rather than pixels so the parking spot survives a resize: a reader
  * who narrows the pane keeps the strip where it was in the picture, not off the
  * edge of the panel. The transform flips the strip's own box when it sits past the
  * middle, so its far corner stays on the panel instead of hanging outside it.
+ * The height is bounded too, because the fraction only says where the strip starts.
+ * A palette of seven tools is taller than a panel dragged to two hundred pixels, and
+ * an unbounded strip would hang its last tools past the clipped edge where no scroll
+ * reaches them: the `element` tool could not be armed at all. The bound is the room
+ * left on the side the strip grows towards — down from its top edge, or up from its
+ * bottom when the transform has flipped it — so the strip on screen is always the
+ * whole strip.
  * @param spot - where the strip was parked, as fractions of the panel.
  * @returns the inline style that puts it there.
  */
 export function placementStyle(spot: PaletteSpot): CSSProperties {
+  const flipped = spot.y >= 0.5
+  const room = flipped ? spot.y : 1 - spot.y
   return {
     left: `${spot.x * 100}%`,
     top: `${spot.y * 100}%`,
-    transform: `translate(${spot.x >= 0.5 ? '-100%' : '0'}, ${spot.y >= 0.5 ? '-100%' : '0'})`,
+    maxHeight: `calc(${room * 100}% - ${STRIP_EDGE}px)`,
+    transform: `translate(${spot.x >= 0.5 ? '-100%' : '0'}, ${flipped ? '-100%' : '0'})`,
   }
 }
 

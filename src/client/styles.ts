@@ -69,7 +69,13 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    "this is a control" instead of as one more piece of the picture. */
 .da-palette{position:absolute;z-index:9;display:flex;flex-direction:column;align-items:center;gap:2px;
   padding:6px 5px;border-radius:16px;background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
-  box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08)}
+  box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
+  /* The panel clips whatever reaches past it, and the palette is positioned outside
+     the one child that scrolls, so a strip taller than the panel would leave its last
+     tools painted outside the clip — unclickable, and no scroll to reach them. The
+     height it is given is the room on the side it grows towards (placementStyle in
+     annotator/placement.ts); this turns that bound into reachable tiles, not a cut. */
+  overflow-y:auto;scrollbar-width:thin;box-sizing:border-box}
 /* While it is being dragged the pointer is the grip, whatever it passes over. */
 .da-palette[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
 .da-palette[data-dragging="true"] *{cursor:move !important}
@@ -90,7 +96,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    a column are read at a glance, and the word is still there as the tooltip and as
    the accessible name. */
 .da-palette .da-tool{width:32px;height:32px;padding:0;border:0;border-radius:50%;
-  background:transparent;color:#fff;gap:0}
+  background:transparent;color:#fff;gap:0;flex:0 0 auto}
 .da-palette .da-tool:hover{background:rgba(255,255,255,.14)}
 .da-palette .da-tool[aria-pressed="true"]{background:var(--da-accent,#176df2);color:#fff}
 .da-palette .da-tool .da-tool-icon{height:auto}
@@ -527,6 +533,12 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-md-pane{flex:1 1 auto;display:flex;min-height:0;background:var(--dsw-alias-bg-base,transparent)}
 .da-md-gutter{flex:0 0 auto;overflow:hidden;padding:8px 6px 8px 10px;text-align:right;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit));font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);user-select:none}
 .da-md-editor{flex:1 1 auto;min-height:0;width:100%;padding:8px 10px;border:none;outline:none;resize:none;background:var(--dsw-alias-bg-base,transparent);color:inherit;font-size:12px;line-height:1.6;tab-size:2;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+/* The one field a reader types a document edit into, and the one surface whose text
+   becomes a diff an agent applies. It draws no border of its own to recolour the way
+   the note fields do, so the cue is a ring on the inside edge: drawn outside it would
+   be clipped by the pane, and drawn as a background tint it would be lost against the
+   pane's own background. */
+.da-md-editor:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:-2px}
 .da-diff{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 0;font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-diff-head{padding:2px 8px;color:var(--dsw-alias-label-tertiary,inherit);background:var(--dsw-alias-bg-layer-2,transparent)}
 .da-diff-line{display:flex;gap:6px;padding:0 8px}

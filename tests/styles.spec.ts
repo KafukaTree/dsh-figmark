@@ -26,6 +26,16 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('color:var(--da-quiet,var(--dsw-alias-label-tertiary')
   })
 
+  it('shows the caret in the Markdown editor, the one field with no border to recolour', () => {
+    // Every other text field keeps a focus cue — the note textarea and the page field
+    // recolour their border, the page button draws a ring. The editor has `border:none`
+    // and `outline:none`, so a keyboard user could not see that the keyboard was there
+    // on the one surface whose whole subject is text.
+    expect(STYLES).toContain('.da-md-editor:focus-visible')
+    // Drawn inside the box: the editor fills its pane, so a ring outside it is clipped.
+    expect(STYLES).toContain('outline-offset:-2px')
+  })
+
   it('takes the armed accent from the token rather than the light theme colour', () => {
     // A hard-coded #176df2 stayed dark-blue in the dark theme while the dot beside it
     // followed the token — two accents one rule apart.

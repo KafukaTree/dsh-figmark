@@ -1607,6 +1607,25 @@ detail was allowed to stand in for the thing the reader meant.
   `tests/annotator-body.spec.tsx` › "clears the owner-held selection when the selected
   mark is removed".
 
+### The strips and the field
+
+- **49.** The tool palette had no `max-height` and no scroll of its own, and the panel
+  clips (`overflow:hidden`), while the palette is absolutely positioned outside the one
+  child that does scroll. A strip taller than the panel therefore painted its last tools
+  outside the clip, where no scroll could reach them: measured in Chromium with the real
+  stylesheet, the `element` tool was unreachable at 240px and below, and at 200px five
+  of seven tiles could be armed. `placementStyle` now bounds the strip to the room on the
+  side it grows towards — down from its point, or up from it when the transform has
+  flipped the box — and the palette scrolls inside that bound. Re-measured at 560, 320,
+  240 and 200px: nothing overflows the panel, and every tile is reachable after a scroll.
+  `tests/placement.spec.ts` › "bounds a top-half strip to the room below its point".
+- **57.** `.da-md-editor` had `border:none` and `outline:none` and no `:focus` rule — the
+  only text field in the panel with no cue at all, and the one whose text becomes a diff
+  an agent applies. Every other field recolours a border it has, or draws a ring. The
+  editor draws a ring on its inside edge (`outline-offset:-2px`): drawn outside it would
+  be clipped by the pane it fills.
+  `tests/styles.spec.ts` › "shows the caret in the Markdown editor".
+
 ### Line endings and limits
 
 - **43.** `textLines` split on `\n` alone and kept the `\r` as part of the line's
