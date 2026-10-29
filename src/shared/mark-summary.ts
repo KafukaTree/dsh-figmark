@@ -200,6 +200,27 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale): string {
  *   that reaches past it then says so rather than leaving the sign to be noticed.
  * @returns one line of the annotation summary.
  */
+/**
+ * One note, on one line.
+ *
+ * The list this feeds is read one mark per line, and the note is typed into a field
+ * that accepts a Return — so a note in three lines became three lines of list, the
+ * second and third without a marker. To the agent that is not "one mark, three
+ * lines", it is "a mark, then two lines of something", and a mark the reader numbered
+ * is answered twice or not at all. The line break is the reader's; the shape of the
+ * list belongs to the message, so the break is folded here rather than refused at the
+ * field — a wrapped note is still readable prose, a broken list is not.
+ * @param detail - the note as the reader typed it, whitespace and newlines included.
+ * @returns the note as one line, or an empty string when there is no note.
+ */
+function flattenNote(detail: string | undefined): string {
+  if (detail === undefined) return ''
+  // Runs of whitespace become one space each: a note pasted out of a terminal is
+  // usually indented, and a line's worth of indentation in the middle of a sentence
+  // reads as a wrap that was never there.
+  return detail.replace(/\s+/gu, ' ').trim()
+}
+
 export function describeMark(
   mark: AnnotationMark,
   index: number,
@@ -211,7 +232,7 @@ export function describeMark(
   // A mark that names a page carries it, so one numbered list can span the pages
   // of a document without its coordinates becoming ambiguous.
   const page = mark.page === undefined ? '' : (zh ? `第 ${mark.page} 页 ` : `page ${mark.page} `)
-  const detail = mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail.trim() : ''
+  const detail = flattenNote(mark.detail)
   const escape = figure === undefined ? '' : overhang(mark, figure, locale)
   const parts: string[] = [`${marker} ${page}${describeShape(mark, locale)}${describeAnchor(mark, locale)}${escape}`]
   if (detail !== '') parts.push(zh ? `批注：${detail}` : `note: ${detail}`)

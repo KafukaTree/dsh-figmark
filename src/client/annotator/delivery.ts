@@ -42,8 +42,32 @@ export interface DeliveryStatus {
 export function failureStatus(t: Translate, key: string, error: unknown): DeliveryStatus {
   return {
     tone: 'error',
-    text: `${t(key)}${error instanceof Error ? error.message : String(error)}`,
+    text: `${t(key)}${describeFailure(t, error)}`,
   }
+}
+
+/**
+ * What to say about a failure, in the reader's language where there is one.
+ *
+ * The errors that reach this line come from two places: the Host, whose messages are
+ * written for a reader, and this plugin's own guards, whose messages are English
+ * literals written for a developer. Concatenated, the second kind produced a Chinese
+ * sentence ending in `the sessions service is unavailable` — honest, and unreadable at
+ * the one moment the reader needed to know what went wrong. A known guard becomes a
+ * translated sentence; anything unrecognised still travels verbatim, because a code
+ * this panel does not know is a code it should not invent a sentence for.
+ * @param t - the translator seat.
+ * @param error - whatever was caught.
+ * @returns the sentence to put after the translated prefix.
+ */
+function describeFailure(t: Translate, error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const known: Record<string, string> = {
+    'the sessions service is unavailable': t('failSessions'),
+    'the conversation service is unavailable': t('failConversation'),
+    'the figure address carries no session': t('failNoSession'),
+  }
+  return known[error.message] ?? error.message
 }
 
 /**

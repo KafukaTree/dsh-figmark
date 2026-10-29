@@ -421,6 +421,21 @@ describe('delivering the difference', () => {
 })
 
 describe('reading the source', () => {
+  it('counts the caret column in characters, not in UTF-16 code units', async () => {
+    // `a😀b` is three characters and four code units. A column is a position the reader
+    // can put a caret in, and three characters have three such positions after them.
+    const { host } = await mountBody()
+    const text = 'a😀b'
+    await act(async () => {
+      const element = editor(host)
+      element.value = text
+      element.setSelectionRange(text.length, text.length)
+      element.dispatchEvent(new Event('keyup', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(host.textContent).toContain('第 1 行 · 第 4 列')
+  })
+
   it('reads the caret out of the editor', async () => {
     const { host } = await mountBody()
     expect(host.textContent).toContain('第 1 行 · 第 1 列')

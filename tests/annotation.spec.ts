@@ -230,6 +230,20 @@ describe('document validation', () => {
   })
 })
 
+describe('a note that wraps', () => {
+  it('travels as one line, so one mark stays one line of the list', () => {
+    // The field accepts a Return and the list is joined with newlines: a note in three
+    // lines used to become three lines of list, the last two without a marker, which
+    // the agent cannot attribute to the mark the picture numbered.
+    const wrapped = describeMark(
+      { id: 'm1', kind: 'rect', color: '#000', points: [[10, 10], [40, 30]], detail: '这里\n应该\n换行三次' },
+      1, 'zh',
+    )
+    expect(wrapped).not.toMatch(/[\r\n]/u)
+    expect(wrapped).toContain('这里 应该 换行三次')
+  })
+})
+
 describe('the field caps that keep a sidecar readable', () => {
   it('refuses a note longer than the cap, on both the mark and the document', () => {
     // The write path used to accept any length while the read path refused any

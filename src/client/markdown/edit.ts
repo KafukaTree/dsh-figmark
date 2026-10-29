@@ -71,7 +71,13 @@ export function caretIn(element: HTMLTextAreaElement): Caret {
   const head = element.value.slice(0, element.selectionStart)
   return {
     line: head.split('\n').length,
-    column: element.selectionStart - head.lastIndexOf('\n'),
+    // Counted in code points, not in UTF-16 code units: an emoji is one thing on
+    // screen and two code units here, so a caret after `a😀b` reported column 5 for a
+    // line that has three characters in it. A column is a thing the reader can put a
+    // caret between, and there are three of those positions after three characters.
+    // `Array.from` is the code-point count wanted here, not a convenient iteration:
+    // splitting an emoji into its two halves is the bug this line exists to avoid.
+    column: Array.from(head.slice(head.lastIndexOf('\n') + 1)).length + 1,
   }
 }
 

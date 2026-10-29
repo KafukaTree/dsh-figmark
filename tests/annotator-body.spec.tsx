@@ -2419,14 +2419,17 @@ describe('saving', () => {
   it('reports a session service the composition does not provide', async () => {
     mounted = await svgBody({ annotation: saved })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain('the sessions service is unavailable')
+    // Translated, not the guard's English literal: the reader gets a sentence in
+    // their own language at the one moment they need to know what went wrong.
+    expect(document.body.textContent).toContain('会话服务不可用')
+    expect(document.body.textContent).not.toContain('the sessions service is unavailable')
   })
 
   it('reports an address that names no session to deliver into', async () => {
     const { sessions } = stubSessions()
     mounted = await svgBody({ annotation: saved }, { sessions, resourceAddress: ABSOLUTE_ADDRESS })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain('the figure address carries no session')
+    expect(document.body.textContent).toContain('这个图不属于任何会话')
   })
 
   it('reports a refused write without losing the panel', async () => {
@@ -2508,7 +2511,7 @@ describe('saving', () => {
     const result = await svgBody({ annotation: saved })
     mounted = result
     await click(button(document.body, zh.sendToComposer))
-    expect(document.body.textContent).toContain('the conversation service is unavailable')
+    expect(document.body.textContent).toContain('会话面板不可用')
     // A refusal writes nothing: the sidecar still holds every mark the panel shows,
     // because the question is asked before the save rather than after it.
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)

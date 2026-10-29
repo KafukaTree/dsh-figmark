@@ -1626,6 +1626,18 @@ of owning the same number the stylesheet does.
   inherited the heading's weight and read as part of the sentence. It uses the panel's
   counter style.
 
+- **26.** Three of the errors the hand-off can report were English literals from this
+  plugin's own guards, concatenated onto a translated prefix: a Chinese panel said
+  `保存标注失败：the sessions service is unavailable`. The known guards are translated
+  now; an unrecognised message still travels verbatim, because a code this panel does
+  not know is one it should not invent a sentence for.
+- **44.** A note with a line break in it became three lines of the numbered list, two of
+  them without a marker — so a mark the picture numbered was answered twice or not at
+  all. The note is folded to one line where the list is built, not refused at the field:
+  a wrapped note is readable prose, a broken list is not.
+- **66.** The caret column counted UTF-16 code units, so a caret after `a😀b` reported
+  column 5 for a three-character line. Columns are counted in code points now.
+
 ## Checked and found not to be bugs
 
 Recorded so the next reader does not re-investigate them.
