@@ -267,7 +267,18 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
   }
   if (shown.length < input.pageImages.length) {
     const hidden = input.pageImages.length - shown.length
-    warnings.push(zh ? `另有 ${hidden} 页标注未附图，请看带批注 PDF。` : `${hidden} more annotated pages are not attached as images; see the annotated PDF.`)
+    // The advice names where the rest of the pages are, so it can only be given when
+    // they are actually there. Saying "see the annotated PDF" beside the warning that
+    // says the PDF did not travel sends the agent to look for a file that is not in
+    // the message — and a search is a plausible thing for it to do, which is a worse
+    // outcome than saying nothing.
+    warnings.push(pdfAttached
+      ? (zh
+        ? `另有 ${hidden} 页标注未附图，请看带批注 PDF。`
+        : `${hidden} more annotated pages are not attached as images; see the annotated PDF.`)
+      : (zh
+        ? `另有 ${hidden} 页标注未附图，带批注 PDF 也未能随消息发送：这些页的标注只有位置与说明，请按上面的描述在原文档上处理。`
+        : `${hidden} more annotated pages are not attached as images, and neither is the annotated PDF: their marks travel only as the positions and notes above — work on the original document from those.`))
   }
   content.push({ type: 'text', text: buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached) })
   await promptSession(input.sessions, input.sessionId, session, content, 'the session refused the annotation message')

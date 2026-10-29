@@ -321,6 +321,42 @@ describe('a document that has pages', () => {
     expect(capped[0]).toContain('1 more annotated pages')
   })
 
+  it('does not point at a PDF it could not attach', async () => {
+    // Finding 42's mistake in a second place: the advice is written where the page
+    // count is known, and the attachment is decided where the upload is known. On a
+    // twelve-page document with no upload service the agent got eight images, no file
+    // part, and two warnings that contradicted each other — the second naming the
+    // answer as though it were in the message.
+    const warnings = await deliverAnnotation({
+      ...delivery(),
+      locale: 'zh',
+      document: pagedDocument,
+      paths: pagedPaths,
+      annotatedPdf: new Uint8Array([1]),
+      pageImages: Array.from({ length: MAX_PAGE_IMAGES + 4 }, (_value, index) => ({ page: index + 1, image: blobOf() })),
+    })
+    const capped = warnings.filter(line => line.includes('页标注未附图'))
+    expect(capped).toHaveLength(1)
+    expect(defined(capped[0])).not.toContain('请看带批注 PDF')
+    expect(defined(capped[0])).toContain('带批注 PDF 也未能随消息发送')
+    // Both halves of the message agree about the PDF: neither says it is there.
+    expect(warnings.some(line => line.includes('未随消息发送'))).toBe(true)
+  })
+
+  it('says so in English too, when the pages and the PDF are both missing', async () => {
+    const warnings = await deliverAnnotation({
+      ...delivery(),
+      locale: 'en',
+      document: pagedDocument,
+      paths: pagedPaths,
+      annotatedPdf: new Uint8Array([1]),
+      pageImages: Array.from({ length: MAX_PAGE_IMAGES + 2 }, (_value, index) => ({ page: index + 1, image: blobOf() })),
+    })
+    const capped = defined(warnings.find(line => line.includes('more annotated pages')))
+    expect(capped).not.toContain('see the annotated PDF')
+    expect(capped).toContain('neither is the annotated PDF')
+  })
+
   it('reports an upload failure that is not an Error as its own text', async () => {
     const upload = { upload: async () => { throw 'the socket died' } } as unknown as FileUploadLike
     const warnings = await deliverAnnotation({

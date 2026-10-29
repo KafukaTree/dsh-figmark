@@ -1617,6 +1617,18 @@ detail was allowed to stand in for the thing the reader meant.
   only whether there is anything to separate.
   `tests/composer.spec.ts` › "keeps the shape of the draft, not just its words".
 
+- **59.** `deliverAnnotation` sends at most `MAX_PAGE_IMAGES` page images and, for the
+  rest, advised "请看带批注 PDF" — advice written where the page count is known, while
+  whether the PDF travels is decided where the upload is known. On a twelve-page
+  document with no upload service the agent got eight images, no file part, and two
+  warnings that contradicted each other: one saying the PDF was not attached, the next
+  naming it as the place to look. A search is a plausible response to that, which is
+  worse than saying nothing. The advice now reads the answer the attachment produced,
+  and when the PDF did not travel it says where those pages *do* live — the positions
+  and notes above.
+  `tests/session.spec.ts` › "does not point at a PDF it could not attach", "says so in
+  English too, when the pages and the PDF are both missing".
+
 ### The diff's own words
 
 - **61.** `diffLines` compared the two texts only after `textLines` had dropped one
