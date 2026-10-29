@@ -85,9 +85,13 @@ describe('a placed point mark', () => {
     expect(pointMark({ ...pen, point: [1, 1] }, anchor).anchor).toEqual(anchor)
   })
 
-  it('carries no weight at the default, and the rail’s when moved', () => {
+  it('carries no weight at all, because a pin is sized by the figure', () => {
+    // The rail is the reader's answer to "how thick should this stroke be" and a pin
+    // is not a stroke. Writing the number anyway left a weight in the file that drew
+    // nothing, and made an old mark and a new one compare unequal for no visible
+    // reason.
     expect(pointMark({ ...pen, point: [0, 0] }, undefined).weight).toBeUndefined()
-    expect(pointMark({ color: '#000', weight: 2, point: [0, 0] }, undefined).weight).toBe(2)
+    expect(pointMark({ color: '#000', weight: 2, point: [0, 0] }, undefined).weight).toBeUndefined()
   })
 })
 

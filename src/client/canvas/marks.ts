@@ -124,9 +124,9 @@ export function pointMark(
     kind: 'point',
     color: seed.color,
     points: [seed.point],
-    // A pin is sized by this same number, so the rail the reader set before
-    // placing it decides how big the pin lands.
-    ...weightField(seed.weight),
+    // No weight: a pin is sized by the figure alone, so a weight here would be a
+    // number in the file that draws nothing — and the rail does not stand open on a
+    // point mark to offer one.
     ...(anchor === undefined ? {} : { anchor }),
   }
 }

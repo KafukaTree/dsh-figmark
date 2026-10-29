@@ -93,7 +93,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
     [props.t, props.localeId],
   )
   const [edit, setEdit] = useState<Edit | null>(null)
-  const [notes, setNotes] = useState<Readonly<Record<number, string>>>(NO_NOTES)
+  const [notes, setNotes] = useState<Readonly<Record<string, string>>>(NO_NOTES)
   const [caret, setCaret] = useState<Caret>(START_CARET)
   const [stale, setStale] = useState(false)
   const [view, setView] = useState<'edit' | 'diff'>('edit')

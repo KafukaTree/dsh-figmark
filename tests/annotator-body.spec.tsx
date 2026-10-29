@@ -3,7 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AnnotationDocument, MarkAnchor } from '../src/shared/annotation'
+import type { AnnotationDocument, AnnotationMark, MarkAnchor } from '../src/shared/annotation'
 import { ANNOTATION_VERSION, MAX_SUMMARY_CHARS } from '../src/shared/annotation'
 import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
@@ -2226,27 +2226,32 @@ describe('the weight of the pen', () => {
     expect(document.querySelector('.da-weight-input')).toBeNull()
   })
 
-  it('offers the same rail for a point, where it sizes the pin rather than the pen', async () => {
-    // One control for one idea: how big the selected mark is. A pin has no stroke to
-    // weigh, so the rail keeps its place and changes its subject.
+  it('stands the rail down for a point, whose pin the rail cannot size', async () => {
+    // The rail belongs to the stroke, and a pin is a place rather than a line: it used
+    // to grow with the rail, which is how a rail left at 4 turned the next pin into a
+    // marker four times its size. With that link gone the rail stood open on a mark it
+    // moved nothing on — the same lie the element marks were telling.
     mounted = await svgBody({ annotation: pointOnly })
     await selectFirstMark(document.body)
-    expect(defined(document.querySelector('.da-weight')).getAttribute('title')).toBe(zh.pinSize)
+    expect(document.querySelector('.da-weight')).toBeNull()
   })
 
-  it('draws the number inside a pin at the size the rail gives the pin', async () => {
-    // The complaint this answers: the pin grew but the numeral in it stayed the same,
-    // so the number got lost in its own head exactly where it had just been made
-    // legible. Both are one multiple of the mark's weight.
-    mounted = await svgBody({ annotation: pointOnly })
-    await selectFirstMark(document.body)
-    const numeral = (): Element | null => document.querySelector('[data-da-mark] text')
-    const before = Number(defined(numeral()).getAttribute('font-size'))
-    await type(rail(), '3')
-    const after = Number(defined(numeral()).getAttribute('font-size'))
-    expect(after).toBeGreaterThan(before)
-    // Three times the weight, three times the numeral — the same rule the pin follows.
-    expect(after / before).toBeCloseTo(3, 5)
+  it('draws the same pin whatever the rail was left at', async () => {
+    // The pin is sized by the figure alone now, so a mark placed while the rail reads
+    // 4 and one placed while it reads 1 are the same marker. This is the whole point
+    // of cutting the link: the reader's last arrow must not decide how big the next
+    // place-marker lands.
+    const wide = { ...pointOnly }
+    wide.marks = [{ ...(saved.marks[0] as AnnotationMark), kind: 'point', points: [[20, 60]], weight: 4 }]
+    mounted = await svgBody({ annotation: wide })
+    const d = (): string | null => defined(document.querySelector('[data-da-mark] path')).getAttribute('d')
+    const heavy = d()
+    await act(async () => { mounted?.root.unmount() })
+    mounted = undefined
+    const plain = { ...pointOnly }
+    plain.marks = [{ ...(saved.marks[0] as AnnotationMark), kind: 'point', points: [[20, 60]] }]
+    mounted = await svgBody({ annotation: plain })
+    expect(d()).toBe(heavy)
   })
 
   it('keeps the comment buttons inside the panel when the pill sits at the edge', async () => {

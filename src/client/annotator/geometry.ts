@@ -14,6 +14,7 @@ import type { CSSProperties } from 'react'
 import { WEIGHT_DEFAULT, WEIGHT_MAX, WEIGHT_MIN, type AnnotationMark } from '../../shared/annotation'
 import type { Tool } from '../Canvas'
 import type { PlotBounds } from '../plot'
+import { isStrokeKind } from '../render'
 import { WEIGHT_TOOLS } from './tokens'
 
 /** How much a figure is drawn at. */
@@ -78,7 +79,11 @@ export function railWeight(
   remembered: number,
 ): number | null {
   if (selected === null) return WEIGHT_TOOLS.has(tool) ? remembered : null
-  if (selected.kind === 'element') return null
+  // A pin and a lit element are both marks with nothing to thicken: the pin is a
+  // place on the figure and the element mark is the element itself, and neither
+  // draws a stroke. A rail that moves and changes nothing is worse than no rail —
+  // it tells the reader the mark is sized by something it is not.
+  if (!isStrokeKind(selected.kind)) return null
   return selected.weight ?? WEIGHT_DEFAULT
 }
 

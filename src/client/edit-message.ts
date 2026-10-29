@@ -13,7 +13,7 @@
  */
 import type { SummaryLocale } from '../shared/annotation'
 import { baseNameOf } from '../shared/path-name'
-import { formatHunkHeader, formatUnifiedDiff, type DiffHunk, type TextDiff } from '../shared/text-diff'
+import { formatHunkHeader, formatUnifiedDiff, hunkChange, hunkKey, type DiffHunk, type TextDiff } from '../shared/text-diff'
 
 /** Most diff lines one edit message carries before it defers to an attachment. */
 export const MAX_DIFF_LINES = 400
@@ -86,22 +86,46 @@ export interface EditMessageInput {
  */
 export function describeNotes(
   diff: TextDiff,
-  notes: Readonly<Record<number, string>>,
+  notes: Readonly<Record<string, string>>,
   locale: SummaryLocale,
 ): string[] {
   const zh = locale === 'zh'
   const lines: string[] = []
-  const keys = Object.keys(notes).map(Number).sort((left, right) => left - right)
-  for (const key of keys) {
-    const text = notes[key]
+  // Only notes whose hunk is in *this* difference travel. A note whose change has
+  // moved or gone away has nothing left to be about, and sending it would tell the
+  // agent to look at a line nobody touched — with no `@@` header to disambiguate it,
+  // because that is only added when a hunk matches.
+  for (const hunk of diff.hunks) {
+    const text = notes[hunkKey(hunk)]
     if (text === undefined || text.trim() === '') continue
-    const hunk = diff.hunks.find(candidate => candidate.oldStart === key)
-    const where = hunk === undefined ? '' : `（${formatHunkHeader(hunk)}）`
+    const at = locate(zh, hunk)
     lines.push(zh
-      ? `${lines.length + 1}. 第 ${key} 行${where}：${text.trim()}`
-      : `${lines.length + 1}. line ${key}${hunk === undefined ? '' : ` (${formatHunkHeader(hunk)})`}: ${text.trim()}`)
+      ? `${lines.length + 1}. ${at}：${text.trim()}`
+      : `${lines.length + 1}. ${at}: ${text.trim()}`)
   }
   return lines
+}
+
+/**
+ * Say where one hunk's change is, in the reader's language.
+ *
+ * The number names the line the change happens on, not the hunk's first context line:
+ * a note on a change at line 9 used to read "第 6 行", because three lines of context
+ * put the hunk's start three lines early. An insertion names the line it follows,
+ * because a line that does not exist in the older file has no number there.
+ * @param zh - whether to write Chinese.
+ * @param hunk - the hunk being described.
+ * @param header - the hunk's `@@` header, in parentheses.
+ * @returns the clause naming the change.
+ */
+function locate(zh: boolean, hunk: DiffHunk): string {
+  const change = hunkChange(hunk)
+  if (zh) {
+    const header = `（${formatHunkHeader(hunk)}）`
+    return change.kind === 'insert' ? `第 ${change.at} 行之后${header}` : `第 ${change.at} 行${header}`
+  }
+  const header = ` (${formatHunkHeader(hunk)})`
+  return change.kind === 'insert' ? `after line ${change.at}${header}` : `line ${change.at}${header}`
 }
 
 /**

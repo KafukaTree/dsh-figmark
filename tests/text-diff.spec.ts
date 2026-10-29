@@ -7,6 +7,7 @@ import {
   diffLines,
   formatHunkHeader,
   formatUnifiedDiff,
+  hunkChange,
   textLines,
 } from '../src/shared/text-diff'
 import { baseNameOf } from '../src/shared/path-name'
@@ -175,5 +176,42 @@ describe('writing a difference out', () => {
   it('takes the file name out of a Windows path too, and out of a bare name', () => {
     expect(baseNameOf('C:\\w\\report.md')).toBe('report.md')
     expect(baseNameOf('report.md')).toBe('report.md')
+  })
+})
+
+describe('a hunk that carries no change', () => {
+  it('names an insertion rather than throwing, for a caller that hands one over', () => {
+    // `diffLines` never produces such a hunk, but `hunkChange` is exported and a
+    // caller can. Reporting the insertion at the last line it saw is the only place
+    // left to name; the point of the test is that no path through it is unreachable.
+    expect(hunkChange({ oldStart: 1, oldCount: 3, newStart: 1, newCount: 4, lines: [] }))
+      .toEqual({ kind: 'insert', at: 1, count: 0 })
+  })
+
+  it('keeps the last line it did see when a context line came without one', () => {
+    // Same reason as above: the count of the older side is what the walk reports
+    // from, and a context line that says nothing about its number must not reset it
+    // to zero — that would name the first line for an edit far down the file.
+    const hunk = {
+      oldStart: 9, oldCount: 2, newStart: 9, newCount: 3,
+      lines: [
+        { kind: 'context' as const, text: 'before', newLine: 9 },
+        { kind: 'add' as const, text: 'new', newLine: 10 },
+      ],
+    }
+    expect(hunkChange(hunk)).toEqual({ kind: 'insert', at: 1, count: 0 })
+  })
+
+  it('falls back to the line after the last one it saw when a removal names none', () => {
+    // The same guard on the removal side: a removal that does not say which line it
+    // takes away is placed just past the last context line, not at line zero.
+    const hunk = {
+      oldStart: 7, oldCount: 2, newStart: 7, newCount: 1,
+      lines: [
+        { kind: 'context' as const, text: 'before', oldLine: 7, newLine: 7 },
+        { kind: 'remove' as const, text: 'gone' },
+      ],
+    }
+    expect(hunkChange(hunk)).toEqual({ kind: 'replace', at: 8, count: 1 })
   })
 })

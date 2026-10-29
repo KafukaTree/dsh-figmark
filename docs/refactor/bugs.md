@@ -1493,6 +1493,40 @@ riding along inside a file split. Each names the test that now holds it.
   for the figure moved the stroke weight instead, with nothing on screen to say so.
   `tests/styles.spec.ts` › "gives the weight slider no reach the rail does not show".
 
+### The anchor, the marker, and the note's line
+
+Three findings that share a subject rather than a file: each one is a place where a
+detail was allowed to stand in for the thing the reader meant.
+
+- **38.** An anchor named the element that was pointed at by running every string
+  inside it together, so a matplotlib axes group holding `0.0`, `0.5`, `1.0` and
+  `y label` reached the agent as `0.00.51.0y label`. The parts are joined with a
+  space now (`client/anchor-text.ts`), and both figure kinds read the same function
+  instead of keeping a copy of the truncation rule each. A `<text>` holding one
+  string is unchanged.
+  `tests/anchor-text.spec.ts` › "keeps sibling labels apart".
+- **9, 64, 65.** A reader's note was filed under the hunk's `oldStart`, and moved,
+  merged, and outlived its change from there. A change at line 9 was labelled
+  "第 6 行" because `oldStart` counts three context lines above it; two changes whose
+  context began on the same line shared one note; a note written on a line that was
+  later undone kept being sent as a note on "第 1 行" — a line nobody had touched.
+  Notes are keyed by the whole hunk now (`hunkKey`), the label reports the line that
+  actually changed (`hunkChange`), and only hunks still in the diff contribute a
+  note. An insertion in an empty file names line 1 rather than line 0.
+  `tests/session.spec.ts` › "the notes a reader attaches to a change".
+
+### The marker
+
+- **The pin's size and its flip came from the stroke weight.** `pinRadiusOf` and the
+  flip test both read `mark.weight`, so a rail left at 4 to draw a fat arrow drew the
+  next pin four times its size and made it turn over anywhere in the top sixth of the
+  figure — the marker flipped mid-drag with nothing else changing. A pin is a place,
+  not a stroke: it is sized by the figure alone now, the rail stands down on a point
+  mark the way it already did on an element, and the marker stands the same way up
+  everywhere, because `plotBounds` grows the sheet for a head that reaches past the
+  top edge. `tests/render-export.spec.ts` › "keeps the pin the same way up at the top
+  edge"; `tests/annotator-body.spec.tsx` › "stands the rail down for a point".
+
 ### The persistence half
 
 The seven below are all in the code that owns the sidecar rather than the code

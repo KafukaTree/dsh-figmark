@@ -14,6 +14,7 @@
  * @module dsh-figmark/client/html-dom
  */
 import type { MarkAnchor } from '../shared/annotation'
+import { anchorTextOf } from './anchor-text'
 import { depthBelow, selectorFor } from './dom-path'
 import { isPaper, pickStack } from './pick'
 
@@ -43,9 +44,6 @@ const WRAPPER_TAGS = [
   'span', 'b', 'i', 'em', 'strong', 'small', 'u', 's', 'sub', 'sup',
   'code', 'a', 'label', 'mark', 'abbr', 'time', 'cite', 'q',
 ]
-
-/** Cap on the element text carried into an anchor, matching the inline-SVG anchor. */
-const ANCHOR_TEXT_LIMIT = 80
 
 /**
  * Prepare one document for the frame.
@@ -195,8 +193,9 @@ function describeInDocument(described: Element, body: Element): MarkAnchor {
   const rect = described.getBoundingClientRect()
   // `Element.textContent` is `string | null` in the DOM types, but only a Document or
   // a Doctype can report null; an element always reports its text.
-  const rawText = described.textContent as string
-  const text = rawText.trim().replace(/\s+/g, ' ').slice(0, ANCHOR_TEXT_LIMIT)
+  // Kept apart, so two labels inside one element stay two labels: the same rule the
+  // SVG path follows, because a reader cannot tell which figure kind they are on.
+  const text = anchorTextOf(described)
   return {
     tag: described.tagName.toLowerCase(),
     bbox: [rect.left, rect.top, rect.width, rect.height],

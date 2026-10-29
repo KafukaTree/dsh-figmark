@@ -10,6 +10,7 @@
  */
 
 import type { MarkAnchor } from '../shared/annotation'
+import { anchorTextOf } from './anchor-text'
 import { depthBelow, isStableId, selectorWithin } from './dom-path'
 import { coversInterior, PICK_REACH, pickStack } from './pick'
 
@@ -24,9 +25,6 @@ import { coversInterior, PICK_REACH, pickStack } from './pick'
  * figure — an external target is a reference the `href` rule below strips.
  */
 const FORBIDDEN_ELEMENTS = ['script', 'foreignObject', 'iframe', 'audio', 'video', 'animate', 'set']
-
-/** Cap on the element text carried into an anchor. */
-const ANCHOR_TEXT_LIMIT = 80
 
 /**
  * A rule that makes the browser fetch something from outside the figure.
@@ -307,12 +305,11 @@ export function anchorAtPoint(
   const rect = described.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
   const title = described.querySelector(':scope > title')?.textContent?.trim()
-  // `Element.textContent` is `string | null` in the DOM types, but only a Document or
-  // a Doctype can report null; an element always reports its text.
-  const rawText = described.textContent as string
+  // The element's descendants' words, kept apart. `textContent` would run them
+  // together: an axes group holding four tick labels reported `0.00.51.0y label`.
   // `described` is `hit` or an ancestor of it, so its text already contains the hit's
   // own text; there is nothing to fall back to.
-  const text = rawText.trim().replace(/\s+/g, ' ').slice(0, ANCHOR_TEXT_LIMIT)
+  const text = anchorTextOf(described)
   return {
     tag: described.tagName.toLowerCase(),
     bbox: [

@@ -79,7 +79,7 @@ export const ELEMENT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['element'])
  * selected the rail has no subject. `point` is, because a pin is sized by the same
  * number — the rail asks "how big is this mark" either way.
  */
-export const WEIGHT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['arrow', 'rect', 'ellipse', 'pen', 'point'])
+export const WEIGHT_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['arrow', 'rect', 'ellipse', 'pen'])
 
 /** The copy key naming the shape each kind of mark is, for the list's second line. */
 export const TOOL_COPY: Record<AnnotationMark['kind'], string> = {

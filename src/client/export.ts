@@ -86,7 +86,7 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
     if (number !== undefined) {
       parts.push(
         `<text x="${centre[0]}" y="${centre[1]}" font-family="${PIN_FONT_FAMILY}"`
-        + ` font-size="${pinFontSizeOf(mark, unit)}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
+        + ` font-size="${pinFontSizeOf(unit)}" font-weight="700" fill="${PIN_NUMBER_COLOR}"`
         + ` text-anchor="middle" dominant-baseline="central">${number}</text>`,
       )
     }

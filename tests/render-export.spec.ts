@@ -90,14 +90,25 @@ describe('mark geometry', () => {
     expect(box.y + box.height).toBe(60)
   })
 
-  it('stands the pin below a coordinate too near the top edge, so its head stays in the figure', () => {
-    const pin: AnnotationMark = { id: 't', kind: 'point', color: '#000', points: [[40, 3]] }
-    expect(defined(pinNumberCentre(pin))[1]).toBeGreaterThan(3 + POINT_RADIUS)
-    const box = defined(pointMarkBox(pin))
-    // The tip is the box's top edge now, and the head hangs below it, so nothing
-    // reaches above the coordinate and nothing leaves the figure's top.
-    expect(box.y).toBe(3)
-    expect(box.height).toBeGreaterThan(POINT_RADIUS * 2)
+  it('keeps the pin the same way up at the top edge, and lets the paper grow instead', () => {
+    // A marker that turns over near an edge changes meaning with its position: the
+    // reader who dragged one up the figure watched it snap round mid-gesture with
+    // nothing else different. It now stands the same way up everywhere, and the
+    // sheet is measured from the marks so its head lands on paper that is there.
+    const middle: AnnotationMark = { id: 'a', kind: 'point', color: '#000', points: [[40, 200]] }
+    const nearTop: AnnotationMark = { id: 'b', kind: 'point', color: '#000', points: [[40, 3]] }
+    const middleCentre = defined(pinNumberCentre(middle))
+    const topCentre = defined(pinNumberCentre(nearTop))
+    expect(topCentre[1]).toBeLessThan(3)
+    // Both stand at the same offset above their own tip, which is the whole point.
+    const middleTip = (middle.points[0] as readonly [number, number])[1]
+    expect(middleTip - middleCentre[1]).toBe(3 - topCentre[1])
+    // The head reaches above the figure's top edge, which is exactly what the paper
+    // is there to hold: `plotBounds` grows upward for it.
+    const box = defined(pointMarkBox(nearTop))
+    expect(box.y).toBeLessThan(0)
+    // The point is still the box's bottom edge: the marker claims the coordinate.
+    expect(box.y + box.height).toBe(3)
   })
 
   it('has no pin for a point mark that carries no coordinate', () => {
@@ -275,19 +286,18 @@ describe('review image', () => {
     expect(svg).toContain('>1</text>')
   })
 
-  it('draws the number inside a pin as large as the pin itself', () => {
-    // The rail that makes a pin bigger has to make its number bigger with it: a head
-    // that grows around a fixed-size numeral reads as a circle with a speck in it, and
-    // at the large end the number stops being legible where it matters most.
+  it('draws the number inside a pin at one size, whatever rail the stroke was drawn at', () => {
+    // The weight belongs to the stroke: it is the reader's answer to "how thick
+    // should this line be", and a pin is not a line. Carrying it here made a rail
+    // left at 4 turn the next pin into a marker four times its size, big enough to
+    // cover the peak it was pointing at.
     const layer = { kind: 'raster' as const, dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 }
     const pin = (weight: number): string => composeReviewSvg(layer, [
       { id: 'p', kind: 'point', color: '#e03131', points: [[200, 150]], weight, detail: '这里' },
     ])
-    const small = pin(1)
-    const large = pin(3)
     const unit = figureUnit(400, 300)
-    expect(small).toContain(`font-size="${PIN_FONT_SIZE * unit}"`)
-    expect(large).toContain(`font-size="${PIN_FONT_SIZE * 3 * unit}"`)
+    expect(pin(1)).toContain(`font-size="${PIN_FONT_SIZE * unit}"`)
+    expect(pin(3)).toContain(`font-size="${PIN_FONT_SIZE * unit}"`)
   })
 
   it('sizes the reviewed picture to the paper the marks need', () => {

@@ -1970,7 +1970,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           trackId={trackId}
           value={shownWeight}
           fraction={weightFraction}
-          forPin={selected?.kind === 'point' || tool === 'point'}
           onChange={chooseWeight}
           t={t}
         />

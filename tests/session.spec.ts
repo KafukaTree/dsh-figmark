@@ -10,6 +10,8 @@ import {
   type SessionsLike,
 } from '../src/client/session'
 import { buildAnnotationMessage } from '../src/client/annotation-message'
+import { hunkKey } from '../src/shared/text-diff'
+import { defined } from './dom'
 import {
   MAX_DIFF_LINES,
   buildEditMessage,
@@ -691,42 +693,78 @@ describe('delivering an edit proposal', () => {
 })
 
 describe('the notes a reader attaches to a change', () => {
-  it('pairs a note with the hunk that starts on its line', () => {
+  it('pairs a note with the hunk it was written about', () => {
     const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    const lines = describeNotes(diff, { 1: '为什么这么改' }, 'zh')
-    expect(lines).toEqual(['1. 第 1 行（@@ -1,3 +1,3 @@）：为什么这么改'])
-    expect(describeNotes(diff, { 1: 'why' }, 'en')).toEqual(['1. line 1 (@@ -1,3 +1,3 @@): why'])
+    const [hunk] = diff.hunks
+    const lines = describeNotes(diff, { [hunkKey(defined(hunk))]: '为什么这么改' }, 'zh')
+    // The number names the change, not the hunk's first context line: line 2 is what
+    // was edited, and it is the number the reader was offered when they typed this.
+    expect(lines).toEqual(['1. 第 2 行（@@ -1,3 +1,3 @@）：为什么这么改'])
+    expect(describeNotes(diff, { [hunkKey(defined(hunk))]: 'why' }, 'en'))
+      .toEqual(['1. line 2 (@@ -1,3 +1,3 @@): why'])
   })
 
-  it('still carries a note whose change the reader has since dropped', () => {
-    const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    expect(describeNotes(diff, { 99: '这一行也要看' }, 'zh')).toEqual(['1. 第 99 行：这一行也要看'])
-    expect(describeNotes(diff, { 99: 'read this too' }, 'en')).toEqual(['1. line 99: read this too'])
+  it('names the changed line, not the hunk first context line', () => {
+    // A change on baseline line 9 lands in a hunk that starts at 6, because three
+    // lines of context come before it. The reader typed the note beside a change at
+    // line 9 and the sentence used to lead with "第 6 行".
+    const before = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`)
+    const after = [...before]
+    after[8] = 'changed nine'
+    const diff = diffLines(before.join('\n'), after.join('\n'))
+    const [hunk] = diff.hunks
+    expect(defined(hunk).oldStart).toBe(6)
+    expect(describeNotes(diff, { [hunkKey(defined(hunk))]: '改这里' }, 'zh'))
+      .toEqual(['1. 第 9 行（@@ -6,7 +6,7 @@）：改这里'])
   })
 
-  it('skips notes the reader emptied and keeps the rest in line order', () => {
+  it('names the line an insertion follows, because an inserted line has no number', () => {
+    // Pure insertion: there is no older line holding the new text, so the note says
+    // which line comes before it. In an empty file that is line 0 — one-based counting
+    // has no line zero, and the sentence used to say "第 0 行".
+    const prepend = diffLines('alpha\nbeta\ngamma', 'inserted\nalpha\nbeta\ngamma')
+    const [hunk] = prepend.hunks
+    expect(describeNotes(prepend, { [hunkKey(defined(hunk))]: 'note for prepend' }, 'zh'))
+      .toEqual(['1. 第 1 行之后（@@ -1,3 +1,4 @@）：note for prepend'])
+    expect(describeNotes(prepend, { [hunkKey(defined(hunk))]: 'n' }, 'en'))
+      .toEqual(['1. after line 1 (@@ -1,3 +1,4 @@): n'])
+    const intoEmpty = diffLines('', 'first')
+    const [only] = intoEmpty.hunks
+    // Nothing precedes line 1, so the note names line 1 rather than a phantom 0.
+    expect(describeNotes(intoEmpty, { [hunkKey(defined(only))]: 'n' }, 'zh'))
+      .toEqual(['1. 第 1 行之后（@@ -0,0 +1,1 @@）：n'])
+  })
+
+  it('drops a note whose change the reader has since dropped', () => {
+    // The note was filed under a hunk that is no longer in the difference: it has
+    // nothing left to be about, and sending it would name a line nobody touched.
     const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    const lines = describeNotes(diff, { 3: '  ', 1: 'first', 2: 'second' }, 'zh')
-    // Only the hunk's own baseline start line pairs with it; a note on any
-    // other line travels with its line number alone.
-    expect(lines).toEqual([
-      '1. 第 1 行（@@ -1,3 +1,3 @@）：first',
-      '2. 第 2 行：second',
-    ])
+    expect(describeNotes(diff, { '99,1,99,1': '这一行也要看' }, 'zh')).toEqual([])
+    expect(describeNotes(diff, { '99,1,99,1': 'read this too' }, 'en')).toEqual([])
+  })
+
+  it('skips notes the reader emptied and keeps the rest in hunk order', () => {
+    const diff = diffLines('a\nb\nc', 'a\nB\nc')
+    const [hunk] = diff.hunks
+    const key = hunkKey(defined(hunk))
+    expect(describeNotes(diff, { [key]: '  ' }, 'zh')).toEqual([])
+    expect(describeNotes(diff, { [key]: 'first' }, 'zh'))
+      .toEqual(['1. 第 2 行（@@ -1,3 +1,3 @@）：first'])
     expect(describeNotes(diff, {}, 'zh')).toEqual([])
   })
 
   it('counts them in the message header and lists them under the diff', () => {
     const diff = diffLines('a\nb\nc', 'a\nB\nc')
     const fitted = fitDiff('/w/docs/report.md', diff)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { 1: '参数要留空' }, stale: false, locale: 'zh' })
+    const key = hunkKey(defined(diff.hunks[0]))
+    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: '参数要留空' }, stale: false, locale: 'zh' })
     expect(zh).toContain('改动 1 处，+1 −1 行，说明 1 条')
     expect(zh).toContain('我的说明：')
-    expect(zh).toContain('1. 第 1 行（@@ -1,3 +1,3 @@）：参数要留空')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { 1: 'leave it empty' }, stale: false, locale: 'en' })
+    expect(zh).toContain('1. 第 2 行（@@ -1,3 +1,3 @@）：参数要留空')
+    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: 'leave it empty' }, stale: false, locale: 'en' })
     expect(en).toContain('1 hunks, +1 -1 lines, 1 notes')
     expect(en).toContain('My notes:')
-    expect(en).toContain('1. line 1 (@@ -1,3 +1,3 @@): leave it empty')
+    expect(en).toContain('1. line 2 (@@ -1,3 +1,3 @@): leave it empty')
     // No notes, no section: the message stays as short as it was.
     expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, locale: 'zh' }))
       .not.toContain('我的说明')
@@ -742,7 +780,7 @@ describe('the notes a reader attaches to a change', () => {
       documentPath: '/w/docs/report.md',
       diff: wideDiff(),
       editedText: 'a\nB\nc\n',
-      notes: { 5: '这一处先别改' },
+      notes: { [hunkKey(defined(wideDiff().hunks[0]))]: '这一处先别改' },
       stale: false,
       locale: 'zh',
     })

@@ -8,7 +8,7 @@
  * @module dsh-figmark/client/markdown/DiffView
  */
 import type { ReactNode } from 'react'
-import { formatHunkHeader, type TextDiff } from '../../shared/text-diff'
+import { formatHunkHeader, hunkChange, hunkKey, type DiffHunk, type TextDiff } from '../../shared/text-diff'
 import type { Translate } from '../AnnotatorBody'
 
 /** The character a line carries in the margin. */
@@ -18,10 +18,14 @@ const SIGNS = { context: ' ', add: '+', remove: '-' } as const
 export interface DiffViewProps {
   /** The difference to draw. */
   readonly diff: TextDiff
-  /** The reader's notes, keyed by the baseline line each hunk starts at. */
-  readonly notes: Readonly<Record<number, string>>
-  /** Reports a note the reader wrote for one hunk. @param line - the hunk's baseline line. @param text - what the reader wrote. */
-  readonly onNote: (line: number, text: string) => void
+  /** The reader's notes, keyed by the hunk each was written about. */
+  readonly notes: Readonly<Record<string, string>>
+  /**
+   * Records one note.
+   * @param key - the hunk the note is filed under.
+   * @param text - what the reader wrote.
+   */
+  readonly onNote: (key: string, text: string) => void
   /** Product copy seat. */
   readonly t: Translate
 }
@@ -31,6 +35,19 @@ export interface DiffViewProps {
  * @param props - the difference, the notes, and the copy seat.
  * @returns the difference view.
  */
+/**
+ * The line a note on this hunk is really about.
+ *
+ * The hunk's `oldStart` includes up to three lines of leading context, so it is up to
+ * three lines short of the edit. A pure insertion has no line of its own in the older
+ * file, so it names the line the new text follows.
+ * @param hunk - the hunk being annotated.
+ * @returns the 1-based older line the change is at.
+ */
+function changeAt(hunk: DiffHunk): number {
+  return hunkChange(hunk).at
+}
+
 export function DiffView({ diff, notes, onNote, t }: DiffViewProps): ReactNode {
   if (diff.hunks.length === 0) return <p className="da-hint">{t('diffEmpty')}</p>
   return (
@@ -47,12 +64,15 @@ export function DiffView({ diff, notes, onNote, t }: DiffViewProps): ReactNode {
             </div>
           ))}
           <label className="da-diff-note">
-            <span className="da-diff-note-label">{t('hunkNote', { line: hunk.oldStart })}</span>
+            {/* The label names the change, not the hunk's first context line: with
+                three lines of context the hunk starts up to three lines early, so a
+                note on line 9 was offered as "第 6 行". */}
+            <span className="da-diff-note-label">{t('hunkNote', { line: changeAt(hunk) })}</span>
             <input
               type="text"
-              value={notes[hunk.oldStart] ?? ''}
+              value={notes[hunkKey(hunk)] ?? ''}
               placeholder={t('hunkNotePlaceholder')}
-              onChange={(event) => { onNote(hunk.oldStart, event.target.value) }}
+              onChange={(event) => { onNote(hunkKey(hunk), event.target.value) }}
             />
           </label>
         </div>

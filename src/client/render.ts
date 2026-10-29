@@ -55,17 +55,22 @@ export const POINT_RADIUS = 10
 /**
  * Half-width of one pin's head, in figure pixels.
  *
- * A pin is a marker the reader compares against the line work, so it is sized like a
- * stroke: by the figure's unit and by the mark's own weight. The weight is reused
- * rather than given its own field because it already means "how big this mark is" to
- * the reader, and one rail on the left is enough — a stroke and a pin are never the
- * same mark, so the one number never has to mean two things at once.
- * @param mark - the point mark.
+ * Sized by the figure alone. The weight rail is the reader's answer to "how thick
+ * should this stroke be", and a pin is not a stroke: it marks *where*, carries a
+ * digit, and is compared against the same line work whatever the last arrow was
+ * drawn at. Reusing the weight here meant that a rail left at 4 to draw a fat arrow
+ * turned the next pin into a marker four times its size — a pin that covered the
+ * peak it was pointing at. A mark set by one control should not grow by a control
+ * that belongs to another kind of mark.
+ *
+ * A `weight` already written into an older point mark is ignored rather than
+ * migrated: the field is read by nothing now, so an old file and a new one draw the
+ * same pin.
  * @param unit - the figure's size multiple.
- * @returns its head's half-width in figure pixels.
+ * @returns the head's half-width in figure pixels.
  */
-export function pinRadiusOf(mark: AnnotationMark, unit = 1): number {
-  return POINT_RADIUS * (mark.weight ?? 1) * unit
+export function pinRadiusOf(unit = 1): number {
+  return POINT_RADIUS * unit
 }
 
 /**
@@ -108,16 +113,14 @@ export const PIN_NUMBER_COLOR = '#ffffff'
 /**
  * Font size of the number inside a pin, in figure pixels.
  *
- * Scaled by the mark's weight as well as the figure: the rail that makes a pin bigger
- * makes its head bigger, and a head that grows around a fixed-size numeral reads as a
- * circle with a speck in it. The number is the pin's whole payload, so it keeps the
- * same share of the head at every size.
- * @param mark - the point mark whose pin is being drawn.
+ * Scaled by the figure and nothing else, so it keeps the same share of the head at
+ * every size — the head no longer varies with the rail, and a numeral that did would
+ * be the only thing left varying.
  * @param unit - the figure's size multiple.
  * @returns the font size to draw the number at.
  */
-export function pinFontSizeOf(mark: AnnotationMark, unit = 1): number {
-  return PIN_FONT_SIZE * (mark.weight ?? 1) * unit
+export function pinFontSizeOf(unit = 1): number {
+  return PIN_FONT_SIZE * unit
 }
 
 /** A box in figure pixels. */
@@ -284,34 +287,36 @@ export interface PinGeometry {
 /**
  * The marker for one `point` mark, or undefined when it carries no coordinate.
  *
- * The body stands above the point. A mark placed near the top of the figure would
- * then hang its body outside the picture, so the marker turns over and stands below
- * instead: the point still names the spot, and the body is still inside the frame.
+ * The marker always stands the same way up: its tip on the coordinate, its body
+ * above. It used to turn over near the top edge, so that a point placed high on the
+ * figure would not hang its head outside the picture — but a marker whose shape
+ * depends on where it sits is a marker the reader has to re-read every time it moves,
+ * and dragging one toward the top edge made it snap over mid-gesture with nothing
+ * else changing. A pin that flips is a pin that stops meaning "map pin".
  *
+ * Nothing needs it to flip. The paper is measured from the marks (see `plotBounds`),
+ * so a point near the top edge grows the sheet upward and its head lands on paper
+ * that is now there. The figure is not a frame the drawing has to stay inside; it is
+ * the part of the sheet that has a picture on it.
  * @param mark - the point mark.
+ * @param unit - the figure's size multiple.
  * @returns the marker's path, number centre and box, or undefined with no coordinate.
  */
 export function pinGeometry(mark: AnnotationMark, unit = 1): PinGeometry | undefined {
   const tip = mark.points[0]
   if (tip === undefined) return undefined
-  const radius = pinRadiusOf(mark, unit)
+  const radius = pinRadiusOf(unit)
   const lift = radius * PIN_LIFT
   const [tipX, tipY] = tip
-  // Up by default; over when a head above the point would leave the picture.
-  const up = tipY - lift - radius >= 0
-  const side = up ? -1 : 1
-  const centreY = tipY + side * lift
-  // The sides leave the head at the shoulders and curve out to the point. The same
-  // two curves read correctly whichever way the pin faces, because every distance
-  // is measured along the facing rather than in absolute y.
+  const centreY = tipY - lift
+  // The sides leave the head at the shoulders and curve out to the point.
   const shoulder = radius * PIN_SHOULDER
   const belly = lift * PIN_BELLY
-  const away = (value: number): number => tipY + side * value
   const path = [
     `M ${n(tipX)} ${n(tipY)}`,
-    `Q ${n(tipX - shoulder)} ${n(away(belly))} ${n(tipX - radius)} ${n(centreY)}`,
-    `A ${n(radius)} ${n(radius)} 0 1 ${up ? 1 : 0} ${n(tipX + radius)} ${n(centreY)}`,
-    `Q ${n(tipX + shoulder)} ${n(away(belly))} ${n(tipX)} ${n(tipY)}`,
+    `Q ${n(tipX - shoulder)} ${n(tipY - belly)} ${n(tipX - radius)} ${n(centreY)}`,
+    `A ${n(radius)} ${n(radius)} 0 1 1 ${n(tipX + radius)} ${n(centreY)}`,
+    `Q ${n(tipX + shoulder)} ${n(tipY - belly)} ${n(tipX)} ${n(tipY)}`,
     'Z',
   ].join(' ')
   const top = Math.min(centreY - radius, tipY)
@@ -356,9 +361,17 @@ export function pointMarkBox(mark: AnnotationMark, unit = 1): MarkBox | undefine
   return pinGeometry(mark, unit)?.box
 }
 
-/** Whether a mark draws as a stroke (so the overlay can size its hit area). */
+/**
+ * Whether a mark draws as a stroke, rather than as a marker on the element it names.
+ *
+ * A `point` is a pin and an `element` is a light on the figure's own artwork; neither
+ * paints a line the reader can thicken, so neither answers to the weight rail. Every
+ * other kind is the reader's own stroke and does.
+ * @param kind - the kind of mark.
+ * @returns whether the mark has a stroke of its own.
+ */
 export function isStrokeKind(kind: MarkKind): boolean {
-  return kind !== 'point'
+  return kind !== 'point' && kind !== 'element'
 }
 
 /**

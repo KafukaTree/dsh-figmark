@@ -2,7 +2,8 @@
  * The weight rail down the panel's left edge.
  *
  * It sizes one thing: the stroke of the mark the reader is working on, or the pen
- * of the next stroke. Idle it is a hairline, so it costs the figure nothing;
+ * of the next stroke. A pin and a lit element get no rail at all — neither paints a
+ * stroke, so a rail would be a control that moves nothing. Idle it is a hairline, so it costs the figure nothing;
  * crossing it opens it out into a tapered track, which is where a drawing tool puts
  * its weight and where the reader's eye already looks for one.
  *
@@ -21,12 +22,10 @@ import { WEIGHT_TRACK, travelHeight } from './tokens'
 export interface WeightRailProps {
   /** A private prefix for the gradient's id: two bodies may be mounted at once. */
   readonly trackId: string
-  /** The weight, or the pin size, the rail is currently showing. */
+  /** The weight the rail is currently showing. */
   readonly value: number
   /** How far up the rail that value sits, from 0 at the lightest to 1 at the heaviest. */
   readonly fraction: number
-  /** Whether the rail sizes a point mark's pin rather than a stroke. */
-  readonly forPin: boolean
   /** Take a new value. */
   readonly onChange: (value: number) => void
   /** The translator seat. */
@@ -40,7 +39,7 @@ export interface WeightRailProps {
  */
 export function WeightRail(props: WeightRailProps): ReactNode {
   const { t } = props
-  const label = t(props.forPin ? 'pinSize' : 'weight')
+  const label = t('weight')
   return (
     <label className="da-weight" title={label}>
       <input type="range" className="da-weight-input"

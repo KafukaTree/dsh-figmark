@@ -543,7 +543,9 @@ describe('notes on a change', () => {
     const text = stub.prompts[0]?.[0]?.text ?? ''
     expect(text).toContain('说明 1 条')
     expect(text).toContain('我的说明：')
-    expect(text).toContain('1. 第 1 行（@@ -1,3 +1,3 @@）：这里先别改，等接口定了')
+    // Line 2, the line that actually changed — not line 1, the hunk's first
+    // context line, which is where the note used to be filed.
+    expect(text).toContain('1. 第 3 行（@@ -1,3 +1,3 @@）：这里先别改，等接口定了')
   })
 
   it('drops the notes when the edit is discarded', async () => {

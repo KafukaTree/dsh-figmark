@@ -32,7 +32,7 @@ export interface Caret {
 export const START_CARET: Caret = { line: 1, column: 1 }
 
 /** No notes, as the one value the reader's empty state reuses. */
-export const NO_NOTES: Readonly<Record<number, string>> = {}
+export const NO_NOTES: Readonly<Record<string, string>> = {}
 
 /**
  * The difference one edit stands for.

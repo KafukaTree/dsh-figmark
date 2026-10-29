@@ -290,6 +290,70 @@ export function diffLines(before: string, after: string, options: DiffOptions = 
 }
 
 /**
+ * One hunk's identity, as a value that changes when the hunk does.
+ *
+ * Notes are filed against a hunk, and the hunk's first context line is not its
+ * identity: five different single-hunk changes to the same neighbourhood all report
+ * the same `oldStart`, so one note was reproduced beside each of them — and a note
+ * written about a change that then moved stayed keyed to a hunk that no longer
+ * existed, so it was sent anchored to a line nobody had touched. Both counts and both
+ * starts together do change when the hunk changes.
+ * @param hunk - the hunk to name.
+ * @returns the key a note is filed under.
+ */
+export function hunkKey(hunk: DiffHunk): string {
+  return `${hunk.oldStart},${hunk.oldCount},${hunk.newStart},${hunk.newCount}`
+}
+
+/** What one hunk does to the older text, in a form a sentence can be built from. */
+export interface HunkChange {
+  /** Whether the hunk replaces older lines or inserts between them. */
+  readonly kind: 'replace' | 'insert'
+  /**
+   * 1-based older line the change begins at, or the line an insertion follows —
+   * `0` when an insertion is before the older file's first line.
+   */
+  readonly at: number
+  /** How many older lines the change replaces, or 0 for an insertion. */
+  readonly count: number
+}
+
+/**
+ * Locate the change inside one hunk.
+ *
+ * `oldStart` is the hunk's first line *including context*, which with three lines of
+ * context is up to three lines before the edit — so a note on a change at line 9 was
+ * labelled "第 6 行". This walks to the first line that actually differs and reports
+ * that, and for a pure insertion it reports the line the new text follows, because a
+ * line that does not exist in the older file has no number there.
+ * @param hunk - the hunk to read.
+ * @returns where the change is.
+ */
+export function hunkChange(hunk: DiffHunk): HunkChange {
+  let lastOld = 0
+  for (const line of hunk.lines) {
+    if (line.kind === 'context') {
+      if (line.oldLine !== undefined) lastOld = line.oldLine
+      continue
+    }
+    if (line.kind === 'remove') return { kind: 'replace', at: line.oldLine ?? lastOld + 1, count: countRemoved(hunk) }
+    // An insertion with nothing behind it lands before the older file's first line;
+    // `lastOld` is 0 there because no context line has been walked past yet. Reporting
+    // "after line 0" would name a line that does not exist in a one-based file.
+    return { kind: 'insert', at: Math.max(lastOld, 1), count: 0 }
+  }
+  // A hunk with no change in it does not come out of `diffLines`, but this function
+  // is exported and a caller can hand it one. It then reports an insertion at the
+  // last line it saw, which is the only place left to name.
+  return { kind: 'insert', at: Math.max(lastOld, 1), count: 0 }
+}
+
+/** How many older lines one hunk takes away. */
+function countRemoved(hunk: DiffHunk): number {
+  return hunk.lines.filter(line => line.kind === 'remove').length
+}
+
+/**
  * Spell one hunk's `@@` header.
  * @param hunk - the hunk to name.
  * @returns the header line, without its newline.
