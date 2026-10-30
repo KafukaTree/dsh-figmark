@@ -90,6 +90,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [picture()],
+      thumb: undefined,
       locale: 'zh',
     })
     expect(log.staged).toEqual([{ sessionId: 's1', names: ['page-1.png:image/png'] }])
@@ -112,6 +113,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [],
+      thumb: undefined,
       locale: 'zh',
     })
     const text = defined(log.written[0])
@@ -132,6 +134,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [],
+      thumb: undefined,
       locale: 'zh',
     })
     const text = defined(log.written[0])
@@ -147,6 +150,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [],
+      thumb: undefined,
       locale: 'zh',
     })
     expect(defined(log.written[0]).startsWith('【附图标注】')).toBe(true)
@@ -163,6 +167,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [],
+      thumb: undefined,
       locale: 'en',
     })
     expect(defined(log.written[0])).toContain('[figure annotations]')
@@ -177,6 +182,7 @@ describe('writing into the composer', () => {
         document: document_,
         paths,
         files: [picture()],
+        thumb: undefined,
         locale: 'zh',
       })
     }).toThrow('the composer refused the attachments')
@@ -198,6 +204,7 @@ describe('writing into the composer', () => {
         document: document_,
         paths,
         files: [],
+        thumb: undefined,
         locale: 'zh',
       })
     }).toThrow('the session has no composer to write into')
@@ -211,6 +218,7 @@ describe('writing into the composer', () => {
       document: document_,
       paths,
       files: [picture()],
+      thumb: undefined,
       locale: 'zh',
     })
     expect(log.attached).toEqual([])

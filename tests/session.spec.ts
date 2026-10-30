@@ -153,6 +153,7 @@ function delivery(overrides: Partial<Parameters<typeof deliverAnnotation>[0]> = 
     paths,
     pageImages: [{ page: 1, image: blobOf() }],
     annotatedPdf: undefined,
+    thumb: undefined,
     locale: 'zh',
     ...overrides,
   }

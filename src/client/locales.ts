@@ -131,6 +131,10 @@ export const zh = {
   detailHint: '当前选中',
   detailUnset: '未选中',
   detailIdle: '在图上点一下、框一块或画一笔，就能为那处写说明。',
+  cardOpen: '打开完整标注',
+  cardMore: '还有 {n} 处',
+  cardGoal: '目标',
+  cardPage: '第 {n} 页',
 } as const
 
 /** English copy. */
@@ -256,6 +260,10 @@ export const en: Record<keyof typeof zh, string> = {
   detailHint: 'selected',
   detailUnset: 'nothing selected',
   detailIdle: 'Click the figure, or box a region or draw a stroke, to write about that spot.',
+  cardOpen: 'Open the full annotation',
+  cardMore: 'and {n} more',
+  cardGoal: 'Goal',
+  cardPage: 'page {n}',
 }
 
 /** Locale namespace this dictionary registers under. */

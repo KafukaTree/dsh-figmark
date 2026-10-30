@@ -23,6 +23,7 @@ import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
 import { pageFileSuffix } from '../shared/annotation'
 import type { TextDiff } from '../shared/text-diff'
 import { buildAnnotationMessage, type DeliveredPaths } from './annotation-message'
+import { rememberThumb } from './annotation-thumb'
 import { buildEditMessage, fitDiff } from './edit-message'
 
 /** The session face this module calls. */
@@ -98,6 +99,13 @@ export interface DeliveryInput {
   readonly pageImages: readonly DeliveredPageImage[]
   /** The document carrying the written-back annotations, when there is one. */
   readonly annotatedPdf: Uint8Array | undefined
+  /**
+   * A 120px picture of the review, for the bubble this message lands in.
+   *
+   * The bubble cannot reach this message's attachments, so it looks the block up
+   * in the thumbnail cache instead; absent here only means the card shows a glyph.
+   */
+  readonly thumb: string | undefined
   /** Message language. */
   readonly locale: SummaryLocale
 }
@@ -280,7 +288,9 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
         ? `另有 ${hidden} 页标注未附图，带批注 PDF 也未能随消息发送：这些页的标注只有位置与说明，请按上面的描述在原文档上处理。`
         : `${hidden} more annotated pages are not attached as images, and neither is the annotated PDF: their marks travel only as the positions and notes above — work on the original document from those.`))
   }
-  content.push({ type: 'text', text: buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached) })
+  const message = buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached)
+  rememberThumb(message, input.thumb)
+  content.push({ type: 'text', text: message })
   await promptSession(input.sessions, input.sessionId, session, content, 'the session refused the annotation message')
   return warnings
 }

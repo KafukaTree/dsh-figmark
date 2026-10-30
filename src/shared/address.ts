@@ -35,6 +35,32 @@ function decodeSegment(segment: string): string {
 }
 
 /**
+ * Percent-encode one address segment, keeping `:` literal for Windows drive letters.
+ * @param segment - one raw segment of an id or a path.
+ * @returns the encoded segment.
+ */
+function encodeSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%3A/giu, ':')
+}
+
+/**
+ * Build the address of a file read through one Session.
+ *
+ * The Sidebar claims resources by address string, so this has to spell an address
+ * exactly the way the shell does: backslashes become `/`, the path keeps its
+ * separators literal, and an absolute path keeps its leading one — which is what
+ * leaves the `//` in `session/<id>//tmp/a.svg`, the form the shell itself writes
+ * for a figure outside the workspace.
+ * @param sessionId - the Session whose workspace resolves the path.
+ * @param path - absolute or workspace-relative path.
+ * @returns the `dsh-resource://file/session/<sessionId>/<path>` address.
+ */
+export function fileAddress(sessionId: string, path: string): string {
+  const normalized = path.replace(/\\/gu, '/').replace(/^(?:\.\/)+/u, '')
+  return `${PREFIX}session/${encodeSegment(sessionId)}/${normalized.split('/').map(encodeSegment).join('/')}`
+}
+
+/**
  * Parse a `dsh-resource://file/…` address.
  * @param address - the address string taken from a preview tab.
  * @returns the parsed address, or undefined when the string is not a file address.

@@ -14,6 +14,7 @@
 import { ANNOTATION_VERSION, markOrdinals, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
 import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
+import { captureThumb } from './annotation-thumb'
 import { deliverToComposer, type ComposerLike } from './composer'
 import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
@@ -183,14 +184,18 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
       const sessions = options.sessions
       if (sessions === undefined) throw new Error('the sessions service is unavailable')
       const document = buildPagedDocument(input)
+      const images = await renderPageImages(document, pageImages)
       return await deliverAnnotation({
         sessions,
         fileUpload: options.fileUpload,
         sessionId: options.sessionId,
         document,
         paths: saved,
-        pageImages: await renderPageImages(document, pageImages),
+        pageImages: images,
         annotatedPdf,
+        // The first annotated page stands for the document in the bubble the
+        // message lands in; nothing in that bubble can reach the pages themselves.
+        thumb: await captureThumb(images[0]?.image),
         locale: options.locale,
       })
     },
@@ -199,19 +204,21 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
       const conversation = options.conversation
       if (conversation === undefined) throw new Error('the conversation service is unavailable')
       const document = buildPagedDocument(input)
+      const images = await renderPageImages(document, pageImages)
       deliverToComposer({
         conversation,
         sessionId: options.sessionId,
         document,
         paths: saved,
         files: [
-          ...(await renderPageImages(document, pageImages)).map(entry => new File(
+          ...images.map(entry => new File(
             [entry.image],
             `page-${entry.page}.png`,
             { type: 'image/png' },
           )),
           new File([annotatedPdf], annotatedName(saved, document), { type: 'application/pdf' }),
         ],
+        thumb: await captureThumb(images[0]?.image),
         locale: options.locale,
       })
     },

@@ -684,6 +684,48 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-diff-note{display:flex;align-items:center;gap:6px;padding:2px 8px 8px 8px;color:var(--dsw-alias-label-tertiary,inherit);font-size:12px}
 .da-diff-note-label{flex:0 0 auto;white-space:nowrap}
 .da-diff-note input{flex:1 1 auto;min-width:0;border:0.5px solid var(--dsw-alias-border-l2,currentColor);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base,transparent);color:inherit;font:inherit;font-size:12px;padding:3px 6px}
+
+/* --- the card a sent annotation block becomes in the transcript ---
+   The block is one paragraph of text the model reads; in the bubble it is a small
+   sheet instead. Everything here is inline-level on purpose: the slot it draws into
+   is inline, so a block-level box would break the paragraph the message sits in. */
+.da-card,.da-card-fallback{font:inherit;font-size:12px;line-height:1.5;text-align:left;vertical-align:top;color:inherit}
+/* The fallback is the block verbatim, so it keeps the block's own line breaks. */
+.da-card-fallback{white-space:pre-wrap}
+.da-card{display:inline-flex;flex-direction:column;gap:5px;box-sizing:border-box;width:min(100%,420px);min-width:min(100%,270px);margin:2px 0;padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35));border-radius:10px;background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));white-space:normal}
+button.da-card{appearance:none;font-family:inherit;cursor:pointer}
+button.da-card:hover{background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.14))}
+button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
+.da-card-head{display:flex;align-items:center;gap:8px;min-width:0}
+.da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:38px;height:38px;overflow:hidden;border-radius:7px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.12));color:var(--dsw-alias-label-tertiary,inherit)}
+/* The picture covers the glyph; a picture that fails hides itself, and the glyph
+   underneath it all along is what is left. A miss is never an empty box. */
+.da-card-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.da-card-shot img[hidden]{display:none}
+.da-card-glyph{width:18px;height:18px}
+.da-card-text{display:flex;flex-direction:column;min-width:0}
+.da-card-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-scope,.da-card-row{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-scope{font-size:11px;color:var(--dsw-alias-label-tertiary,inherit)}
+.da-card-go{flex:0 0 auto;margin-left:auto;padding-left:12px;color:var(--dsw-alias-label-tertiary,inherit)}
+/* Two lines per mark rather than two columns: the name of a mark is an identifier
+   ("矩形1 (589,238)-(791,439)") and runs to the width of a small card on its own, so
+   sharing a line with the note squeezed the note — the half a reader actually wrote —
+   into an ellipsis. Stacked, the identifier recedes and its sentence gets the line. */
+.da-card-body{display:flex;flex-direction:column;gap:6px;min-width:0}
+.da-card-row{display:flex;flex-direction:column;gap:1px;min-width:0}
+.da-card-mark{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;
+  color:var(--dsw-alias-label-tertiary,inherit)}
+/* The page a mark belongs to, kept to the left of its name on the same quiet line. */
+.da-card-page{margin-right:5px;padding:0 4px;border-radius:3px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.12))}
+.da-card-said{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  overflow:hidden;overflow-wrap:anywhere;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
+.da-card-rest{color:var(--dsw-alias-label-tertiary,inherit)}
+/* The goal the reader wrote is not one of the marks, so a rule separates it. */
+.da-card-target{flex-direction:row;gap:4px;align-items:baseline;margin-top:0;padding-top:5px;
+  border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
+  overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
+.da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
 `
 
 /**

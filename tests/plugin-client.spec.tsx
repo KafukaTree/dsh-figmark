@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
 import { BODY_ID, HTML_BODY_ID, MD_BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
+import { RULE_ID, annotationRule } from '../src/client/annotation-rule'
+import { AnnotationCard } from '../src/client/annotation-card'
 import { MarkdownBody } from '../src/client/markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { missingService } from '../src/missing-service'
@@ -32,6 +34,7 @@ function stubContext(options: {
   readonly localeId?: string | undefined
   readonly sessions?: unknown
   readonly fileUpload?: unknown
+  readonly sidebarRight?: unknown
 } = {}): {
   readonly ctx: Context
   readonly definitions: StubDefinition[]
@@ -39,6 +42,7 @@ function stubContext(options: {
   readonly dictionaries: Record<string, unknown>[]
   readonly injectedKeys: string[]
   readonly disposed: string[]
+  readonly rules: unknown[]
 } {
   const omitted = new Set(options.omit ?? [])
   const definitions: StubDefinition[] = []
@@ -46,6 +50,7 @@ function stubContext(options: {
   const dictionaries: Record<string, unknown>[] = []
   const injectedKeys: string[] = []
   const disposed: string[] = []
+  const rules: unknown[] = []
   const services: Record<string, unknown> = {
     locale: {
       register: (namespace: string, dicts: Record<string, unknown>) => {
@@ -73,12 +78,33 @@ function stubContext(options: {
     },
     sessions: options.sessions,
     fileUpload: options.fileUpload,
+    sidebarRight: options.sidebarRight,
+    uiConversation: {
+      userText: {
+        register: (rule: unknown) => {
+          rules.push(rule)
+          return () => { disposed.push('rule') }
+        },
+      },
+    },
+  }
+  /** The slice a child fiber reads through, over the same service table. */
+  const scope = {
+    get: (key: string) => services[key],
+    effect: (factory: () => (() => void) | undefined) => factory() ?? (() => {}),
   }
   const ctx = {
     get: (key: string) => (omitted.has(key) ? undefined : services[key]),
     effect: (factory: () => (() => void) | undefined) => factory() ?? (() => {}),
+    // A child fiber runs only once every service it names is there, which is the
+    // one behaviour of the real context that the optional half of this entry needs.
+    inject: (deps: readonly string[], callback: (child: unknown) => void) => {
+      const ready = deps.every(dep => !omitted.has(dep) && services[dep] !== undefined)
+      if (ready) callback(scope)
+      return () => {}
+    },
   } as unknown as Context
-  return { ctx, definitions, slots, dictionaries, injectedKeys, disposed }
+  return { ctx, definitions, slots, dictionaries, injectedKeys, disposed, rules }
 }
 
 describe('browser entry', () => {
@@ -133,6 +159,7 @@ describe('browser entry', () => {
     expect(stub.injectedKeys).toEqual([
       'sidebar.right.tab.document', 'sidebar.right.tab.document',
       'sidebar.right.tab.document', 'sidebar.right.tab.document',
+      'conversation.user.text.node',
     ])
     expect(stub.slots[2]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
@@ -260,6 +287,73 @@ describe('browser entry', () => {
     apply(stub.ctx)
     const factory = stub.slots[0]?.options['inject'] as (id: unknown) => { sessions: unknown }
     expect(factory('s1').sessions).toBeUndefined()
+  })
+
+  it('registers the reader\'s own block and the card that draws it behind the conversation', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    // The rule is what finds the block in a message; the slot entry is what draws it,
+    // keyed by the same id so the transcript's entry key resolves to this renderer.
+    expect(stub.rules).toEqual([annotationRule])
+    const card = stub.slots[4]
+    expect(card?.options).toMatchObject({
+      name: 'conversation.user.text.node',
+      key: RULE_ID,
+      locale: NAMESPACE,
+    })
+    expect(card?.component).toBe(AnnotationCard)
+  })
+
+  it('hands the card the Session it draws in and nothing it does not read', () => {
+    const stub = stubContext({ localeId: 'en-US' })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      readonly sessionId: string
+      readonly localeId: string
+      readonly open: (path: string) => void
+    }
+    const injected = factory('s7')
+    expect(Object.keys(injected).sort()).toEqual(['localeId', 'open', 'sessionId'])
+    expect(injected.sessionId).toBe('s7')
+    expect(injected.localeId).toBe('en-US')
+  })
+
+  it('opens the annotated figure as a Session file the Sidebar can place', () => {
+    const opened: string[] = []
+    const stub = stubContext({ sidebarRight: { openResource: (address: string) => { opened.push(address) } } })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    factory('s1').open('/w/fig.svg')
+    // A Session-relative address, because that is the only kind the document panel
+    // resolves: an absolute one is refused before it can be placed in a column.
+    expect(opened).toEqual(['dsh-resource://file/session/s1//w/fig.svg'])
+  })
+
+  it('shows the card without a Sidebar rather than failing the bubble', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    // Nothing to click through to is not an error: the card still says what it is.
+    expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
+  })
+
+  it('keeps a refusal to open out of the transcript', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const stub = stubContext({ sidebarRight: { openResource: () => { throw new Error('no mounted session') } } })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('draws nothing into the transcript when the conversation package is absent', () => {
+    const stub = stubContext({ omit: ['uiConversation'] })
+    apply(stub.ctx)
+    // A figure is still annotatable without the conversation package; the block
+    // simply stays text, which is what a message with no rule renders as.
+    expect(stub.rules).toEqual([])
+    expect(stub.slots).toHaveLength(4)
   })
 
   it.each(['locale', 'documentPreviews', 'slots'])('fails loudly without the %s service', (service) => {

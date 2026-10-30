@@ -27,6 +27,7 @@ import {
 } from '../shared/annotation'
 import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
+import { captureThumb } from './annotation-thumb'
 import { deliverToComposer } from './composer'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import { anchorInDocument, loadFrameDocument } from './html-dom'
@@ -1491,6 +1492,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         setStale(false)
         const pageImages = review === undefined ? [] : [{ page: 1, image: review }]
         const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
+        // The bubble this message lands in is handed the message's text and nothing
+        // else — the attachments beside it are not reachable from there. So a small
+        // copy of the review is filed under the text now, and the card finds it by
+        // the same text a moment later. A figure with no review picture files
+        // nothing, and its card shows a glyph instead.
+        const thumb = await captureThumb(review)
         if (target === 'composer' && props.conversation !== undefined) {
           deliverToComposer({
             conversation: props.conversation,
@@ -1498,6 +1505,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             document: document_,
             paths: saved,
             files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
+            thumb,
             locale,
           })
         } else if (props.sessions !== undefined) {
@@ -1511,6 +1519,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             paths: saved,
             pageImages,
             annotatedPdf: undefined,
+            thumb,
             locale,
           })
         }

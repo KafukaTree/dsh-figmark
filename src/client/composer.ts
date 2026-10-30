@@ -13,6 +13,7 @@
  */
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
 import { buildAnnotationMessage, type DeliveredPaths } from './annotation-message'
+import { rememberThumb } from './annotation-thumb'
 
 /** One attachment staged in the composer's draft registry. */
 export interface ComposerDraftLike {
@@ -67,6 +68,8 @@ export interface ComposerInput {
   readonly paths: DeliveredPaths
   /** Pictures and documents to stage beside the message, in order. */
   readonly files: readonly File[]
+  /** A 120px picture of the review, for the bubble this draft lands in. */
+  readonly thumb: string | undefined
   /** Message language. */
   readonly locale: SummaryLocale
 }
@@ -99,6 +102,7 @@ export function deliverToComposer(input: ComposerInput): void {
     throw new Error('the composer refused the attachments')
   }
   const message = buildAnnotationMessage(document_, paths, locale)
+  rememberThumb(message, input.thumb)
   // `trim` decides only whether there is anything to separate; the draft itself is
   // kept exactly as it was written. Trimming it removed the reader's own shape — the
   // two spaces that make a fenced block a code block, the blank lines that end a

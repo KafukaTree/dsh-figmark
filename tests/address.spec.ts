@@ -1,6 +1,6 @@
 /** The `dsh-resource://file/…` grammar this plugin decodes. */
 import { describe, expect, it } from 'vitest'
-import { parseFileAddress } from '../src/shared/address'
+import { fileAddress, parseFileAddress } from '../src/shared/address'
 import { figureMediaType, isFigurePath, isPagedFigurePath } from '../src/shared/figure-kind'
 import { suffixOf } from '../src/shared/path-name'
 import { annotationCandidates, legacyAnnotationPath, legacyPagePattern, sidecarPaths } from '../src/host/sidecar'
@@ -42,6 +42,49 @@ describe('file addresses', () => {
       'dsh-resource://file/shared/s/a.svg',
     ]) {
       expect(parseFileAddress(value)).toBeUndefined()
+    }
+  })
+})
+
+describe('building file addresses', () => {
+  it('spells a workspace-relative path the way the shell does', () => {
+    expect(fileAddress('s1', 'figures/fig1.svg')).toBe('dsh-resource://file/session/s1/figures/fig1.svg')
+  })
+
+  it('keeps an absolute path absolute, double slash and all', () => {
+    const address = fileAddress('s1', '/tmp/a.svg')
+    // The shell writes an out-of-workspace figure this way, so a card that opens one
+    // has to claim the same string the shell would: `session/<id>` then the path.
+    expect(address).toBe('dsh-resource://file/session/s1//tmp/a.svg')
+    expect(parseFileAddress(address)).toEqual({ sessionId: 's1', path: '/tmp/a.svg' })
+  })
+
+  it('turns Windows separators into separators and keeps the drive letter', () => {
+    const address = fileAddress('s1', 'C:\\w\\figures\\a.png')
+    expect(address).toBe('dsh-resource://file/session/s1/C:/w/figures/a.png')
+    expect(parseFileAddress(address)).toEqual({ sessionId: 's1', path: 'C:/w/figures/a.png' })
+  })
+
+  it('strips the relative prefix a path may carry', () => {
+    expect(fileAddress('s1', './a/b.svg')).toBe('dsh-resource://file/session/s1/a/b.svg')
+    expect(fileAddress('s1', '.\\a\\b.svg')).toBe('dsh-resource://file/session/s1/a/b.svg')
+  })
+
+  it('escapes what a segment may not carry, and reads it back', () => {
+    const address = fileAddress('s 1', '图 1.svg')
+    expect(address).toBe('dsh-resource://file/session/s%201/%E5%9B%BE%201.svg')
+    expect(parseFileAddress(address)).toEqual({ sessionId: 's 1', path: '图 1.svg' })
+  })
+
+  it('escapes a literal escape, a query mark and a fragment mark', () => {
+    const address = fileAddress('s1', 'a%20b#c?.svg')
+    expect(address).toBe('dsh-resource://file/session/s1/a%2520b%23c%3F.svg')
+    expect(parseFileAddress(address)).toEqual({ sessionId: 's1', path: 'a%20b#c?.svg' })
+  })
+
+  it('round-trips every path the annotator can hand it', () => {
+    for (const path of ['/w/fig.svg', 'figures/图1.png', '/tmp/x/a b.svg', 'C:/w/a.pdf', 'figures/a+b&c.svg', '', '/w/.hidden']) {
+      expect(parseFileAddress(fileAddress('s1', path))).toEqual({ sessionId: 's1', path })
     }
   })
 })

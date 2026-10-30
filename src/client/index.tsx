@@ -18,7 +18,10 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { AnnotatorBody } from './AnnotatorBody'
+import { AnnotationCard } from './annotation-card'
+import { RULE_ID, annotationRule } from './annotation-rule'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from './autosave'
+import { fileAddress } from '../shared/address'
 import { markOrdinals } from '../shared/annotation'
 import { figureUnit } from './scale'
 import type { AnnotatorInjected } from './AnnotatorBody'
@@ -89,6 +92,48 @@ interface LocaleLike {
   register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void
   bind(namespace: string): (key: string) => string
   getLocale(): { readonly locale?: string }
+}
+
+/** The keyed slot the transcript dispatches one text block to. */
+const USER_TEXT_SLOT = 'conversation.user.text.node'
+
+/** The conversation service, as far as a card needs it. */
+interface UiConversationLike {
+  readonly userText: { register(rule: typeof annotationRule): () => void }
+}
+
+/** The Sidebar's navigation controller, as far as a card needs it. */
+interface SidebarRightLike {
+  openResource(address: string): void
+}
+
+/** What the keyed card slot injects. */
+interface CardInjected {
+  readonly sessionId: string
+  readonly localeId: string
+  readonly open: (path: string) => void
+}
+
+/**
+ * Open one figure in the Sidebar, where its annotation already lives.
+ *
+ * Nothing here can fail the bubble: the card is a shortcut to a tab, and a
+ * composition without a Sidebar (or one whose column cannot take this address)
+ * leaves the message exactly as readable as it was.
+ * @param ctx - the plugin's client context.
+ * @param sessionId - Session the bubble belongs to.
+ * @param path - the figure's path, as the message spells it.
+ */
+function openFigure(ctx: Context, sessionId: string, path: string): void {
+  const sidebar = ctx.get('sidebarRight') as SidebarRightLike | undefined
+  if (sidebar === undefined || sessionId === '' || path === '') return
+  try {
+    sidebar.openResource(fileAddress(sessionId, path))
+  } catch (reason) {
+    // The column has no mounted Session to place a tab in, which is a composition
+    // fact rather than a fault of this message.
+    console.warn('[figmark] cannot open the annotated figure', reason)
+  }
 }
 
 /** What the keyed body slot injects, typed so no `any` crosses the hand-off. */
@@ -208,4 +253,24 @@ export function apply(ctx: Context): void {
       remote: ctx.get('remote') as RemoteLike | undefined,
     }),
   }, AnnotatorBody)), 'dsh-figmark: html document body')
+  // The block a reader's own message carries, drawn as a card instead of as the
+  // lines the model reads. Both halves are optional: without the conversation
+  // package a figure is still annotatable, it just says what it says as text.
+  ctx.inject(['uiConversation'], (scope) => {
+    const ui = scope.get('uiConversation') as UiConversationLike
+    scope.effect(() => ui.userText.register(annotationRule), 'dsh-figmark: annotation block')
+    scope.effect(() => slots.inject(USER_TEXT_SLOT, () => slots.register({
+      name: USER_TEXT_SLOT,
+      key: RULE_ID,
+      locale: NAMESPACE,
+      // A keyed user-text renderer is a child of the transcript, so it never sees
+      // this plugin's own props: what it needs crosses here, and the Session it is
+      // running in arrives as the slot's own argument.
+      inject: (sessionId: unknown): CardInjected => ({
+        sessionId: String(sessionId),
+        localeId: locale.getLocale().locale ?? 'zh',
+        open: (path: string) => { openFigure(ctx, String(sessionId), path) },
+      }),
+    }, AnnotationCard)), 'dsh-figmark: annotation card')
+  })
 }
