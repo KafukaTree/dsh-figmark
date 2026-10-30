@@ -8,7 +8,7 @@ import { ANNOTATION_VERSION, MAX_SUMMARY_CHARS } from '../src/shared/annotation'
 import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
 import type { ComposerLike } from '../src/client/composer'
-import { clearParked, parkedAnnotation } from '../src/client/pending'
+import { clearParked, parkedAnnotations } from '../src/client/pending'
 import type { SessionsLike } from '../src/client/session'
 import type { RemoteLike } from '../src/client/host-actions'
 import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
@@ -1673,7 +1673,7 @@ describe('the figure menu', () => {
     await click(defined(host.querySelectorAll('.da-menu button')[1] as HTMLButtonElement | undefined))
     await settle()
     // The dock card stands for the delivery, and the reader's box is left alone.
-    expect(defined(parkedAnnotation('s1')).raw).toContain('【附图标注】')
+    expect(defined(parkedAnnotations('s1')[0]).raw).toContain('【附图标注】')
     expect(composer.written).toEqual([])
   })
 
@@ -2133,7 +2133,7 @@ describe('the hand-off inside the comment', () => {
     await drawArrow(result.host)
     await type(detailBox(result.host), '送进对话框')
     await click(defined(result.host.querySelectorAll('.da-comment-send-btn')[1]))
-    expect(defined(parkedAnnotation('s1')).raw).toContain('送进对话框')
+    expect(defined(parkedAnnotations('s1')[0]).raw).toContain('送进对话框')
     expect(composer.written).toEqual([])
   })
 
@@ -2615,7 +2615,7 @@ describe('saving', () => {
     // Only the write to the sidecar happened; nothing was handed to a session.
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
     expect(prompts).toEqual([])
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('【附图标注】')
     // The message must stand on its own: the sidecars are deleted once the note is
     // handed over, so a path in the text would be a dead reference by the time the
@@ -2636,7 +2636,7 @@ describe('saving', () => {
     // The panel is closed and the sidecars are gone by now. The card still carries
     // both the pictures and the text it was handed, so pressing it much later sends
     // what the reader closed the figure on.
-    await defined(parkedAnnotation('s1')).send()
+    await defined(parkedAnnotations('s1')[0]).send()
     const parts = (prompts[0] ?? []) as { readonly type: string; readonly text?: string }[]
     expect(parts[0]?.type).toBe('image')
     expect(parts[1]?.text).toContain('【附图标注】')
@@ -2653,7 +2653,7 @@ describe('saving', () => {
     // nothing; saying it when the card is pressed would cost them the panel they had
     // already closed.
     expect(handoff()).toBe(zh.toastFailed)
-    expect(parkedAnnotation('s1')).toBeUndefined()
+    expect(parkedAnnotations('s1')).toEqual([])
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
   })
 

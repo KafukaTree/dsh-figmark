@@ -5,7 +5,7 @@ import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
 import { insertIntoDraft, parkInComposer, type ComposerLike, type ComposerShellLike } from '../src/client/composer'
 import { clearThumbs, thumbFor } from '../src/client/annotation-thumb'
-import { clearParked, parkedAnnotation } from '../src/client/pending'
+import { clearParked, parkedAnnotations } from '../src/client/pending'
 import { defined } from './dom'
 
 const document_: AnnotationDocument = {
@@ -65,7 +65,7 @@ describe('parking an annotation above the composer', () => {
       locale: 'zh',
       send,
     })
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('【附图标注】')
     // The sidecars are deleted once the figure is handed off, so the message
     // describes the picture it carries rather than naming a file that is gone.
@@ -90,7 +90,7 @@ describe('parking an annotation above the composer', () => {
       locale: 'zh',
       send,
     })
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     // `send` is the caller's closure, not a re-run of the delivery: a card pressed
     // minutes later sends what was on screen when the figure was closed.
     expect(parked.send).toBe(send)
@@ -112,7 +112,7 @@ describe('parking an annotation above the composer', () => {
       locale: 'zh',
       send: async () => {},
     })
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     expect(thumbFor(parked.raw)).toBe(thumb)
   })
 
@@ -126,7 +126,7 @@ describe('parking an annotation above the composer', () => {
       locale: 'en',
       send: async () => {},
     })
-    expect(defined(parkedAnnotation('s1')).raw).toContain('[figure annotations]')
+    expect(defined(parkedAnnotations('s1')[0]).raw).toContain('[figure annotations]')
   })
 
   it('parks a bare card when the message names no figure', () => {
@@ -141,7 +141,7 @@ describe('parking an annotation above the composer', () => {
       locale: 'zh',
       send: async () => {},
     })
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.data).toEqual({
       file: '',
       scope: '',
@@ -153,7 +153,7 @@ describe('parking an annotation above the composer', () => {
     expect(parked.raw).toContain('【附图标注】')
   })
 
-  it('replaces the previous card for the same session', () => {
+  it('queues behind the card the session already had', () => {
     const first = vi.fn(async () => {})
     parkInComposer({
       conversation: undefined, sessionId: 's1', document: document_, paths, thumb: undefined, locale: 'zh', send: first,
@@ -162,7 +162,14 @@ describe('parking an annotation above the composer', () => {
     parkInComposer({
       conversation: undefined, sessionId: 's1', document: nameless, paths, thumb: undefined, locale: 'zh', send: second,
     })
-    expect(defined(parkedAnnotation('s1')).send).toBe(second)
+    const cards = parkedAnnotations('s1')
+    expect(cards).toHaveLength(2)
+    // Two figures handed over are two reviews: the earlier one keeps its own message
+    // and its own delivery instead of being squeezed out by the newer one.
+    expect(cards[0]?.send).toBe(first)
+    expect(cards[1]?.send).toBe(second)
+    expect(cards[0]?.data.file).toBe('/w/fig.svg')
+    expect(cards[1]?.data.file).toBe('')
   })
 })
 

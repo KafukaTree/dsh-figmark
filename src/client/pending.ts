@@ -1,5 +1,5 @@
 /**
- * The one annotation waiting above the composer.
+ * The annotations waiting above the composer.
  *
  * "Send to the input box" cannot write a card into the box itself: the composer is a
  * lexical editor owned by the conversation package, and its text is text. What this
@@ -7,8 +7,12 @@
  * card in the input dock, the draft keeps only what the reader typed, and the message
  * is still delivered verbatim when the card's send is pressed.
  *
- * One entry per session: opening a second figure replaces the first, because two
- * parked cards would be two answers to the question "what am I about to send".
+ * Cards queue rather than replace. An earlier version kept one card per session, on
+ * the argument that two parked cards would be two answers to "what am I about to
+ * send" — but a reader reviewing three figures hands over three reviews, and silently
+ * dropping the first two is not an answer to that question, it is losing their work.
+ * Each card carries its own id, its own delivery and its own send, and only its own
+ * send takes it away.
  * @module dsh-figmark/client/pending
  */
 import type { FigmarkAnnotation } from './annotation-rule'
@@ -16,7 +20,9 @@ import type { ComposerLike } from './composer'
 
 /** One annotation parked above the composer. */
 export interface ParkedAnnotation {
-  /** Session the card belongs to; the dock asks for one session's card. */
+  /** Identity of this card, unique among the cards one session is holding. */
+  readonly id: string
+  /** Session the card belongs to; the dock asks for one session's cards. */
   readonly sessionId: string
   /**
    * The block, parsed by the same rule the transcript uses.
@@ -39,53 +45,73 @@ export interface ParkedAnnotation {
   readonly send: () => Promise<void>
 }
 
-/** Parked annotations, by session. */
-const parked = new Map<string, ParkedAnnotation>()
+/** What a caller hands `parkAnnotation`: the card, minus the identity it gets here. */
+export type UnparkedAnnotation = Omit<ParkedAnnotation, 'id'>
 
-/** Listeners per session, so a dock redraws only when its own card changes. */
+/** Parked annotations, by session, in the order they were parked. */
+const parked = new Map<string, readonly ParkedAnnotation[]>()
+
+/** Listeners per session, so a dock redraws only when its own cards change. */
 const watchers = new Map<string, Set<() => void>>()
 
+/** Source of card ids; only ever compared, never parsed. */
+let nextId = 0
+
+/** The list a session with nothing parked hands out. */
+const NONE: readonly ParkedAnnotation[] = Object.freeze([])
+
 /**
- * Tell one session's listeners that its card changed.
- * @param sessionId - session whose card changed.
+ * Tell one session's listeners that its cards changed.
+ * @param sessionId - session whose cards changed.
  */
 function announce(sessionId: string): void {
   for (const listener of watchers.get(sessionId) ?? []) listener()
 }
 
 /**
- * Park one annotation, replacing whatever that session had parked.
+ * Park one annotation above the composer, behind whatever is parked already.
  * @param entry - the card and the delivery it stands for.
+ * @returns the new card's id.
  */
-export function parkAnnotation(entry: ParkedAnnotation): void {
-  parked.set(entry.sessionId, entry)
-  announce(entry.sessionId)
+export function parkAnnotation(entry: UnparkedAnnotation): string {
+  const id = `p${++nextId}`
+  const card: ParkedAnnotation = { ...entry, id }
+  parked.set(card.sessionId, [...parked.get(card.sessionId) ?? NONE, card])
+  announce(card.sessionId)
+  return id
 }
 
 /**
- * The annotation parked for one session, if any.
+ * The annotations parked for one session, oldest first.
  * @param sessionId - session to ask about.
- * @returns the parked annotation.
+ * @returns the cards, empty when the session has none.
  */
-export function parkedAnnotation(sessionId: string): ParkedAnnotation | undefined {
-  return parked.get(sessionId)
+export function parkedAnnotations(sessionId: string): readonly ParkedAnnotation[] {
+  return parked.get(sessionId) ?? NONE
 }
 
 /**
- * Drop one session's parked annotation.
+ * Drop one card, once it has been sent or taken off.
  *
- * Called once the card has been sent (the message is in the session now) or dropped,
- * so a stale card cannot outlive the hand-off it represents.
- * @param sessionId - session to clear.
+ * Only the card named here goes: its neighbours are other reviews, and a send that
+ * cleared them would delete work the reader had not handed over yet.
+ * @param sessionId - session the card belongs to.
+ * @param id - the card's own id, as `parkAnnotation` returned it.
  */
-export function unparkAnnotation(sessionId: string): void {
-  if (parked.delete(sessionId)) announce(sessionId)
+export function unparkAnnotation(sessionId: string, id: string): void {
+  const cards = parked.get(sessionId)
+  if (cards === undefined) return
+  const rest = cards.filter(card => card.id !== id)
+  if (rest.length === cards.length) return
+  if (rest.length === 0) parked.delete(sessionId)
+  else parked.set(sessionId, rest)
+  announce(sessionId)
 }
 
 /**
- * Watch one session's card.
+ * Watch one session's cards.
  * @param sessionId - session to watch.
- * @param listener - called whenever that session's card changes.
+ * @param listener - called whenever that session's cards change.
  * @returns a function that stops watching.
  */
 export function watchParked(sessionId: string, listener: () => void): () => void {
@@ -102,4 +128,5 @@ export function watchParked(sessionId: string, listener: () => void): () => void
 export function clearParked(): void {
   parked.clear()
   watchers.clear()
+  nextId = 0
 }

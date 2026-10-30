@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom'
 import { resolveTranslate } from './annotator-contract'
 import { thumbFor } from './annotation-thumb'
 import { mountSeat } from './composer-seat'
-import { parkedAnnotation, unparkAnnotation, watchParked, type ParkedAnnotation } from './pending'
+import { parkedAnnotations, unparkAnnotation, watchParked, type ParkedAnnotation } from './pending'
 import { ensureStyles } from './styles'
 import type { Translate } from './translate'
 
@@ -88,45 +88,23 @@ export function shortLabel(label: string): string {
 }
 
 /**
- * Draw the session's parked annotation, or nothing when it has none.
- * @param props - the dock's props for this session.
- * @returns the attachment card, with its one action and its remove control.
+ * One parked card: its own delivery, its own failure, its own way out.
+ * @param props - the card, the session it belongs to, and the shell's translator.
+ * @returns the chip, with its one action and its remove control.
  */
-export function PendingCard(props: PendingCardProps): ReactElement | null {
-  const sessionId = props.sessionId ?? ''
-  const [entry, setEntry] = useState<ParkedAnnotation | undefined>(() => parkedAnnotation(sessionId))
+function ParkedChip(props: {
+  readonly entry: ParkedAnnotation
+  readonly sessionId: string
+  readonly t?: Translate | undefined
+  readonly localeId?: string | undefined
+}): ReactElement {
+  const { entry, sessionId } = props
   const [busy, setBusy] = useState(false)
   const [trouble, setTrouble] = useState('')
   const [shot, setShot] = useState(true)
   // The disabled button is a face, not a promise: two presses can land in one tick,
   // before the first render has had a chance to disable anything.
   const sending = useRef(false)
-  // The stylesheet is injected by whichever body is on screen, and the composer is on
-  // screen before any figure is opened. Injecting it is idempotent, so the card asks
-  // for it itself rather than depending on an order it cannot see.
-  useEffect(() => { ensureStyles(document) }, [])
-  useEffect(() => {
-    setEntry(parkedAnnotation(sessionId))
-    setTrouble('')
-    setShot(true)
-    // A card parked while this one was open replaces it; the dock never shows two.
-    return watchParked(sessionId, () => {
-      setEntry(parkedAnnotation(sessionId))
-      setTrouble('')
-      setShot(true)
-    })
-  }, [sessionId])
-  // Seated inside the composer card, or — with no card to draw into — in the dock that
-  // owns this entry. The anchor is the only node this component puts in the dock.
-  const anchor = useRef<HTMLSpanElement | null>(null)
-  const [seat, setSeat] = useState<HTMLElement | null>(null)
-  const parked = entry !== undefined
-  useLayoutEffect(() => {
-    const node = anchor.current
-    if (node === null) return undefined
-    return mountSeat(node, setSeat)
-  }, [sessionId, parked])
-  if (entry === undefined) return null
   const data = entry.data
   const thumb = shot ? thumbFor(entry.raw) : undefined
   const send = async (): Promise<void> => {
@@ -135,8 +113,9 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
     setBusy(true)
     try {
       await entry.send()
-      // The message is in the session now, so the card it stood for is spent.
-      unparkAnnotation(sessionId)
+      // The message is in the session now, so the card it stood for is spent — and
+      // only that card: its neighbours are reviews the reader has not sent yet.
+      unparkAnnotation(sessionId, entry.id)
     } catch (error) {
       setTrouble(`${resolveTranslate(props, 'pendingFailed')}${reasonOf(error)}`)
     } finally {
@@ -157,7 +136,7 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
     : `${first.label} · ${resolveTranslate(props, 'pendingNote')}：${note}`
   const hover = data.scope === '' ? data.file : `${data.file} · ${data.scope}`
   const removeLabel = resolveTranslate(props, 'pendingRemove')
-  const chip = (
+  return (
     <span className="da-staged">
       <span className="da-staged-card" title={hover}>
         <button
@@ -201,7 +180,7 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
           aria-label={removeLabel}
           title={removeLabel}
           disabled={busy}
-          onClick={() => { unparkAnnotation(sessionId) }}
+          onClick={() => { unparkAnnotation(sessionId, entry.id) }}
         >
           ×
         </button>
@@ -209,10 +188,55 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
       {trouble === '' ? null : <span className="da-staged-trouble">{trouble}</span>}
     </span>
   )
+}
+
+/**
+ * Draw the session's parked annotations, oldest first, or nothing when it has none.
+ *
+ * One seat for the whole queue: the composer card owns one attachment area, and the
+ * chips stack inside it the way several attached pictures do.
+ * @param props - the dock's props for this session.
+ * @returns the attachment cards, each with its own action and remove control.
+ */
+export function PendingCard(props: PendingCardProps): ReactElement | null {
+  const sessionId = props.sessionId ?? ''
+  const [entries, setEntries] = useState<readonly ParkedAnnotation[]>(() => parkedAnnotations(sessionId))
+  // The stylesheet is injected by whichever body is on screen, and the composer is on
+  // screen before any figure is opened. Injecting it is idempotent, so the cards ask
+  // for it themselves rather than depending on an order they cannot see.
+  useEffect(() => { ensureStyles(document) }, [])
+  useEffect(() => {
+    setEntries(parkedAnnotations(sessionId))
+    return watchParked(sessionId, () => { setEntries(parkedAnnotations(sessionId)) })
+  }, [sessionId])
+  // Seated inside the composer card, or — with no card to draw into — in the dock that
+  // owns these entries. The anchor is the only node this component puts in the dock.
+  const anchor = useRef<HTMLSpanElement | null>(null)
+  const [seat, setSeat] = useState<HTMLElement | null>(null)
+  const parked = entries.length > 0
+  useLayoutEffect(() => {
+    const node = anchor.current
+    if (node === null) return undefined
+    return mountSeat(node, setSeat)
+  }, [sessionId, parked])
+  if (!parked) return null
+  const cards = (
+    <>
+      {entries.map(entry => (
+        <ParkedChip
+          key={entry.id}
+          entry={entry}
+          sessionId={sessionId}
+          t={props.t}
+          localeId={props.localeId}
+        />
+      ))}
+    </>
+  )
   return (
     <>
       <span className="da-staged-anchor" ref={anchor} hidden />
-      {seat === null ? chip : createPortal(chip, seat)}
+      {seat === null ? cards : createPortal(cards, seat)}
     </>
   )
 }

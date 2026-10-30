@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildPagedDocument, createDocumentSeat, type PagedAnnotationInput } from '../src/client/document-seat'
 import type { ComposerLike, ComposerShellLike } from '../src/client/composer'
-import { clearParked, parkedAnnotation } from '../src/client/pending'
+import { clearParked, parkedAnnotations } from '../src/client/pending'
 import type { FileUploadLike, SessionsLike } from '../src/client/session'
 import { defined, stubRasterizer } from './dom'
 
@@ -186,7 +186,7 @@ describe('parking the document above the composer', () => {
       ],
       new Uint8Array([0x25, 0x50]),
     )
-    const parked = defined(parkedAnnotation('s1'))
+    const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('第 1 页 矩形1 (10,20)-(60,90)')
     expect(parked.raw).toContain('第 3 页 箭头1 (1,2) → (3,4)，批注：第三页')
     // The message describes the attachment without naming a path that is about to
@@ -225,14 +225,14 @@ describe('parking the document above the composer', () => {
     // Pressing the card runs the delivery the sheet built when the document was
     // closed, so what travels is the picture the reader was looking at.
     expect(stub.prompts).toEqual([])
-    await defined(parkedAnnotation('s1')).send()
+    await defined(parkedAnnotations('s1')[0]).send()
     expect(upload.uploads).toEqual(['report.pdf.annotated.pdf:2'])
     const parts = (stub.prompts[0] ?? []) as { readonly type: string; readonly name?: string; readonly text?: string }[]
     expect(parts.map(part => part.type)).toEqual(['file', 'image', 'image', 'text'])
     expect(parts[1]?.name).toBe('report.pdf.p1.annotated.png')
     expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
     // The card is spent by the dock that drew it, not by the seat.
-    expect(parkedAnnotation('s1')).toBeDefined()
+    expect(parkedAnnotations('s1')[0]).toBeDefined()
   })
 
   it('says the sessions service is missing when the card is pressed without one', async () => {
@@ -245,7 +245,7 @@ describe('parking the document above the composer', () => {
       locale: 'zh',
     })
     await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
-    await expect(defined(parkedAnnotation('s1')).send())
+    await expect(defined(parkedAnnotations('s1')[0]).send())
       .rejects.toThrow('the sessions service is unavailable')
   })
 
@@ -259,7 +259,7 @@ describe('parking the document above the composer', () => {
       locale: 'en',
     })
     await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
-    expect(defined(parkedAnnotation('s1')).raw).toContain('[figure annotations]')
+    expect(defined(parkedAnnotations('s1')[0]).raw).toContain('[figure annotations]')
   })
 
   it('refuses to park without a conversation service', async () => {

@@ -8,7 +8,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearThumbs, rememberThumb } from '../src/client/annotation-thumb'
 import { zh } from '../src/client/locales'
-import { clearParked, parkAnnotation, parkedAnnotation, type ParkedAnnotation } from '../src/client/pending'
+import { clearParked, parkAnnotation, parkedAnnotations, type UnparkedAnnotation } from '../src/client/pending'
 import { PendingCard, shortLabel } from '../src/client/pending-card'
 import { defined, installDom } from './dom'
 
@@ -60,8 +60,8 @@ describe('the attachment card above the composer', () => {
    * @param overrides - fields the case is about.
    * @returns the parked entry.
    */
-  function park(overrides: Partial<ParkedAnnotation> = {}): ParkedAnnotation {
-    const entry: ParkedAnnotation = {
+  function park(overrides: Partial<UnparkedAnnotation> = {}): UnparkedAnnotation {
+    const entry: UnparkedAnnotation = {
       sessionId: 's1',
       data: DATA,
       raw: RAW,
@@ -190,7 +190,7 @@ describe('the attachment card above the composer', () => {
     mount()
     await press(open())
     expect(send).toHaveBeenCalledTimes(1)
-    expect(parkedAnnotation('s1')).toBeUndefined()
+    expect(parkedAnnotations('s1')).toEqual([])
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 
@@ -215,7 +215,7 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged-trouble')?.textContent)
       .toBe(`${zh['pendingFailed']}the sessions service is unavailable`)
     // The annotation is not lost to a failed send: the reader can try again.
-    expect(parkedAnnotation('s1')).toBeDefined()
+    expect(parkedAnnotations('s1')).toHaveLength(1)
     expect(open().disabled).toBe(false)
   })
 
@@ -232,7 +232,7 @@ describe('the attachment card above the composer', () => {
     mount()
     await press(remove())
     expect(send).not.toHaveBeenCalled()
-    expect(parkedAnnotation('s1')).toBeUndefined()
+    expect(parkedAnnotations('s1')).toEqual([])
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 
@@ -251,11 +251,28 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged')).not.toBeNull()
   })
 
-  it('replaces a card that was parked over', () => {
+  it('draws a second card behind the first rather than over it', () => {
     park()
     mount()
     act(() => { park({ data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') }) })
-    expect(host.querySelector('.da-staged-file')?.textContent).toBe('second.svg')
+    const files = [...host.querySelectorAll('.da-staged-file')].map(node => node.textContent)
+    expect(files).toEqual(['fig.svg', 'second.svg'])
+  })
+
+  it('sends only the card that was pressed', async () => {
+    const first = vi.fn(async () => {})
+    const second = vi.fn(async () => {})
+    park({ send: first })
+    park({ send: second, data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') })
+    mount()
+    // Pressing the second chip sends the second review, not the first one behind it.
+    await press([...host.querySelectorAll('.da-staged-open')][1] as HTMLButtonElement)
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(first).not.toHaveBeenCalled()
+    // The neighbour the reader has not sent is still there, with its own delivery.
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+    expect(parkedAnnotations('s1')[0]?.send).toBe(first)
+    expect(host.querySelectorAll('.da-staged')).toHaveLength(1)
   })
 
   it('injects its stylesheet into the document it draws in', () => {
@@ -313,8 +330,8 @@ describe('the attachment card inside the composer', () => {
    * @param send - the delivery the card will make.
    * @returns the parked entry.
    */
-  function park(send: () => Promise<void> = async () => {}): ParkedAnnotation {
-    const entry: ParkedAnnotation = {
+  function park(send: () => Promise<void> = async () => {}): UnparkedAnnotation {
+    const entry: UnparkedAnnotation = {
       sessionId: 's1',
       data: DATA,
       raw: RAW,
