@@ -10,15 +10,24 @@
 
 import type { ReactElement } from 'react'
 
-/** The pencil a note carries: the gesture that produced the news. */
+/**
+ * The pencil a note carries: the gesture that produced the news.
+ *
+ * Drawn on the 24-unit grid the panel's other icons use, and shown at 14px so its
+ * stroke lands just under one device-independent pixel — the weight the bar's glyphs
+ * have. The pencil before this one was drawn on a 14-unit grid of its own at a stroke
+ * that rendered 1.7px wide: a closed outline with a notch, inside a 14px box, which at
+ * that size reads as a smudge rather than as a pencil. Two strokes on the shared grid
+ * is what stays legible when the box is that small.
+ */
 export function PencilIcon(): ReactElement {
   return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-      <path
-        d="M2.4 11.6l.34-2.35 6.5-6.5a1.14 1.14 0 011.61 0l.4.4a1.14 1.14 0 010 1.61l-6.5 6.5-2.35.34z"
-        stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"
-      />
-      <path d="M8.1 3.9l2 2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    <svg
+      width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
     </svg>
   )
 }

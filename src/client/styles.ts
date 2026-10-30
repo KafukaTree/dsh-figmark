@@ -567,7 +567,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* A send is a piece of work, not a notice: it keeps one width so the ring has room. */
 .da-toast[data-kind="send"]{width:228px;height:41px}
 .da-toast-ico{flex:0 0 auto;position:relative;display:flex;align-items:center;
-  color:rgba(255,255,255,.55);margin-top:1.5px}
+  align-self:center;color:rgba(255,255,255,.72);margin-top:0}
 /* The destination sits in a slot wide enough for the ring that replaces it, so the
    sentence does not shift by a pixel when the send lands. */
 .da-toast-ico[data-slot="send"]{position:relative;flex:0 0 22px;width:22px;height:22px;

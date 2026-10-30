@@ -32,6 +32,12 @@ still:
   146, so the one message that says work was kept was the one message that got an
   ellipsis.
 
+Two more came back after the rebuild, and they were about the two things a still cannot
+show either — what a second bubble does to the first, and whether the pencil is a pencil:
+
+> 现在似乎没有这种叠层，而是每次都把那个挤出去了
+> 还有那个修改（铅笔logo）比较糊，可以改清楚一些
+
 ## Decision
 
 Rebuild the bubble on the reference's rhythm, and make the stylesheet and the arithmetic
@@ -58,6 +64,17 @@ agree about the box.
 - **Less light, still some.** The gradient is 52 → 36 and the shadow is
   `0 6px 18px rgba(0,0,0,.13)`: the black reads as one surface with a direction, which is
   what "要有一些变化" asks for, without the four-stripe look.
+- **Every press gets a bubble, even a repeated one.** The stack dropped a card whose
+  sentence matched one already on screen — the reference does that so a held-down button
+  cannot fill the column. It reads as the stack failing to stack: press 存草稿 twice and
+  the first answer is shoved out by the second, so the panel never shows two at once. Four
+  identical sentences is the cap's business, not the dedupe's; the card counts presses.
+- **The pencil is drawn on the shared 24 grid.** It was a closed outline with a notch on a
+  14-unit grid of its own, stroked 1.7px: three device pixels of antialiased edge inside a
+  14px box, which is a smudge at this size. The reference's two-stroke pencil at 14px on
+  the 24 grid renders just under one device-independent pixel — the bar's weight — and the
+  slot is centred with `align-self` instead of a 1.5px margin, so the glyph sits on whole
+  pixels.
 
 ## Alternatives considered
 

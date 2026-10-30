@@ -105,23 +105,22 @@ describe('what a card says', () => {
 })
 
 describe('the stack of cards', () => {
-  it('replaces a sentence rather than repeating it', () => {
-    // The reader counts bubbles that differ: the same news twice is one bubble that
-    // moved, and a second would fade the first to make room for nothing.
+  it('stacks the same sentence twice instead of moving it', () => {
+    // Pressing 存草稿 twice is two answers, not one that moved: collapsing them reads
+    // as the stack failing to stack, which is exactly what the reader reported.
     const first = entry({ id: 1, text: '已存入草稿' })
     const again = entry({ id: 2, text: '已存入草稿' })
-    expect(addEntry([first], again).map(one => one.card.id)).toEqual([2])
+    expect(addEntry([first], again).map(one => one.card.id)).toEqual([1, 2])
   })
 
   it('keeps two notes that say different things', () => {
     expect(addEntry([entry({ id: 1, text: 'a' })], entry({ id: 2, text: 'b' }))).toHaveLength(2)
   })
 
-  it('knows two sends apart by what they say they did, not by what they say on the way', () => {
-    // Both say "sending" until they land; that sentence is not the news, the outcome is.
+  it('stacks two sends even when both say the same thing, going and done', () => {
     const going = entry({ id: 1, kind: 'send', icon: 'agent', text: '发送中', done: '已发送给智能体' })
     const alsoGoing = entry({ id: 2, kind: 'send', icon: 'agent', text: '发送中', done: '已发送给智能体' })
-    expect(addEntry([going], alsoGoing).map(one => one.card.id)).toEqual([2])
+    expect(addEntry([going], alsoGoing).map(one => one.card.id)).toEqual([1, 2])
     const toDraft = entry({ id: 3, kind: 'send', icon: 'dialog', done: '已存入草稿' })
     expect(addEntry([going], toDraft)).toHaveLength(2)
   })
@@ -420,11 +419,24 @@ describe('the stack a surface mounts', () => {
     expect(cards()[0]?.getAttribute('data-text')).toBe('发送完成')
   })
 
-  it('replaces a line that says the same thing again', () => {
+  it('puts a second copy of the same line under the first instead of in its place', () => {
     mount()
     act(() => { stack().note({ tone: 'info', text: '已复制' }) })
     act(() => { stack().note({ tone: 'info', text: '已复制' }) })
-    expect(cards()).toHaveLength(1)
+    expect(cards()).toHaveLength(2)
+    expect(cards().map(one => one.getAttribute('data-text'))).toEqual(['已复制', '已复制'])
+  })
+
+  it('stacks two hand-offs that were pressed one after the other', () => {
+    // The regression the reader reported: the second bubble shoved the first out, so
+    // the panel never showed a stack at all.
+    mount()
+    act(() => {
+      void stack().notify('annotate.save.all')
+      void stack().notify('annotate.send.agent')
+    })
+    expect(cards()).toHaveLength(2)
+    expect(cards().map(one => one.getAttribute('data-kind'))).toEqual(['send', 'send'])
   })
 
   it('takes every card out when the surface is reset', () => {

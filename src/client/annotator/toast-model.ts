@@ -170,33 +170,20 @@ export function holdFor(outcome: ToastOutcome): number {
 /**
  * Put a card at the bottom of the stack.
  *
- * A sentence already on screen is replaced rather than repeated: the same news
- * twice is one bubble that moved, and the reader counts bubbles that differ. The
- * oldest card leaves silently when a fifth arrives — it is the one already half
- * faded at the top, and animating it would push everything below it down for half
- * a second for nothing.
+ * Every press earns its own bubble, even when it says what the last one said. Two
+ * identical presses used to collapse into one card that moved, which looks like the
+ * stack failing to stack: the reader presses 存草稿 twice and watches the first
+ * answer get shoved out by the second. The stack is the panel's memory of what was
+ * just done, and "done twice" is not "done once". The cap is what keeps it tidy —
+ * the oldest card leaves silently when a fifth arrives, because it is already half
+ * faded at the top and animating it would push everything below it down for half a
+ * second for nothing.
  * @param list - the stack as it was.
  * @param entry - the card to add.
  * @returns the stack with the card at the bottom.
  */
 export function addEntry(list: readonly ToastEntry[], entry: ToastEntry): readonly ToastEntry[] {
-  const kept = list.filter(one => !sameNews(one.card, entry.card))
-  return [...kept, entry].slice(-TOAST_LIMIT)
-}
-
-/**
- * Whether two cards carry the same news.
- *
- * Two notes are the same when they say the same thing. Two sends are the same when
- * they are going to the same place — both say "sending" until they land, and that
- * sentence is not the news, the outcome is.
- * @param a - one card.
- * @param b - another.
- * @returns true when the reader would count them as one.
- */
-function sameNews(a: ToastCard, b: ToastCard): boolean {
-  if (a.kind !== b.kind) return false
-  return a.kind === 'note' ? a.text === b.text : a.done === b.done
+  return [...list, entry].slice(-TOAST_LIMIT)
 }
 
 /**
