@@ -27,7 +27,8 @@ describe('rendering a document for the frame', () => {
     expect(first?.tagName).toBe('META')
     expect(first?.getAttribute('http-equiv')).toBe('Content-Security-Policy')
     const policy = first?.getAttribute('content') ?? ''
-    expect(policy).toContain("script-src 'none'")
+    // The page's own script runs; the boundary is outbound, not inbound.
+    expect(policy).toContain("script-src 'unsafe-inline'")
     expect(policy).toContain("connect-src 'none'")
     expect(policy).toContain("frame-src 'none'")
     // The document's own inline styles still paint it.

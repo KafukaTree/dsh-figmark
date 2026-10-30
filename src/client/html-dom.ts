@@ -23,12 +23,17 @@ import { isPaper, pickStack } from './pick'
 /**
  * Policy every rendered document carries.
  *
- * The frame already refuses to run scripts; this keeps the document from reaching
- * anywhere at all — no request leaves the machine, no nested frame, no form post —
- * while still letting the document's own inline styles paint it.
+ * A document's own scripts are allowed to run, because a page that cannot run its
+ * script is not the page: a deck never turns past its first slide, a player shows a
+ * poster frame, a form does not answer. What is still shut is everything pointing out
+ * of the file — no request leaves the machine, no nested frame, no form post — so the
+ * script can only ever touch its own document. That boundary is the one that matters
+ * here: the document is a local file the reader chose to look at, and inline media is
+ * all a single-file page ever carries.
  */
-const CONTENT_POLICY = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'"
-  + "; img-src data:; font-src data:; media-src data:; connect-src 'none'"
+const CONTENT_POLICY = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'"
+  + "; style-src 'unsafe-inline'"
+  + "; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'"
   + "; frame-src 'none'; form-action 'none'; base-uri 'none'"
 
 /**

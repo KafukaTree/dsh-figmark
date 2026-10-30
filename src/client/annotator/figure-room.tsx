@@ -52,6 +52,14 @@ export interface FigureRoomProps {
    */
   readonly htmlView: { readonly width: number; readonly height: number }
   /**
+   * The address the frame navigates to, when the page is not the file's own document.
+   *
+   * A page a server serves cannot be written into the frame: it has to be fetched and
+   * run the way the browser would. Pointing the frame at it is what makes the preview
+   * that page and not a copy of it.
+   */
+  readonly pageUrl?: string | undefined
+  /**
    * Pointer travel that the page, rather than the panel, should take.
    *
    * The overlay takes every pointer event — that is what makes a click a mark — so a
@@ -61,6 +69,16 @@ export interface FigureRoomProps {
   readonly onWheel: ((event: ReactWheelEvent<HTMLDivElement>) => void) | undefined
   /** The mark surface's own draggable area. */
   readonly stageClass: StageCursor
+  /**
+   * Whether the page under the overlay is the reader's to use.
+   *
+   * A rendered document is a page, and a page that cannot be clicked, scrolled or
+   * played is a picture of a page. So while no mark-making tool is armed the frame
+   * takes its own pointer events and the overlay steps out of the way: a link follows,
+   * a button presses, a video plays. The marks stay on top of it — they are the one
+   * thing on this surface that is still the panel's.
+   */
+  readonly passing: boolean
   /** Right-click on the figure asks for its menu. */
   readonly onContextMenu: (event: ReactMouseEvent) => void
   /** The decoded natural size of a raster, once the browser has decoded it. */
@@ -102,6 +120,7 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
       /* A rendered document is a window: the page scrolls inside it, so the pane
          around it must not scroll as well and give the reader two scrollbars. */
       data-html={figure?.kind === 'html' ? 'true' : undefined}
+      data-pass={props.passing ? 'true' : undefined}
       data-hand={props.stageClass.hand ? 'true' : undefined}
       data-panning={props.stageClass.panning ? 'true' : undefined}>
       <div className="da-surface" ref={props.surfaceRef} style={props.surfaceStyle}>
@@ -122,9 +141,11 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
                 }}
               />
             ) : figure?.kind === 'html' ? (
-              // Same origin, scripts off: the body may read the frame's markup and
-              // nothing inside it can run or reach anywhere. The overlay above
-              // takes every pointer event, so the document is never navigated.
+              // Same origin, and the page's own scripts run: a document that cannot
+              // run its own script is not the document — a deck would show its first
+              // slide's markup and never turn a page, a player would show a poster.
+              // The policy the document is built with is what keeps that script from
+              // phoning home; the sandbox is what keeps it from navigating the panel.
               //
               // The frame is a browser window, not a sheet: the pane's width and the
               // pane's height, with the document scrolling inside it. That is what
@@ -132,10 +153,15 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
               // screenful, a sticky header sticks — and the frame reports its own
               // layout pixels, which are the pixels a mark is recorded in.
               <iframe
+                // A frame pointed at another origin can never be written into again, so
+                // going back to the file remounts it rather than reusing a window the
+                // panel has lost.
+                key={props.pageUrl ?? 'file'}
                 ref={props.frameRef}
                 className="da-html"
                 title={t('htmlFrame')}
-                sandbox="allow-same-origin"
+                src={props.pageUrl}
+                sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-presentation"
                 style={{ width: props.htmlView.width, height: props.htmlView.height }}
               />
             ) : null}

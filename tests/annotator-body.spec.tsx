@@ -18,6 +18,7 @@ import { STROKE_WIDTH } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
 import { reviewSize } from '../src/client/export'
 import { STYLES } from '../src/client/styles'
+import { LIVE_MESSAGE } from '../src/shared/live'
 import { defined, stubRasterizer, stubRect } from './dom'
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><text x="10" y="20">102</text></svg>'
@@ -103,6 +104,14 @@ interface HostAnswers {
   readonly workspace?: string | null
   /** Sidecars the Host found and would not read. */
   readonly unreadable?: readonly string[]
+  /** The address a page was opened at, when a spec sends the body to one. */
+  readonly liveUrl?: string
+  /** Make opening a page fail with this message. */
+  readonly liveError?: string
+  /** Hold the answer to opening a page until this settles. */
+  readonly liveHold?: Promise<void>
+  /** Make opening a page reject with something that is not an Error. */
+  readonly liveThrows?: unknown
 }
 
 /** Install the fetch stub answering as the host would. */
@@ -2821,6 +2830,13 @@ describe('a rendered document', () => {
       calls.push({ url, init })
       const respond = (body: unknown, status = 200): { readonly json: () => Promise<unknown>; readonly status: number } =>
         ({ json: async () => body, status })
+      if (url.endsWith('/dsh-figmark/live')) {
+        if (init?.method === 'DELETE') return respond({ ok: true })
+        if (answers.liveHold !== undefined) await answers.liveHold
+        if (answers.liveThrows !== undefined) throw answers.liveThrows
+        if (answers.liveError !== undefined) return respond({ ok: false, error: answers.liveError }, 400)
+        return respond({ ok: true, url: answers.liveUrl ?? 'http://127.0.0.1:4321/' })
+      }
       if (init?.method === 'DELETE') {
         if (answers.deleteError !== undefined) return respond({ ok: false, error: answers.deleteError }, 500)
         return respond({ ok: true, removed: true })
@@ -2904,10 +2920,13 @@ describe('a rendered document', () => {
     })
   })
 
-  it('renders the document into a frame that cannot run and cannot reach out', async () => {
+  it('renders the document into a frame that runs its own script but cannot reach out', async () => {
     mounted = await htmlBody()
     const element = frame()
-    expect(element.getAttribute('sandbox')).toBe('allow-same-origin')
+    // The page runs: a deck turns its pages, a player plays. What it cannot do is
+    // leave the file — the policy the document was built with has that covered.
+    expect(element.getAttribute('sandbox')).toContain('allow-scripts')
+    expect(element.getAttribute('sandbox')).toContain('allow-same-origin')
     const frameDocument = defined(element.contentDocument)
     expect(frameDocument.querySelector('#lead')?.textContent).toBe('第一段')
     expect(frameDocument.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
@@ -3212,6 +3231,307 @@ describe('a rendered document', () => {
     expect(aside()).not.toBe(zh.toastNone)
 
   })
+  describe('a page through the proxy', () => {
+    /** The origin the Host answers with for a page it opened. */
+    const LIVE_ORIGIN = 'http://127.0.0.1:4321'
+    const LIVE_URL = `${LIVE_ORIGIN}/app/`
+
+    /** The field where a reader says which page they want. */
+    function address(): HTMLInputElement {
+      return defined(document.querySelector('input.da-live-addr')) as HTMLInputElement
+    }
+
+    /** One message the page reported, arriving from the page's own origin. */
+    async function report(data: Record<string, unknown>, origin: string = LIVE_ORIGIN): Promise<void> {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { figmark: LIVE_MESSAGE, ...data },
+          origin,
+        }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+    }
+
+    /** The box under the name of the element the pointer is on. */
+    function hoverBox(): HTMLElement | null {
+      return document.querySelector('.da-live-hit') as HTMLElement | null
+    }
+
+    /** The name written beside that element. */
+    function hoverName(): string | null | undefined {
+      return document.querySelector('.da-name')?.textContent
+    }
+
+    /** Go where the reader typed, the way a browser would: Enter. */
+    async function go(text: string): Promise<void> {
+      await type(address(), text)
+      await act(async () => {
+        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+    }
+
+    /** What one pick looks like on the wire. */
+    const PICKED = {
+      tag: 'section',
+      class: 'hero wide',
+      text: '第二段',
+      selector: 'body > section:nth-of-type(2)',
+      bbox: [0, 0, 200, 100],
+      scroll: [0, 0],
+    }
+
+    it('opens the page an address names, and frames it in place of the file', async () => {
+      const result = await htmlBody({ annotation: savedHtml, liveUrl: LIVE_URL })
+      mounted = result
+      await reportLayout(WINDOW.width, 1843)
+      // The field names the file while the file is what is framed.
+      expect(address().value).toBe('report.html')
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      await go('localhost:5173')
+      const opened = result.calls.find(call => call.url.endsWith('/dsh-figmark/live'))
+      // What the reader typed is the address the Host is asked for: only the scheme
+      // is added, because that is the one part a person does not write down.
+      expect(postBody(opened)).toEqual({ url: 'http://localhost:5173/' })
+      // The frame is the page the Host answered with, not the file whose preview the
+      // panel started from.
+      expect(frame().getAttribute('src')).toBe(LIVE_URL)
+      // A page is the reader's own while nothing is being drawn on it.
+      expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
+      // The file's marks were locators in a document nobody is looking at any more.
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(0)
+    })
+
+    it('hands back an address that is not one, without asking the Host', async () => {
+      const result = await htmlBody({ liveUrl: LIVE_URL })
+      mounted = result
+      await go('http://[::1')
+      // The field is where the reader wrote the address, so it is where the refusal
+      // belongs: nothing was sent, and the document is still in the frame.
+      expect(document.querySelector('.da-live-error')?.textContent).toBe(zh.liveBadAddress)
+      expect(result.calls.filter(call => call.url.endsWith('/dsh-figmark/live'))).toHaveLength(0)
+      expect(frame().getAttribute('src')).toBeNull()
+    })
+
+    it('says why a page would not open, and leaves the file where it was', async () => {
+      const result = await htmlBody({ annotation: savedHtml, liveError: 'that is not a loopback page' })
+      mounted = result
+      await go('example.com')
+      expect(document.querySelector('.da-live-error')?.textContent).toBe('that is not a loopback page')
+      // A refused address leaves the reader where they were rather than emptying the
+      // panel: the marks they had are still theirs.
+      expect(frame().getAttribute('src')).toBeNull()
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+    })
+
+    it('says it is opening while the Host is still answering', async () => {
+      let release = (): void => {}
+      const hold = new Promise<void>((resolve) => { release = resolve })
+      const result = await htmlBody({ liveUrl: LIVE_URL, liveHold: hold })
+      mounted = result
+      await type(address(), 'localhost:5173')
+      await act(async () => {
+        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      const note = defined(document.querySelector('.da-live-note')) as HTMLElement
+      expect(note.hidden).toBe(false)
+      expect(note.textContent).toBe(zh.liveOpening)
+      release()
+      await act(async () => {
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+      expect(note.hidden).toBe(true)
+      expect(frame().getAttribute('src')).toBe(LIVE_URL)
+    })
+
+    it('names the element the page reports, and moves the name with the page', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'hover', tag: 'div', class: 'relative card', selector: 'body > div:nth-of-type(1)', bbox: [10, 20, 100, 40], scroll: [0, 0] })
+      // The page named itself, because the panel cannot read a box across an origin:
+      // `div.relative` is the label a reader would write a comment with.
+      expect(hoverName()).toBe('div.relative')
+      expect(hoverBox()?.style.left).toBe('10px')
+      expect(hoverBox()?.style.top).toBe('20px')
+      // The page scrolled itself, so the name follows the element it belongs to.
+      await report({ kind: 'scroll', scroll: [0, 300] })
+      expect(hoverBox()?.style.top).toBe('-280px')
+      // And it leaves with the pointer, rather than staying on a page nobody is on.
+      await report({ kind: 'leave' })
+      expect(hoverName()).toBeUndefined()
+      expect(hoverBox()).toBeNull()
+    })
+
+    it('ignores a message the page did not send', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'hover', tag: 'div', selector: 'body > div:nth-of-type(1)', bbox: [0, 0, 10, 10], scroll: [0, 0] }, 'http://example.com')
+      // Any window may talk to any other; only the framed page is the page.
+      expect(hoverName()).toBeUndefined()
+    })
+
+    it('takes a pick as a mark that locates the element the page named', async () => {
+      const { sessions, prompts } = stubSessions()
+      const result = await htmlBody({ liveUrl: LIVE_URL }, { sessions })
+      mounted = result
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      await click(button(document.body, zh.sendToAgent))
+      const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
+      // A page has no sidecar: its address may not be a file at all, so the marks
+      // travel in the message and the message names the page it is about.
+      expect(result.calls.filter(call => call.init?.method === 'POST' && !call.url.endsWith('/live'))).toHaveLength(0)
+      expect(parts[0]?.text).toContain('http://localhost:5173/')
+      expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
+    })
+
+    it('records the element the page reported, and not its class', async () => {
+      const { sessions, prompts } = stubSessions()
+      const result = await htmlBody({ liveUrl: LIVE_URL }, { sessions })
+      mounted = result
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await click(button(document.body, zh.sendToAgent))
+      // Nothing was written: what the reader marked is a page, not a file beside it.
+      expect(result.calls.filter(call => call.init?.method === 'POST' && !call.url.endsWith('/live'))).toHaveLength(0)
+      // The delivery is a promise of its own, so it is given more than the press's turn.
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      const parts = defined(prompts[0]) as { readonly text?: string }[]
+      const text = defined(parts[0]?.text)
+      // The locator a source reader can resolve is the selector, never the class: a
+      // page that restyles itself renames classes, and a locator naming one stops
+      // resolving.
+      expect(text).toContain('body > section:nth-of-type(2)')
+      expect(text).not.toContain('hero wide')
+    })
+
+    it('gives the pointer back when a drawing tool is armed', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      const view = defined(frame().contentWindow)
+      const posted: unknown[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: unknown) => { posted.push(message) },
+      })
+      await click(button(document.body, zh.toolElement))
+      // Choosing an element is the one act that has to reach the page, so the page is
+      // told the pointer is its to take.
+      expect(posted.at(-1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: true })
+      await report({ kind: 'hover', tag: 'p', selector: 'body > p:nth-of-type(1)', bbox: [0, 0, 10, 10], scroll: [0, 0] })
+      expect(hoverName()).toBe('p')
+      await click(button(document.body, zh.toolArrow))
+      // A drawing is drawn on this side of the fence, so the page stops taking clicks
+      // and the name of an element nobody is pointing at goes with it.
+      expect(posted.at(-1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: false })
+      expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBeNull()
+      expect(hoverName()).toBeUndefined()
+    })
+
+    it('says which mode it is in when the page reports it is ready', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      const view = defined(frame().contentWindow)
+      const posted: unknown[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: unknown) => { posted.push(message) },
+      })
+      // A frame that was still loading when the mode was sent had nothing to hear it
+      // with, so the page's own report is the moment the mode is said again.
+      await report({ kind: 'ready', scroll: [0, 240] })
+      expect(posted.at(-1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: true })
+    })
+
+    it('ignores a report it cannot make sense of', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'something else' })
+      // A page may say anything at all; only the vocabulary the panel knows is an
+      // event, and an unknown word is not an error the reader has to see.
+      expect(hoverName()).toBeUndefined()
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(0)
+      expect(frame().getAttribute('src')).toBe(LIVE_URL)
+    })
+
+    it('gives the field back on Escape, leaving the page where it is', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await type(address(), 'localhost:9999')
+      await act(async () => {
+        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      expect(address().value).toBe('http://localhost:5173/')
+      expect(frame().getAttribute('src')).toBe(LIVE_URL)
+    })
+
+    it('fills the field with the address of the page on focus, not the file', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await go('localhost:5173')
+      await type(address(), 'half typed')
+      await act(async () => {
+        address().focus()
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      // What the reader gets back is the page they are looking at, so a second visit
+      // is a correction of that address rather than of the file name.
+      expect(address().value).toBe('http://localhost:5173/')
+    })
+
+    it('says what a refusal with no sentence of its own was', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL, liveThrows: 'port closed' })
+      await go('localhost:5173')
+      // A thrown string is not an Error, but it is still the only explanation there
+      // is, so it is shown rather than swallowed.
+      expect(document.querySelector('.da-live-error')?.textContent).toBe('port closed')
+    })
+
+    it('does nothing when there is no frame to tell', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      const proto = HTMLIFrameElement.prototype
+      const original = Object.getOwnPropertyDescriptor(proto, 'contentWindow')
+      Object.defineProperty(proto, 'contentWindow', { configurable: true, get: () => null })
+      try {
+        await go('localhost:5173')
+        // Without a window there is nobody to tell, and that is not a failure: the
+        // page is still framed and the field still opened it.
+        await click(button(document.body, zh.toolElement))
+        await report({ kind: 'ready', scroll: [0, 0] })
+        expect(frame().getAttribute('src')).toBe(LIVE_URL)
+      } finally {
+        if (original !== undefined) Object.defineProperty(proto, 'contentWindow', original)
+      }
+    })
+
+    it('puts the file back in the frame, and stops the proxy with it', async () => {
+      const result = await htmlBody({ liveUrl: LIVE_URL })
+      mounted = result
+      await go('localhost:5173')
+      await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
+      // A port still answering on the reader's machine for a page nobody is framing
+      // is a leftover, so going back closes it.
+      expect(result.calls.filter(call => call.init?.method === 'DELETE' && call.url.endsWith('/live'))).toHaveLength(1)
+      expect(frame().getAttribute('src')).toBeNull()
+      expect(address().value).toBe('report.html')
+    })
+  })
+
 })
 
 describe('autosave', () => {

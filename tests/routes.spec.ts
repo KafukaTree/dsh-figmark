@@ -528,3 +528,85 @@ describe('the order a read takes', () => {
     expect(body.figure.sha256).toBe(latest)
   })
 })
+
+describe('the live page route', () => {
+  const guard = { [GUARD_HEADER]: '1' }
+  /** A server standing in for the reader's own dev server. */
+  let page: Server
+  let pageOrigin: string
+
+  beforeAll(async () => {
+    page = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(`<!doctype html><html><body><h1>live ${req.url ?? ''}</h1></body></html>`)
+    })
+    await new Promise<void>(resolve => { page.listen(0, '127.0.0.1', resolve) })
+    const address = page.address()
+    pageOrigin = typeof address === 'object' && address !== null ? `http://127.0.0.1:${address.port}` : ''
+  })
+
+  afterAll(() => {
+    page.closeAllConnections()
+    page.close()
+  })
+
+  /** Ask the Host to open one address. */
+  const open = (url: string): Promise<Response> => fetch(`${origin}/dsh-figmark/live`, {
+    method: 'POST',
+    headers: { ...guard, 'content-type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+
+  it('opens the page the reader typed, and serves it with the picker in it', async () => {
+    const response = await open(`${pageOrigin}/guide`)
+    expect(response.status).toBe(200)
+    const body = await response.json() as { ok: boolean; url: string }
+    expect(body.ok).toBe(true)
+    // The frame is pointed at the reader's own path, on a port of the proxy's choosing.
+    expect(new URL(body.url).pathname).toBe('/guide')
+    const framed = await fetch(body.url)
+    expect(await framed.text()).toContain('/__dsh_figmark_picker.js')
+  })
+
+  it('refuses an address that is not a server on this machine, in words the reader can act on', async () => {
+    const response = await open('http://example.com/')
+    expect(response.status).toBe(400)
+    expect((await response.json() as { error: string }).error).toContain('loopback')
+  })
+
+  it('refuses an address that is not an address at all', async () => {
+    const response = await open('')
+    expect(response.status).toBe(400)
+    expect((await response.json() as { error: string }).error).toContain('Invalid URL')
+  })
+
+  it('reads a body with no address in it as no address at all', async () => {
+    const response = await fetch(`${origin}/dsh-figmark/live`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 42 }),
+    })
+    expect(response.status).toBe(400)
+    expect((await response.json() as { error: string }).error).toContain('Invalid URL')
+  })
+
+  it('closes the page it is serving, and says so twice over', async () => {
+    expect((await open(pageOrigin)).status).toBe(200)
+    const first = await fetch(`${origin}/dsh-figmark/live`, { method: 'DELETE', headers: guard })
+    expect(await first.json()).toEqual({ ok: true })
+    // Closing what is already closed is the same answer: going back to a file twice
+    // is not an error the reader should ever see.
+    const second = await fetch(`${origin}/dsh-figmark/live`, { method: 'DELETE', headers: guard })
+    expect(await second.json()).toEqual({ ok: true })
+  })
+
+  it('refuses a method it does not have', async () => {
+    const response = await fetch(`${origin}/dsh-figmark/live`, { method: 'PATCH', headers: guard })
+    expect(response.status).toBe(405)
+  })
+
+  it('is closed to a request without the guard header, like every other route', async () => {
+    const response = await fetch(`${origin}/dsh-figmark/live`, { method: 'DELETE' })
+    expect(response.status).toBe(403)
+  })
+})

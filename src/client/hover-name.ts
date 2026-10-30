@@ -95,7 +95,11 @@ function ownClass(element: Element): string | undefined {
 export function elementName(
   anchor: MarkAnchor,
   find: (selector: string) => Element | undefined,
+  named?: string,
 ): string {
+  // A page on another origin cannot be asked for the element, so the name it reported
+  // itself is the only one there is.
+  if (named !== undefined) return named
   const base = anchor.tag.toLowerCase()
   if (anchor.id !== undefined && anchor.id !== '') return `${base}#${anchor.id}`
   const element = anchor.selector === undefined ? undefined : find(anchor.selector)
@@ -125,5 +129,27 @@ export function nameChipAt(
     // still starts at the left edge instead of inverting the range.
     left: Math.min(Math.max(EDGE, box[0] - scroll[0]), Math.max(EDGE, view.width - MAX_WIDTH)),
     top: top - LIFT < 0 ? top + INSIDE : top - LIFT,
+  }
+}
+
+/**
+ * Where the hover box goes, in the document's own pixels.
+ *
+ * The same subtraction the name chip makes, but for the whole element: the box is the
+ * element's own size, so a wide card is outlined where it lies instead of only named
+ * at its corner.
+ * @param box - the element's box in document pixels.
+ * @param scroll - how far the document has scrolled inside its window.
+ * @returns the box to draw in the window's pixels.
+ */
+export function hoverBoxAt(
+  box: FigureBox,
+  scroll: FigurePoint,
+): { readonly left: number; readonly top: number; readonly width: number; readonly height: number } {
+  return {
+    left: box[0] - scroll[0],
+    top: box[1] - scroll[1],
+    width: box[2],
+    height: box[3],
   }
 }

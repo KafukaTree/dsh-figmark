@@ -12,6 +12,11 @@
  * Writes are limited to the two sidecar files derived from a figure that already
  * exists, because the only path any handler passes to the store is the one
  * `resolveTarget` produced.
+ *
+ * One route is not about a figure at all: `/live` opens the page the reader typed
+ * as a proxied frame, or closes the one that is open. It shares this handler
+ * because it shares the guard and the one-way-to-answer rule, not because it
+ * touches the annotation.
  * @module dsh-figmark/host/routes
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -20,7 +25,10 @@ import type {
   AnnotationRemoveBody,
   AnnotationSaveBody,
 } from '../shared/http'
+import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
+import { LIVE_ROUTE, type LiveOpenAnswer } from '../shared/live'
 import { resolveTarget, type FigureTarget } from './figure-target'
+import { openLive, type LiveProxy } from './live-proxy'
 import { guarded, readBody, sendFailure, sendJson } from './route-http'
 import { readReview } from './review-payload'
 import {
@@ -32,7 +40,16 @@ import {
   writeAnnotation,
 } from './store'
 
-export { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
+export { GUARD_HEADER, ROUTE_PREFIX }
+
+/** The route a live page is opened and closed on. */
+const LIVE_PATH = `${ROUTE_PREFIX}${LIVE_ROUTE}`
+
+/** What closing a live page answers: nothing beyond success. */
+interface LiveCloseAnswer {
+  /** Always true. */
+  readonly ok: true
+}
 
 /** What the routes need from the plugin. */
 export interface RouteDeps {
@@ -135,6 +152,38 @@ async function removeAnswer(target: FigureTarget): Promise<AnnotationRemoveBody>
 export function createHandlers(deps: RouteDeps): {
   readonly annotation: (req: IncomingMessage, res: ServerResponse) => Promise<void>
 } {
+  /**
+   * The page being served to the panel, when one is.
+   *
+   * One at a time, because the panel shows one frame: a second page would leave
+   * the first proxy listening with nothing pointing at it. The state lives here,
+   * per composition, so two hosts in one process never share a frame.
+   */
+  let live: LiveProxy | undefined
+
+  /**
+   * Open the page one request names, or close whatever page is open.
+   * @param req - the request naming the operation.
+   * @returns the answer to send.
+   */
+  const liveAnswer = async (req: IncomingMessage): Promise<Answer<LiveOpenAnswer | LiveCloseAnswer>> => {
+    if (req.method === 'POST') {
+      const body = JSON.parse(await readBody(req)) as Record<string, unknown>
+      // Opened before the old page closes: an address that turns out not to be a
+      // loopback page leaves the frame the reader was looking at where it was.
+      const proxy = await openLive(new URL(typeof body['url'] === 'string' ? body['url'] : ''))
+      live?.close()
+      live = proxy
+      return { ok: true, body: { ok: true, url: proxy.url } }
+    }
+    if (req.method === 'DELETE') {
+      live?.close()
+      live = undefined
+      return { ok: true, body: { ok: true } }
+    }
+    return { ok: false, status: 405, error: `method ${String(req.method)} is not allowed` }
+  }
+
   const annotation = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!guarded(req)) {
       sendFailure(res, 403, 'missing plugin guard header')
@@ -146,7 +195,9 @@ export function createHandlers(deps: RouteDeps): {
       // and `new URL` refuses it. The plugin's contract is that a handler answers
       // rather than rejects, so that refusal is this handler's 400 to write.
       const url = new URL(req.url ?? '/', 'http://localhost')
-      const answer = await route(req, url, deps)
+      const answer = url.pathname === LIVE_PATH
+        ? await liveAnswer(req)
+        : await route(req, url, deps)
       if (answer.ok) {
         sendJson(res, 200, answer.body)
         return

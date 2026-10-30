@@ -304,9 +304,16 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    too, and not just the stage, because the overlay covers the figure and would
    otherwise keep saying what it said before the press. */
 .da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
-/* The rendered document takes the figure's place; the overlay above it owns every
-   pointer event, which is also what keeps a link inside it from navigating. */
+/* The rendered document takes the figure's place, and while no mark-making tool is
+   armed it is the reader's own page: it takes the pointer events, so a link follows,
+   a button presses, a video plays. A mark on it keeps its own hit area (the overlay
+   lets everything else through) — that is the one thing on the page still the
+   panel's. */
 .da-html{display:block;border:0;background:#fff;pointer-events:none}
+.da-stage[data-pass="true"] .da-html{pointer-events:auto}
+/* Passing through is not the same as being absent: the marks have to stay pressable,
+   so the overlay itself takes no press and only its mark rows do. */
+.da-stage[data-pass="true"] .da-overlay{pointer-events:none}
 /* The name of the element under the pointer, hung at its corner. A label and not a
    tooltip: it is a chip of the page's own vocabulary — div.relative — so the reader
    reading it can write the sentence they were about to write. It never takes a press;
@@ -315,6 +322,33 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;
   background:rgba(24,24,27,.92);color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);
   font:11px/16px var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-live-hit{position:absolute;z-index:1;box-sizing:border-box;border:1.5px solid var(--da-accent,#176df2);
+  border-radius:3px;background:var(--da-accent-soft,rgba(23,109,242,.12));pointer-events:none}
+/* The address of what is framed, on a strip above it — a browser puts one there for
+   the same reason: the page under it may be any page, and where it came from is the
+   one thing the reader cannot see from the page itself. It is a strip rather than a
+   floating pill because it must never sit on the page it describes: a page is the
+   reader's own, and covering a corner of it is exactly the "not the page" this
+   replaced. Only HTML previews get one. */
+.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:5px 14px;min-height:26px;
+  border-bottom:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.22))}
+.da-live-bar[hidden]{display:none}
+.da-live-addr{flex:1 1 auto;min-width:0;height:22px;padding:0 8px;border:0.5px solid transparent;border-radius:6px;
+  background:transparent;color:inherit;font:12px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-live-addr:hover{background:rgba(127,127,127,.1)}
+.da-live-addr:focus{outline:none;border-color:var(--da-accent,#176df2);background:rgba(127,127,127,.12)}
+.da-live-note{flex:0 0 auto;font-size:11.5px;color:var(--da-quiet,#6b6f75);white-space:nowrap}
+.da-live-note[hidden]{display:none}
+/* Going back to the file is the reader's way out, so it says so in words: a glyph
+   would have to be learned, and there is exactly one of these. */
+.da-live-back{flex:0 0 auto;height:22px;padding:0 8px;border:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.28));
+  border-radius:6px;background:transparent;color:inherit;font-size:11.5px;line-height:1;cursor:pointer}
+.da-live-back:hover{background:rgba(127,127,127,.12)}
+.da-live-back[hidden]{display:none}
+/* An address that did not open says why under the field, in the reader's own words:
+   the Host's refusal is the most specific thing anyone can say about it. */
+.da-live-error{flex:0 0 auto;padding:0 14px 7px;font-size:12px;color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
+.da-live-error[hidden]{display:none}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-tool="select"]{cursor:inherit}
 .da-overlay:not([data-tool="select"]):not([data-tool="element"]){cursor:crosshair}

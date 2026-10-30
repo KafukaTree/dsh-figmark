@@ -32,7 +32,13 @@ import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
+import type { SidecarWriteResult } from '../shared/http'
 import { anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
+import {
+  anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
+} from './live-page'
+import { elementMark } from './canvas/marks'
+import { liveModeMessage, parseLiveEvent } from '../shared/live'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
@@ -43,7 +49,7 @@ import {
 } from './host-actions'
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
-import { chipKey, elementName, nameChipAt } from './hover-name'
+import { chipKey, elementName, hoverBoxAt, nameChipAt } from './hover-name'
 import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
@@ -173,6 +179,21 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * panel, while the chip is drawn by React and cannot appear without a render.
    */
   const [chipAnchor, setChipAnchor] = useState<MarkAnchor | null>(null)
+  /**
+   * The page being framed instead of the file, when one is.
+   *
+   * A page a dev server serves has no bytes to read: it has to be fetched, its scripts
+   * run, its layout made before there is anything to annotate. So opening one asks the
+   * Host to stand in front of that server, and the frame is pointed at what it answers
+   * with. Null means this body is showing the file it was opened on.
+   */
+  const [livePage, setLivePage] = useState<LivePage | null>(null)
+  /** What the reader is typing in the address field, or null while they are not. */
+  const [liveText, setLiveText] = useState<string | null>(null)
+  /** Why the last address did not open, in the reader's own words. */
+  const [liveError, setLiveError] = useState<string | null>(null)
+  /** Whether an address is being opened right now. */
+  const [liveBusy, setLiveBusy] = useState(false)
 
   /** The key behind the chip currently drawn, so a move inside one element is free. */
   const chipShown = useRef<string>(chipKey(undefined))
@@ -215,8 +236,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const documentView = useCallback((): Window | null => {
     const frame = frameRef.current
-    return frame === null ? null : frame.contentWindow
-  }, [])
+    // A proxied page is a window of its own origin: nothing in it may be read from
+    // here — not even how far it has scrolled, which it reports instead.
+    if (frame === null || livePage !== null) return null
+    return frame.contentWindow
+  }, [livePage])
 
   const panBy = useCallback((dx: number, dy: number): void => {
     const stage = stageRef.current
@@ -759,7 +783,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // --- rendered document ----------------------------------------------------
 
   /** The document to load into the frame, or null when this body holds no document. */
-  const htmlSource = figure?.kind === 'html' ? figure.document : null
+  const htmlSource = figure?.kind === 'html' && livePage === null ? figure.document : null
 
   /**
    * Put the prepared document into the frame and learn the width its layout wants.
@@ -1184,9 +1208,135 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   // --- edits ----------------------------------------------------------------
 
-  const { commit } = history
+  const { commit, reset: resetMarks } = history
 
   const addMark = useCallback((mark: AnnotationMark): void => { commit(appendedMarks(marks, mark)) }, [commit, marks])
+
+  // --- a page through the proxy ---------------------------------------------
+
+  /**
+   * Whether the picker in a proxied page owns the pointer right now.
+   *
+   * Choosing an element is the one thing that has to reach the page itself, so the
+   * frame takes the pointer exactly then — and gives it back the moment a drawing tool
+   * is armed, because a drawing has to be drawn on this side of the fence.
+   */
+  const liveArmed = livePage !== null && tool === 'element'
+  /** The name of the element the reader's pointer is on, when the page reported one. */
+  const [liveHover, setLiveHover] = useState<{ readonly anchor: MarkAnchor; readonly name: string } | null>(null)
+
+  /**
+   * Open a page and frame it.
+   *
+   * The marks go with the page they were drawn on: an element locator from the file
+   * that happened to be open resolves to some unrelated element here, and a mark the
+   * reader never placed on this page is worse than no marks at all.
+   * @param text - what the reader typed in the address field.
+   */
+  const openPage = useCallback(async (text: string): Promise<void> => {
+    const address = liveAddressOf(text)
+    if (address === undefined) {
+      setLiveError(t('liveBadAddress'))
+      return
+    }
+    setLiveBusy(true)
+    setLiveError(null)
+    try {
+      const page = await openLivePage(address)
+      resetMarks([])
+      setSelectedId(null)
+      setLiveHover(null)
+      setHtmlScroll({ x: 0, y: 0 })
+      setLiveText(null)
+      setLivePage(page)
+    } catch (error) {
+      setLiveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLiveBusy(false)
+    }
+  }, [resetMarks, setSelectedId, t])
+
+  /**
+   * Put the file back in the frame.
+   *
+   * The proxy stops with it: a port still answering on the reader's machine for a page
+   * nobody is looking at is a leftover, not a feature.
+   */
+  const closePage = useCallback((): void => {
+    setLivePage(null)
+    setLiveText(null)
+    setLiveError(null)
+    setLiveHover(null)
+    setHtmlScroll({ x: 0, y: 0 })
+    resetMarks([])
+    setSelectedId(null)
+    void closeLivePage().catch(() => { /* a proxy already gone is not the reader's problem. */ })
+  }, [resetMarks, setSelectedId])
+
+  /**
+   * Tell the page whether the pointer belongs to the picker.
+   *
+   * A page that acts on a click — a link, a button, a menu — must keep doing so until
+   * the reader has asked to annotate it, and must stop doing so exactly then: that is
+   * the whole of "annotation is a layer". Sent on arming and on a page reporting it is
+   * ready, because a frame that was still loading could not have heard it.
+   */
+  const armPicker = useCallback((url: string, armed: boolean): void => {
+    const view = frameRef.current?.contentWindow
+    if (view === null || view === undefined) return
+    view.postMessage(liveModeMessage(armed), new URL(url).origin)
+  }, [])
+
+  useEffect(() => {
+    if (livePage === null) return
+    armPicker(livePage.url, liveArmed)
+    // A drawing tool takes the pointer back, and the name chip was about a pointer the
+    // page no longer owns.
+    if (!liveArmed) setLiveHover(null)
+  }, [armPicker, liveArmed, livePage])
+
+  /**
+   * Listen to the page.
+   *
+   * Everything the panel knows about a proxied page arrives here: how far it has
+   * scrolled, what the pointer is on, what it picked. Nothing is read out of the frame
+   * — it is another origin, and a page the panel could read would be a page whose
+   * scripts could read back.
+   */
+  useEffect(() => {
+    if (livePage === null) return
+    const origin = new URL(livePage.url).origin
+    const onMessage = (event: MessageEvent): void => {
+      if (event.origin !== origin) return
+      const reported = parseLiveEvent(event.data)
+      if (reported === undefined) return
+      if (reported.kind === 'scroll') {
+        setHtmlScroll({ x: reported.scroll[0], y: reported.scroll[1] })
+        return
+      }
+      if (reported.kind === 'ready') {
+        setHtmlScroll({ x: reported.scroll[0], y: reported.scroll[1] })
+        // The one moment both halves are known to be listening: the page has just put
+        // its picker in place, so the current mode is sent again rather than trusted.
+        armPicker(livePage.url, liveArmed)
+        return
+      }
+      if (reported.kind === 'leave') {
+        setLiveHover(null)
+        return
+      }
+      if (reported.kind === 'hover') {
+        setLiveHover({ anchor: anchorOfPick(reported), name: pickName(reported) })
+        return
+      }
+      // A pick is a click the reader aimed at an element. The box is where it was when
+      // they pointed, which is what a mark records: the element may move afterwards.
+      setLiveHover(null)
+      addMark(elementMark(anchorOfPick(reported), color))
+    }
+    window.addEventListener('message', onMessage)
+    return () => { window.removeEventListener('message', onMessage) }
+  }, [addMark, armPicker, color, liveArmed, livePage])
 
   const removeMark = useCallback((id: string): void => {
     // Only this surface's own marks reach here. A document's list used to offer the
@@ -1435,15 +1585,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   const buildDocument = useCallback((target: { readonly width: number; readonly height: number }, scope = marks): AnnotationDocument | null => {
     if (loaded === null) return null
+    // A proxied page is named by its address, not by the file whose preview opened it:
+    // the agent is being told to change the page it can reach, and a message naming
+    // `index.html` on disk for a comment about `localhost:5173` sends it to the wrong
+    // file — the two are only the same page by the accident of how the preview began.
+    const figure = livePage === null
+      ? { address, path: loaded.path, mediaType: loaded.mediaType, sha256: loaded.sha256 }
+      : { address: livePage.address, path: livePage.address, mediaType: 'text/html', sha256: loaded.sha256 }
     return buildAnnotationDocument({
-      figure: { address, path: loaded.path, mediaType: loaded.mediaType, sha256: loaded.sha256 },
+      figure,
       size: target,
       marks: scope,
       summary,
       createdAt,
       now: new Date().toISOString(),
     })
-  }, [address, createdAt, loaded, marks, summary])
+  }, [address, createdAt, livePage, loaded, marks, summary])
 
   /**
    * Take back a save failure once a write has gone through.
@@ -1501,7 +1658,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           createdAt: state.createdAt,
           now: new Date().toISOString(),
         })
-        await saveAnnotation(state.address, document, undefined, true)
+        // A page has nowhere to write a sidecar: its address may not be a file at all,
+        // and the marks it collected travel in the message instead.
+        if (livePage === null) await saveAnnotation(state.address, document, undefined, true)
         writtenSignature.current = signature
         clearSaveError()
       },
@@ -1529,7 +1688,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     await autosave.current?.drained()
     writtenSignature.current = null
     try {
-      await deleteAnnotation(address)
+      // Nothing was written for a proxied page, and deleting a sidecar beside the URL
+      // would ask the Host to remove a file that never existed.
+      if (livePage === null) await deleteAnnotation(address)
     } catch (error) {
       setStatus(failureStatus(t, 'clearError', error))
     }
@@ -1538,7 +1699,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     setStale(false)
     setSelectedId(null)
     writeSummary('')
-  }, [address, commit, t, writeSummary])
+  }, [address, commit, livePage, t, writeSummary])
 
   /**
    * Clear this surface's annotation — or, on one page of a document, the document's.
@@ -1631,7 +1792,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           // Numbered from the scope's own order, which is the order the message
           // numbers it in: the picture says ① next to the shape the prose calls ①.
           : await exportPng(layer, scope)
-        const saved = await saveAnnotation(address, document_, review)
+        const saved: SidecarWriteResult = livePage === null
+          ? await saveAnnotation(address, document_, review)
+          : { annotationPath: '', reviewPath: null }
         // The delivered document is what is on disk now; a pending draft write would
         // only repeat it (or, worse, race the delete that follows the hand-off).
         autosave.current?.cancel()
@@ -1909,7 +2072,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     /* v8 ignore start -- a body only asks once its figure has mounted, so neither ref is empty here. */
     if (isHtml) {
       const doc = frameRef.current?.contentDocument ?? null
-      if (doc === null) return undefined
+      // A frame with no document at all, or with one that has not been parsed yet,
+      // has no elements to find. A box across an origin is one of those: the panel
+      // reads nothing out of it, and its marks are lit by the boxes they carry.
+      if (doc === null || doc.documentElement === null) return undefined
       ensureSpotlight(doc)
       return elementAt({ root: doc, selector })
     }
@@ -2133,9 +2299,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * Only on a rendered document: an element inside an inline SVG is named by the mark
    * the reader already drew on it, and a picture has no elements to name at all.
    */
-  const chip = isHtml && chipAnchor !== null
-    ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
-    : null
+  /**
+   * The element the pointer is on, whichever half of the fence reported it.
+   *
+   * On a file the panel reads its own frame, so the chip stands for an element it can
+   * still look at; on a proxied page the page reported the name, because nothing here
+   * can read a box across an origin.
+   */
+  const chip: { readonly anchor: MarkAnchor; readonly left: number; readonly top: number; readonly name?: string } | null =
+    liveHover !== null
+      ? {
+        ...nameChipAt(liveHover.anchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }),
+        anchor: liveHover.anchor,
+        name: liveHover.name,
+      }
+      : isHtml && chipAnchor !== null
+        ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
+        : null
+  /**
+   * Whether the page under the overlay owns the pointer.
+   *
+   * Reading is the page's own: a link follows, a video plays, the page scrolls itself.
+   * Choosing an element is the one act that has to reach into the page — and only on a
+   * page the panel cannot read, where the reader marks by pointing instead of by
+   * reading the DOM. Anything being drawn takes the pointer back to this side.
+   */
+  const passing = isHtml && (tool === 'select' || (livePage !== null && tool === 'element'))
+  /** The address the frame is pointed at, when it is not the file's own document. */
+  const pageUrl = livePage === null ? undefined : livePage.url
 
   return (
     <div className="da-root" ref={rootRef}>
@@ -2149,6 +2340,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       )}
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
       <ToastStack view={toasts} label={t('close')} resendLabel={t('toastResend')} />
+
+      {/* The address of what is framed, in the corner the reader expects one.
+          A file shows its own name; typing a local address opens that page in the same
+          window, with the same marks and the same tools. Enter opens, Escape gives the
+          field back — the browser's own contract, because this is the browser's job. */}
+      <div className="da-live-bar" hidden={!isHtml}>
+        <input
+          className="da-live-addr"
+          value={shownAddress(liveText, livePage, loaded?.path ?? '')}
+          aria-label={t('liveAddress')}
+          spellCheck={false}
+          // Coming back to the field shows the resting address again, so a page the
+          // reader half-typed over is what they are looking at, not a leftover.
+          onFocus={() => { setLiveText(null) }}
+          onChange={(event) => { setLiveText(event.target.value) }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void openPage(event.currentTarget.value)
+            }
+            if (event.key === 'Escape') setLiveText(null)
+          }}
+        />
+        <span className="da-live-note" hidden={!liveBusy}>{t('liveOpening')}</span>
+        <button type="button" className="da-live-back" hidden={livePage === null}
+          onClick={closePage}>{t('liveBack')}</button>
+      </div>
+      <span className="da-live-error" hidden={liveError === null}>{liveError}</span>
 
       <FigureRoom
         stageRef={attachStage}
@@ -2166,7 +2385,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         // the very first layout is the one the reader will be looking at.
         htmlView={htmlView ?? { width: fitWidth, height: fitHeight }}
         onWheel={isHtml ? scrollHtml : undefined}
-        stageClass={{ hand: tool === 'select', panning }}
+        stageClass={{ hand: tool === 'select' && !isHtml, panning }}
+        // A page is the reader's own while nothing is being drawn on it: the frame
+        // takes the pointer, the overlay steps aside, and only the marks stay pressable.
+        passing={passing}
+        pageUrl={pageUrl}
         onContextMenu={openMenu}
         onRasterLoad={setFileRasterSize}
         overlay={paper === null || size === null ? null : (
@@ -2209,9 +2432,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           />
         )}
         chip={chip === null ? null : (
-          <span className="da-name" style={{ left: chip.left, top: chip.top }}>
-            {elementName(chip.anchor, findElement)}
-          </span>
+          <>
+            {liveHover === null ? null : (
+              <span className="da-live-hit" style={hoverBoxAt(liveHover.anchor.bbox, [htmlScroll.x, htmlScroll.y])} />
+            )}
+            <span className="da-name" style={{ left: chip.left, top: chip.top }}>
+              {elementName(chip.anchor, findElement, chip.name)}
+            </span>
+          </>
         )}
         t={t}
       />
