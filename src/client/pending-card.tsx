@@ -3,9 +3,10 @@
  *
  * The composer is a lexical editor owned by the conversation package: nothing can be
  * written into it that stays a card, and the whole annotation block sitting in the
- * input box is exactly what a reader cannot scan. So the block waits beside the
- * reader's own attachments instead, as a chip shaped like one — the figure's
- * thumbnail, how many marks it carries, the file's name, and the first mark's note.
+ * input box is exactly what a reader cannot scan. So the block is staged in the box —
+ * its message in the draft, its picture in the rail — and the chip stands beside the
+ * reader's own attachments as a receipt for it: the figure's thumbnail, how many marks
+ * it carries, the file's name, and the first mark's note.
  * It is portalled into the composer card's own flow (see `composer-seat`), so it
  * sits where an attached picture sits; the dock entry that owns it holds only the
  * anchor, and falls back to drawing in the dock itself when there is no card.
@@ -16,9 +17,11 @@
  * count first, the note second, and truncates both rather than wrapping into a wall of
  * text.
  *
- * The draft stays the reader's own — this card is not a message part, and nothing is
- * added to the input. Sending is the card's job, and it delivers the same message the
- * transcript card shows afterwards.
+ * One press is the point. The box's own send already carries what the card staged, so
+ * typing a sentence above it and pressing Send sends the sentence and the review
+ * together; the card's own action runs that same send for a reader who wants to fire it
+ * from the card. The card goes when its content leaves the box — sent, or deleted by
+ * hand — because that is when it stops standing for anything.
  * @module dsh-figmark/client/pending-card
  */
 import { useLayoutEffect, useEffect, useRef, useState, type ReactElement } from 'react'
@@ -26,6 +29,7 @@ import { createPortal } from 'react-dom'
 import { resolveTranslate } from './annotator-contract'
 import { thumbFor } from './annotation-thumb'
 import { mountSeat } from './composer-seat'
+import { unstageReview } from './composer'
 import { parkedAnnotations, unparkAnnotation, watchParked, type ParkedAnnotation } from './pending'
 import { ensureStyles } from './styles'
 import type { Translate } from './translate'
@@ -105,10 +109,18 @@ function ParkedChip(props: {
   // The disabled button is a face, not a promise: two presses can land in one tick,
   // before the first render has had a chance to disable anything.
   const sending = useRef(false)
+  const staged = entry.staged
   const data = entry.data
   const thumb = shot ? thumbFor(entry.raw) : undefined
   const send = async (): Promise<void> => {
     if (sending.current) return
+    // With the message staged in the box, the box's send is the send: running the
+    // card's own delivery instead would put the same annotation in twice, once now
+    // and once when the reader sends the draft it is sitting in.
+    if (staged !== undefined) {
+      staged.shell.submit?.()
+      return
+    }
     sending.current = true
     setBusy(true)
     try {
@@ -123,6 +135,26 @@ function ParkedChip(props: {
       setBusy(false)
     }
   }
+  // The card outlives its content only long enough for the reader to see it: once the
+  // box lets go of the staged picture — a send dropped it, the rail's own × removed
+  // it — there is nothing left for the card to stand for.
+  useEffect(() => {
+    if (staged === undefined) return undefined
+    const store = staged.shell.state
+    if (store === undefined) return undefined
+    return store.subscribe(() => {
+      const snapshot = staged.shell.snapshot
+      const ids = snapshot.attachmentIds
+      // A box that does not publish its attachments cannot say what it still holds,
+      // and a guess here would drop the card off a review that is still staged.
+      const gone = ids === undefined
+        ? false
+        : staged.attachmentIds.length > 0
+          ? staged.attachmentIds.every(id => !ids.includes(id))
+          : snapshot.draft.trim() === ''
+      if (gone) unparkAnnotation(sessionId, entry.id)
+    })
+  }, [entry.id, sessionId, staged])
   // The block names a path; a reader scanning the composer needs the file's own name
   // more than the directory, which is the same for every figure this session saved.
   const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
@@ -136,6 +168,7 @@ function ParkedChip(props: {
     : `${first.label} · ${resolveTranslate(props, 'pendingNote')}：${note}`
   const hover = data.scope === '' ? data.file : `${data.file} · ${data.scope}`
   const removeLabel = resolveTranslate(props, 'pendingRemove')
+  const hint = resolveTranslate(props, staged === undefined ? 'pendingSendNow' : 'pendingSendHint')
   return (
     <span className="da-staged">
       <span className="da-staged-card" title={hover}>
@@ -143,7 +176,7 @@ function ParkedChip(props: {
           type="button"
           className="da-staged-open"
           disabled={busy}
-          title={resolveTranslate(props, 'pendingSendHint')}
+          title={hint}
           onClick={() => { void send() }}
         >
           <span className="da-staged-shot">
@@ -180,7 +213,12 @@ function ParkedChip(props: {
           aria-label={removeLabel}
           title={removeLabel}
           disabled={busy}
-          onClick={() => { unparkAnnotation(sessionId, entry.id) }}
+          onClick={() => {
+            // Taking the card off takes its staging with it: a block left in the draft
+            // after the receipt was dropped would be sent by the next press of Send.
+            if (staged !== undefined) unstageReview(staged, entry.conversation)
+            unparkAnnotation(sessionId, entry.id)
+          }}
         >
           ×
         </button>

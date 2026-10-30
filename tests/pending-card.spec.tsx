@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearThumbs, rememberThumb } from '../src/client/annotation-thumb'
 import { zh } from '../src/client/locales'
 import { clearParked, parkAnnotation, parkedAnnotations, type UnparkedAnnotation } from '../src/client/pending'
+import type { ComposerShellLike } from '../src/client/composer'
 import { PendingCard, shortLabel } from '../src/client/pending-card'
 import { defined, installDom } from './dom'
 
@@ -88,6 +89,62 @@ describe('the attachment card above the composer', () => {
     await act(async () => { button.click() })
   }
 
+  /**
+   * A composer shell a staged card can talk to, recording what the card did to it.
+   * @param spec - the draft it holds, its attachments, and which faces it offers.
+   * @returns the shell, and what it saw.
+   */
+  function stubBox(spec: {
+    readonly draft: string
+    readonly ids?: readonly string[]
+    readonly watch?: boolean
+    readonly press?: boolean
+    readonly hide?: boolean
+  }): {
+    readonly shell: ComposerShellLike
+    readonly fire: () => void
+    readonly pressed: () => number
+    readonly dropped: () => readonly string[]
+    readonly draftText: () => string
+  } {
+    const state = { draft: spec.draft }
+    let ids: readonly string[] = spec.ids ?? []
+    const dropped: string[] = []
+    const listeners = new Set<() => void>()
+    let count = 0
+    const shell: ComposerShellLike = {
+      get snapshot() {
+        return spec.hide === true
+          ? { draft: state.draft }
+          : { draft: state.draft, attachmentIds: ids }
+      },
+      setDraft: (text: string) => { state.draft = text },
+      removeAttachment: (id: string) => {
+        dropped.push(id)
+        ids = ids.filter(each => each !== id)
+        return true
+      },
+      ...(spec.press === false ? {} : { submit: () => { count += 1 } }),
+      ...(spec.watch === false
+        ? {}
+        : {
+            state: {
+              subscribe: (listener: () => void) => {
+                listeners.add(listener)
+                return () => { listeners.delete(listener) }
+              },
+            },
+          }),
+    }
+    return {
+      shell,
+      fire: () => { for (const listener of [...listeners]) listener() },
+      pressed: () => count,
+      dropped: () => dropped,
+      draftText: () => state.draft,
+    }
+  }
+
   it('draws nothing until something is parked', () => {
     mount()
     expect(host.querySelector('.da-staged')).toBeNull()
@@ -124,7 +181,7 @@ describe('the attachment card above the composer', () => {
   it('names the send on the card itself, not with a button row', () => {
     park()
     mount()
-    expect(open().getAttribute('title')).toBe(zh['pendingSendHint'])
+    expect(open().getAttribute('title')).toBe(zh['pendingSendNow'])
     expect(remove().getAttribute('aria-label')).toBe(zh['pendingRemove'])
   })
 
@@ -234,6 +291,97 @@ describe('the attachment card above the composer', () => {
     expect(send).not.toHaveBeenCalled()
     expect(parkedAnnotations('s1')).toEqual([])
     expect(host.querySelector('.da-staged')).toBeNull()
+  })
+
+  it('presses the box\'s own send for a staged review, not the card\'s delivery', async () => {
+    const send = vi.fn(async () => {})
+    const box = stubBox({ draft: RAW, ids: ['a1'] })
+    const staged = { shell: box.shell, text: RAW, attachmentIds: ['a1'] }
+    park({ send, staged })
+    mount()
+    // The card says where the block is, so its hover names the box rather than a
+    // delivery of its own.
+    expect(open().getAttribute('title')).toBe(zh['pendingSendHint'])
+    await press(open())
+    // One press, one send: the box's, which carries the block and the picture with
+    // whatever the reader typed. The card's own delivery would have doubled it.
+    expect(box.pressed()).toBe(1)
+    expect(send).not.toHaveBeenCalled()
+    // The card is still there: it goes when the box lets go of what it staged.
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+  })
+
+  it('goes when the box sends the staged picture away', async () => {
+    const box = stubBox({ draft: RAW, ids: ['a1'] })
+    park({ staged: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
+    mount()
+    act(() => {
+      box.shell.removeAttachment?.('a1')
+      box.fire()
+    })
+    expect(parkedAnnotations('s1')).toEqual([])
+    expect(host.querySelector('.da-staged')).toBeNull()
+  })
+
+  it('goes when the box is emptied and there was no picture to send', () => {
+    const box = stubBox({ draft: RAW })
+    park({ staged: { shell: box.shell, text: RAW, attachmentIds: [] } })
+    mount()
+    act(() => {
+      box.shell.setDraft('')
+      box.fire()
+    })
+    expect(parkedAnnotations('s1')).toEqual([])
+  })
+
+  it('stays while the box still holds what it staged', () => {
+    const box = stubBox({ draft: RAW, ids: ['a1'] })
+    park({ staged: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
+    mount()
+    act(() => { box.fire() })
+    // The box published, and nothing had changed — a repaint is not a send.
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+  })
+
+  it('stays when the box does not publish what it holds', () => {
+    // A shell that never says which attachments it has cannot be read as having sent
+    // them: the card waits rather than vanishing off a review that is still staged.
+    const box = stubBox({ draft: RAW, ids: ['a1'], hide: true })
+    park({ staged: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
+    mount()
+    act(() => { box.fire() })
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+    expect(host.querySelector('.da-staged')).not.toBeNull()
+  })
+
+  it('stays put when the box offers nothing to watch or nothing to press', async () => {
+    const silent = stubBox({ draft: RAW, watch: false, press: false })
+    park({ staged: { shell: silent.shell, text: RAW, attachmentIds: [] } })
+    mount()
+    await press(open())
+    // Nothing was sent, and the card did not pretend otherwise.
+    expect(silent.pressed()).toBe(0)
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+  })
+
+  it('takes its staging out of the box when the reader drops the card', async () => {
+    const box = stubBox({ draft: `先看这张图\n\n${RAW}`, ids: ['a1'] })
+    const release = vi.fn()
+    park({
+      conversation: {
+        input: { shell: () => box.shell },
+        releaseDraftAttachment: release,
+      },
+      staged: { shell: box.shell, text: RAW, attachmentIds: ['a1'] },
+    })
+    mount()
+    await press(remove())
+    // The block, the picture and the service's hold on it all go: leaving the block
+    // behind would have the next press of Send deliver a review the reader dropped.
+    expect(box.draftText()).toBe('先看这张图')
+    expect(box.dropped()).toEqual(['a1'])
+    expect(release).toHaveBeenCalledWith('a1')
+    expect(parkedAnnotations('s1')).toEqual([])
   })
 
   it('speaks the shell locale when no translator is bound', () => {

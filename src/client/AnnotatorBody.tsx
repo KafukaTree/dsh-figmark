@@ -29,6 +29,7 @@ import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
+import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import { anchorInDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
@@ -1490,6 +1491,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             document: document_,
             paths: saved,
             thumb,
+            // Staged beside the message in the box, so the box's own send carries the
+            // picture with the text instead of leaving one of them behind.
+            file: reviewImageFile(review, document_.figure.path),
             locale,
             send: async () => {
               await deliverAnnotation({

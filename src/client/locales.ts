@@ -138,7 +138,8 @@ export const zh = {
   pendingCount: '{n} 处',
   pendingNote: '批注',
   pendingRemove: '移除附图标注',
-  pendingSendHint: '点击发送到对话（内容与直接发送一致）',
+  pendingSendHint: '已放进输入框：点右下角发送，或点这里，一起发出去',
+  pendingSendNow: '点击发送到对话（内容与直接发送一致）',
   pendingFailed: '没能发送：',
 } as const
 
@@ -272,7 +273,8 @@ export const en: Record<keyof typeof zh, string> = {
   pendingCount: '{n} marks',
   pendingNote: 'Note',
   pendingRemove: 'Remove the annotation',
-  pendingSendHint: 'Click to send it to the chat (the same message as the direct send)',
+  pendingSendHint: 'Already in the input box: press Send at the bottom right, or click here, to send it with what you typed',
+  pendingSendNow: 'Click to send it to the chat (the same message as the direct send)',
   pendingFailed: 'Could not send: ',
 }
 

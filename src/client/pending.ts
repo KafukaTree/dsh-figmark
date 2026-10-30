@@ -2,21 +2,22 @@
  * The annotations waiting above the composer.
  *
  * "Send to the input box" cannot write a card into the box itself: the composer is a
- * lexical editor owned by the conversation package, and its text is text. What this
- * module holds is the other half of the hand-off — the annotation stays parked as a
- * card in the input dock, the draft keeps only what the reader typed, and the message
- * is still delivered verbatim when the card's send is pressed.
+ * lexical editor owned by the conversation package, and its text is text. So the
+ * message is staged in the draft and its picture in the rail, and what this module
+ * holds is the card that stands for them — the figure, the count, the first note — so
+ * the reader can see what the box is about to carry without reading a page of
+ * coordinates.
  *
  * Cards queue rather than replace. An earlier version kept one card per session, on
  * the argument that two parked cards would be two answers to "what am I about to
  * send" — but a reader reviewing three figures hands over three reviews, and silently
  * dropping the first two is not an answer to that question, it is losing their work.
- * Each card carries its own id, its own delivery and its own send, and only its own
+ * Each card carries its own id, its own staging and its own send, and only its own
  * send takes it away.
  * @module dsh-figmark/client/pending
  */
 import type { FigmarkAnnotation } from './annotation-rule'
-import type { ComposerLike } from './composer'
+import type { ComposerLike, StagedReview } from './composer'
 
 /** One annotation parked above the composer. */
 export interface ParkedAnnotation {
@@ -36,6 +37,15 @@ export interface ParkedAnnotation {
   readonly raw: string
   /** The composer the card was parked for; the dock needs no write into it. */
   readonly conversation: ComposerLike | undefined
+  /**
+   * What the card already put into the composer: the message in the draft, the picture
+   * in the rail.
+   *
+   * Present when the host took that staging, which is the ordinary case: the box's own
+   * send then carries the whole annotation, and the card is the receipt for it. Absent
+   * when there is nothing to stage into, and then the card's send is the only one.
+   */
+  readonly staged?: StagedReview | undefined
   /**
    * Hand the message to the session, the way the direct button does.
    *

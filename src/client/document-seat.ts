@@ -16,6 +16,7 @@ import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer, type ComposerLike } from './composer'
+import { annotatedPdfFile } from './review-attachment'
 import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
 
@@ -219,6 +220,9 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
         document,
         paths: saved,
         thumb,
+        // The annotated PDF is what the direct send attaches, so it is what the box is
+        // given to carry: one file, with the marks already written into it.
+        file: annotatedPdfFile(annotatedPdf, document.figure.path),
         locale: options.locale,
         send: async () => {
           if (sessions === undefined) throw new Error('the sessions service is unavailable')

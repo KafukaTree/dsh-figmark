@@ -194,9 +194,9 @@ describe('parking the document above the composer', () => {
     expect(parked.raw).toContain('带批注 PDF 已作为本条消息的附件发送')
     expect(parked.raw).not.toContain('.annotated.pdf')
     expect(parked.data.marks).toHaveLength(2)
-    // Parking is the whole hand-off: nothing is written into the draft, and the
-    // reader's own draft is the only thing in the box.
-    expect(composer.written).toEqual([])
+    // Parking stages the block in the box: the message is what the box's own send
+    // reads, so the reader's one press carries the text and the PDF together.
+    expect(composer.written).toEqual([parked.raw])
     expect(document_.figure.pageCount).toBe(4)
   })
 
