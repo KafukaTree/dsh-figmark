@@ -256,21 +256,33 @@ export function apply(ctx: Context): void {
   // The block a reader's own message carries, drawn as a card instead of as the
   // lines the model reads. Both halves are optional: without the conversation
   // package a figure is still annotatable, it just says what it says as text.
-  ctx.inject(['uiConversation'], (scope) => {
-    const ui = scope.get('uiConversation') as UiConversationLike
-    scope.effect(() => ui.userText.register(annotationRule), 'dsh-figmark: annotation block')
-    scope.effect(() => slots.inject(USER_TEXT_SLOT, () => slots.register({
-      name: USER_TEXT_SLOT,
-      key: RULE_ID,
-      locale: NAMESPACE,
-      // A keyed user-text renderer is a child of the transcript, so it never sees
-      // this plugin's own props: what it needs crosses here, and the Session it is
-      // running in arrives as the slot's own argument.
-      inject: (sessionId: unknown): CardInjected => ({
-        sessionId: String(sessionId),
-        localeId: locale.getLocale().locale ?? 'zh',
-        open: (path: string) => { openFigure(ctx, String(sessionId), path) },
-      }),
-    }, AnnotationCard)), 'dsh-figmark: annotation card')
-  })
+  // A dynamic plugin has no child fiber, so the optional service comes from
+  // `ctx.get` — read inside the slot callback, which cannot run before the package
+  // that provides it has declared the slot.
+  let stopRule: (() => void) | undefined
+  ctx.effect(() => {
+    const stopCard = slots.inject(USER_TEXT_SLOT, () => {
+      const ui = ctx.get('uiConversation') as UiConversationLike | undefined
+      if (ui === undefined) return () => {}
+      stopRule ??= ui.userText.register(annotationRule)
+      return slots.register({
+        name: USER_TEXT_SLOT,
+        key: RULE_ID,
+        locale: NAMESPACE,
+        // A keyed user-text renderer is a child of the transcript, so it never sees
+        // this plugin's own props: what it needs crosses here, and the Session it is
+        // running in arrives as the slot's own argument.
+        inject: (sessionId: unknown): CardInjected => ({
+          sessionId: String(sessionId),
+          localeId: locale.getLocale().locale ?? 'zh',
+          open: (path: string) => { openFigure(ctx, String(sessionId), path) },
+        }),
+      }, AnnotationCard)
+    })
+    return () => {
+      stopCard()
+      stopRule?.()
+      stopRule = undefined
+    }
+  }, 'dsh-figmark: annotation card')
 }

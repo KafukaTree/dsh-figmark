@@ -43,6 +43,8 @@ function stubContext(options: {
   readonly injectedKeys: string[]
   readonly disposed: string[]
   readonly rules: unknown[]
+  readonly effects: (() => void)[]
+  readonly redeclare: () => void
 } {
   const omitted = new Set(options.omit ?? [])
   const definitions: StubDefinition[] = []
@@ -51,6 +53,9 @@ function stubContext(options: {
   const injectedKeys: string[] = []
   const disposed: string[] = []
   const rules: unknown[] = []
+  const effects: (() => void)[] = []
+  /** The callback each `slots.inject` registered, newest last. */
+  const injections: { readonly key: string; readonly run: () => () => void }[] = []
   const services: Record<string, unknown> = {
     locale: {
       register: (namespace: string, dicts: Record<string, unknown>) => {
@@ -69,6 +74,7 @@ function stubContext(options: {
     slots: {
       inject: (key: string, callback: () => () => void) => {
         injectedKeys.push(key)
+        injections.push({ key, run: callback })
         return callback()
       },
       register: (slotOptions: Record<string, unknown>, component: unknown) => {
@@ -88,23 +94,21 @@ function stubContext(options: {
       },
     },
   }
-  /** The slice a child fiber reads through, over the same service table. */
-  const scope = {
-    get: (key: string) => services[key],
-    effect: (factory: () => (() => void) | undefined) => factory() ?? (() => {}),
-  }
   const ctx = {
     get: (key: string) => (omitted.has(key) ? undefined : services[key]),
-    effect: (factory: () => (() => void) | undefined) => factory() ?? (() => {}),
-    // A child fiber runs only once every service it names is there, which is the
-    // one behaviour of the real context that the optional half of this entry needs.
-    inject: (deps: readonly string[], callback: (child: unknown) => void) => {
-      const ready = deps.every(dep => !omitted.has(dep) && services[dep] !== undefined)
-      if (ready) callback(scope)
-      return () => {}
+    effect: (factory: () => (() => void) | undefined) => {
+      const stop = factory() ?? (() => {})
+      effects.push(stop)
+      return stop
     },
   } as unknown as Context
-  return { ctx, definitions, slots, dictionaries, injectedKeys, disposed, rules }
+  /** Re-declare the slot the last injection waits for, so its callback runs a second time. */
+  const redeclare = (): void => {
+    const last = injections[injections.length - 1]
+    if (last === undefined) throw new Error('nothing was injected')
+    last.run()
+  }
+  return { ctx, definitions, slots, dictionaries, injectedKeys, disposed, rules, effects, redeclare }
 }
 
 describe('browser entry', () => {
@@ -302,6 +306,22 @@ describe('browser entry', () => {
       locale: NAMESPACE,
     })
     expect(card?.component).toBe(AnnotationCard)
+  })
+
+  it('registers the block once even when the slot is declared again', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    // The rule registry refuses a second rule under the same id, so a re-declared
+    // slot must not go looking for the conversation service a second time.
+    stub.redeclare()
+    expect(stub.rules).toEqual([annotationRule])
+  })
+
+  it('takes the block and the card away when the package unloads', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    for (const stop of stub.effects) stop()
+    expect(stub.disposed).toContain('rule')
   })
 
   it('hands the card the Session it draws in and nothing it does not read', () => {
