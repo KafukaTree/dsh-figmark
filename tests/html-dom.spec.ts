@@ -2,7 +2,9 @@
 /** The rendered document: its frame, the policy it carries, and what a mark names. */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
-import { RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument } from '../src/client/html-dom'
+import {
+  RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument, measureFrameContent,
+} from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
 /** Parse one document the way a file's own bytes reach the renderer. */
@@ -56,6 +58,35 @@ describe('rendering a document for the frame', () => {
   })
 })
 
+describe('painting a document whose theme its scripts set', () => {
+  it('applies the first theme the document declares, so its palette resolves', () => {
+    const doc = rendered(
+      '<html><head><style>html[data-theme="paper"]{--ink:#111}'
+      + 'html[data-theme="night"]{--ink:#eee}</style></head><body><p>hi</p></body></html>',
+    )
+    expect(doc.documentElement.getAttribute('data-theme')).toBe('paper')
+  })
+
+  it('reads a theme written without quotes', () => {
+    const doc = rendered(
+      '<html><head><style>html[data-theme=night]{--ink:#eee}</style></head><body></body></html>',
+    )
+    expect(doc.documentElement.getAttribute('data-theme')).toBe('night')
+  })
+
+  it('leaves a document that names its own theme alone', () => {
+    const doc = rendered(
+      '<html data-theme="night"><head><style>html[data-theme="paper"]{--ink:#111}</style></head><body></body></html>',
+    )
+    expect(doc.documentElement.getAttribute('data-theme')).toBe('night')
+  })
+
+  it('leaves a document that declares no theme untouched', () => {
+    const doc = rendered('<html><head><style>p{color:#111}</style></head><body><p>hi</p></body></html>')
+    expect(doc.documentElement.hasAttribute('data-theme')).toBe(false)
+  })
+})
+
 describe('loading a frame', () => {
   /** Append one frame to the document and return it. */
   function frame(): HTMLIFrameElement {
@@ -78,6 +109,51 @@ describe('loading a frame', () => {
     const element = frame()
     Object.defineProperty(element, 'contentDocument', { configurable: true, value: null })
     expect(loadFrameDocument(element, '<p>hi</p>')).toBeUndefined()
+  })
+})
+
+describe('measuring a frame', () => {
+  /** Append one frame and load a document into it. */
+  function loaded(): HTMLIFrameElement {
+    const element = document.createElement('iframe')
+    document.body.append(element)
+    loadFrameDocument(element, '<!doctype html><html><body><p>hi</p></body></html>')
+    return element
+  }
+
+  it('reports nothing to measure when there is no frame', () => {
+    expect(measureFrameContent(null)).toBeUndefined()
+  })
+
+  it('reports nothing to measure when the frame has no document', () => {
+    const element = loaded()
+    Object.defineProperty(element, 'contentDocument', { configurable: true, value: null })
+    expect(measureFrameContent(element)).toBeUndefined()
+  })
+
+  it('measures with the frame collapsed and puts its height back afterwards', () => {
+    const element = loaded()
+    element.style.height = '700px'
+    const root = defined(element.contentDocument?.documentElement)
+    const heights: string[] = []
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1920 })
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => {
+        heights.push(element.style.height)
+        return 10800
+      },
+    })
+    expect(measureFrameContent(element)).toEqual({ width: 1920, height: 10800 })
+    // A page sized in `100vh` answers with the frame's own height, so the height it is
+    // asked at must be none at all.
+    expect(heights).toEqual(['0px'])
+    expect(element.style.height).toBe('700px')
+  })
+
+  it('reports nothing while the document has laid out no height', () => {
+    const element = loaded()
+    expect(measureFrameContent(element)).toBeUndefined()
   })
 })
 

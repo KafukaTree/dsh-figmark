@@ -44,6 +44,8 @@ export interface FigureRoomProps {
   readonly size: { readonly width: number; readonly height: number } | null
   /** The height a rendered document's frame reported. */
   readonly htmlHeight: number
+  /** The width a rendered document's frame is laid out at. */
+  readonly htmlWidth: number
   /** The mark surface's own draggable area. */
   readonly stageClass: StageCursor
   /** Right-click on the figure asks for its menu. */
@@ -104,9 +106,10 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
                 className="da-html"
                 title={t('htmlFrame')}
                 sandbox="allow-same-origin"
-                // The height the frame reported for its own content: until it
-                // reports one, the surface is not there to draw on.
-                style={{ width: figure.width, height: props.htmlHeight }}
+                // The size the frame reported for its own content: until it reports
+                // one, the surface is not there to draw on. The width is the frame's,
+                // which is the document's own when it asked for a wider stage.
+                style={{ width: props.htmlWidth, height: props.htmlHeight }}
               />
             ) : null}
           </div>

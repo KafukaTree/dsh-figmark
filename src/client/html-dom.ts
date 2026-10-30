@@ -8,7 +8,8 @@
  * a mark on a document has to name the element it points at, and the source
  * reader can only act on a locator that resolves in the file.
  *
- * The frame is rendered at {@link RENDER_WIDTH} and sized to its own content, so
+ * The frame is rendered at {@link RENDER_WIDTH} — or at the document's own width when
+ * it declares a wider stage — and sized to its own content, so
  * it never scrolls internally and its elements report their own layout pixels —
  * which are exactly the figure pixels marks are recorded in.
  * @module dsh-figmark/client/html-dom
@@ -25,6 +26,11 @@ import { isPaper, pickStack } from './pick'
  * one width would mean something else at another. Rendering at one width and
  * scaling the result to the pane gives marks the same standing a PDF page has —
  * the surface has a size of its own, and the pane only changes how it is shown.
+ *
+ * It is the width a document is *first* laid out at. A document built around a stage
+ * of its own — a slide deck is the usual case — answers with that stage's width, and
+ * the frame takes it: the alternative is a page cut off at 1024, with the right third
+ * of every slide simply not there to annotate.
  */
 export const RENDER_WIDTH = 1024
 
@@ -38,6 +44,16 @@ export const RENDER_WIDTH = 1024
 const CONTENT_POLICY = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'"
   + "; img-src data:; font-src data:; media-src data:; connect-src 'none'"
   + "; frame-src 'none'; form-action 'none'; base-uri 'none'"
+
+/**
+ * The attribute a document may name its own theme in.
+ *
+ * The name is a convention neither CSS nor HTML defines, which is exactly why a
+ * document that uses one cannot be read without it: the palette is declared under
+ * this attribute and nowhere else, so a document that arrives here without it has
+ * no colours at all.
+ */
+const THEME_ATTRIBUTE = 'data-theme'
 
 /** Elements that only wrap other content, so a mark on one names its container instead. */
 const WRAPPER_TAGS = [
@@ -58,6 +74,7 @@ const WRAPPER_TAGS = [
  */
 export function buildRenderedDocument(source: string): string {
   const parsed = new DOMParser().parseFromString(source, 'text/html')
+  adoptDeclaredTheme(parsed)
   for (const element of parsed.querySelectorAll('base')) element.remove()
   for (const element of parsed.querySelectorAll('meta')) {
     if ((element.getAttribute('http-equiv') ?? '').toLowerCase() === 'refresh') element.remove()
@@ -68,6 +85,34 @@ export function buildRenderedDocument(source: string): string {
   // First in the head, so it governs every reference the document declares.
   parsed.head.prepend(policy)
   return `<!doctype html>${parsed.documentElement.outerHTML}`
+}
+
+/**
+ * Paint a document whose theme its own scripts would have chosen.
+ *
+ * No script runs in the frame, so a theme applied by one never arrives: the palettes
+ * live under `[data-theme="…"]`, nothing matches, and every colour and background
+ * resolves to nothing — the page then renders as bare text on bare paper, which is
+ * not the page the reader asked to annotate. The first theme the document declares is
+ * the one its stylesheet is written around, so that is the one the paper gets.
+ *
+ * A document that already names a theme keeps it, and one that declares none is left
+ * alone: this only fills in what the missing script would have set.
+ * @param parsed - the document being prepared.
+ */
+function adoptDeclaredTheme(parsed: Document): void {
+  const root = parsed.documentElement
+  if (root.hasAttribute(THEME_ATTRIBUTE)) return
+  for (const style of parsed.querySelectorAll('style')) {
+    // A `<style>` element's text is its stylesheet; only a Document or a Doctype can
+    // report null, and a style element is neither.
+    const css = style.textContent as string
+    const declared = /\[data-theme\s*=\s*["']?([-\w]+)["']?\]/.exec(css)
+    const theme = declared?.[1]
+    if (theme === undefined) continue
+    root.setAttribute(THEME_ATTRIBUTE, theme)
+    return
+  }
 }
 
 /**
@@ -86,6 +131,39 @@ export function loadFrameDocument(frame: HTMLIFrameElement | null, source: strin
   frameDocument.write(source)
   frameDocument.close()
   return frameDocument.documentElement
+}
+
+/** The size a rendered document lays out at, in pixels. */
+export interface FrameContentSize {
+  /** Width of the document's own content. */
+  readonly width: number
+  /** Height of the document's own content. */
+  readonly height: number
+}
+
+/**
+ * The size the document inside one frame lays out at.
+ *
+ * Measured with the frame collapsed to no height at all. A document that sizes a page
+ * in `100vh` answers "one screenful per page" once the frame is a screenful tall, and
+ * that answer sizes the frame again — a ten-page deck ran a review surface away to tens
+ * of millions of pixels that way. At zero height the answer is the content's own, and
+ * content does not depend on the frame it is laid out in. Nothing paints between the
+ * two writes, so the frame is never seen collapsed.
+ * @param frame - the frame holding the document, if there is one.
+ * @returns the content's size, or undefined while it has laid out nothing yet.
+ */
+export function measureFrameContent(frame: HTMLIFrameElement | null): FrameContentSize | undefined {
+  if (frame === null) return undefined
+  const frameDocument = frame.contentDocument
+  if (frameDocument === null) return undefined
+  const root = frameDocument.documentElement
+  const shown = frame.style.height
+  frame.style.height = '0px'
+  const width = root.scrollWidth
+  const height = root.scrollHeight
+  frame.style.height = shown
+  return height === 0 ? undefined : { width, height }
 }
 
 /** Whether an element is an anonymous inline wrapper: it names no anchor of its own. */

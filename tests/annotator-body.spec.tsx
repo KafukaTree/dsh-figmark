@@ -2885,6 +2885,27 @@ describe('a rendered document', () => {
     expect(element.getAttribute('title')).toBe(zh.htmlFrame)
   })
 
+  it('takes the width of a document laid out for a stage wider than the frame', async () => {
+    mounted = await htmlBody()
+    const element = frame()
+    const frameDocument = defined(element.contentDocument)
+    const root = frameDocument.documentElement
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1920 })
+    Object.defineProperty(root, 'scrollHeight', { configurable: true, get: () => 1080 })
+    await act(async () => {
+      for (const callback of resizeCallbacks) callback()
+    })
+    // Shown at the width it was written for, rather than cut off at the render width.
+    expect(element.style.width).toBe('1920px')
+    expect(element.style.height).toBe('1080px')
+    // A later pass that reports a narrower stage keeps the room it already asked for.
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1600 })
+    await act(async () => {
+      for (const callback of resizeCallbacks) callback()
+    })
+    expect(element.style.width).toBe('1920px')
+  })
+
   it('waits for bytes with the document wording rather than the figure wording', async () => {
     stubFetch()
     mounted = await mountBody({ content: { kind: 'text' }, resourceAddress: HTML_ADDRESS })

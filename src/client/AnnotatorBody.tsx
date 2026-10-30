@@ -31,7 +31,7 @@ import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
-import { anchorInDocument, loadFrameDocument } from './html-dom'
+import { RENDER_WIDTH, anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
@@ -193,6 +193,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
   /** Height a rendered document reports, in figure pixels; 0 until the frame has laid out. */
   const [htmlHeight, setHtmlHeight] = useState(0)
+  /**
+   * Width a rendered document's frame is laid out at, in figure pixels.
+   *
+   * A document that lays itself out for a stage of its own answers with that stage's
+   * width, and the frame takes it rather than cutting the page at the render width.
+   * Starts at the width the frame is first written at, and only grows: a document
+   * that reflows narrower afterwards keeps the room it asked for instead of the
+   * surface oscillating between two widths.
+   */
+  const [htmlWidth, setHtmlWidth] = useState(RENDER_WIDTH)
   const [figureError, setFigureError] = useState<string | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
 
@@ -571,7 +581,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * known. A rendered document is measurable as soon as its width is — the frame
    * reports how tall its content is, and until it does the surface has no height.
    */
-  const size = useMemo(() => figureSize(figure, rasterSize, htmlHeight), [figure, htmlHeight, rasterSize])
+  const size = useMemo(
+    () => figureSize(figure, rasterSize, htmlHeight, htmlWidth),
+    [figure, htmlHeight, htmlWidth, rasterSize],
+  )
   /**
    * How big everything drawn is, as a multiple of the base sizes.
    *
@@ -627,6 +640,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // The frame is sized to its content, so the height it reports is the whole
       // document's; until it reports one the marks file has no surface to describe.
       setHtmlHeight(0)
+      setHtmlWidth(RENDER_WIDTH)
       setFigureError(null)
     }
     // A raster has no size until the browser has decoded it, and this is a new one.
@@ -642,7 +656,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const htmlSource = figure?.kind === 'html' ? figure.document : null
 
   /**
-   * Put the prepared document into the frame and take the height it reports.
+   * Put the prepared document into the frame and take the size it reports.
    *
    * The frame is a same-origin sandbox with scripts off, so what it holds is
    * markup the body may read and nothing that runs. Sizing the frame to its own
@@ -654,9 +668,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const root = loadFrameDocument(frameRef.current, htmlSource)
     if (root === undefined) return
     const measure = (): void => {
-      // A frame that has laid out nothing yet reports no height; keeping the last
+      // A document that has laid out nothing yet reports no size; keeping the last
       // measurement leaves the surface where it was rather than collapsing it.
-      if (root.scrollHeight > 0) setHtmlHeight(root.scrollHeight)
+      const measured = measureFrameContent(frameRef.current)
+      if (measured === undefined) return
+      // A document laid out for a stage of its own is wider than the frame. Widening
+      // the frame to it is what keeps the page whole; the panel scales whatever comes
+      // out, so a stage-sized document is shown smaller rather than cut off.
+      if (measured.width > 0) setHtmlWidth(current => Math.max(current, measured.width))
+      setHtmlHeight(measured.height)
     }
     measure()
     // Content that arrives later — a font, an image, a reflow — changes the height.
@@ -1981,6 +2001,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         figure={figure}
         size={size}
         htmlHeight={htmlHeight}
+        htmlWidth={htmlWidth}
         stageClass={{ hand: tool === 'select', panning }}
         onContextMenu={openMenu}
         onRasterLoad={setFileRasterSize}

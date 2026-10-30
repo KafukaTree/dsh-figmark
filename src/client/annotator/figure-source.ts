@@ -106,20 +106,23 @@ export function decodeFigure(data: Uint8Array<ArrayBuffer>, mediaType: string): 
  * known.
  *
  * A rendered document is measurable as soon as its width is — the frame reports how
- * tall its content is, and until it does the surface has no height.
+ * tall its content is, and until it does the surface has no height. Its width is the
+ * frame's, which is the document's own when the document asked for a wider stage.
  * @param figure - the decoded figure, or null before there is one.
  * @param rasterSize - the size the browser decoded a raster at, or null until it has.
  * @param htmlHeight - the height a rendered document's frame reported.
+ * @param htmlWidth - the width a rendered document's frame was laid out at.
  * @returns the surface's size, or null.
  */
 export function figureSize(
   figure: LoadedFigure | null,
   rasterSize: { readonly width: number; readonly height: number } | null,
   htmlHeight: number,
+  htmlWidth: number = RENDER_WIDTH,
 ): { readonly width: number; readonly height: number } | null {
   if (figure === null) return null
   if (figure.kind === 'svg') return { width: figure.width, height: figure.height }
-  if (figure.kind === 'html') return { width: figure.width, height: htmlHeight }
+  if (figure.kind === 'html') return { width: htmlWidth, height: htmlHeight }
   return rasterSize
 }
 
