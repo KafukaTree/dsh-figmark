@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /** The seat the entry half hands the PDF chunk: the document, its save, and its delivery. */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildPagedDocument, createDocumentSeat, type PagedAnnotationInput } from '../src/client/document-seat'
 import type { ComposerLike, ComposerShellLike } from '../src/client/composer'
+import { clearParked, parkedAnnotation } from '../src/client/pending'
 import type { FileUploadLike, SessionsLike } from '../src/client/session'
 import { defined, stubRasterizer } from './dom'
 
@@ -82,6 +83,8 @@ function stubUpload(): { readonly fileUpload: FileUploadLike; readonly uploads: 
   }
 }
 
+beforeEach(() => { clearParked() })
+
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('the document one whole-document save writes', () => {
@@ -148,42 +151,21 @@ describe('saving the document', () => {
   })
 })
 
-/** A composer stub: what it staged, and what it wrote into the draft. */
-function stubComposer(options: { readonly refuses?: boolean } = {}): {
+/** A composer stub: the draft it was handed, if the seat ever writes one. */
+function stubComposer(): {
   readonly conversation: ComposerLike
-  readonly staged: string[]
   readonly written: string[]
-  readonly released: (readonly string[])[]
 } {
-  const staged: string[] = []
   const written: string[] = []
-  const released: (readonly string[])[] = []
   const shell: ComposerShellLike = {
     snapshot: { draft: '' },
     setDraft: (text: string) => { written.push(text) },
-    addAttachments: (ids: readonly string[]) => {
-      if (options.refuses === true) return false
-      released.push([...ids])
-      return true
-    },
   }
-  return {
-    staged,
-    written,
-    released,
-    conversation: {
-      input: { shell: () => shell },
-      createDrafts: (_sessionId: string, files: readonly File[]) => {
-        for (const file of files) staged.push(`${file.name}:${file.type}`)
-        return files.map((_file, index) => ({ id: `d${index}` }))
-      },
-      releaseDraftAttachments: () => {},
-    },
-  }
+  return { written, conversation: { input: { shell: () => shell } } }
 }
 
-describe('drafting the document', () => {
-  it('writes the annotated copy and one picture per marked page into the draft', async () => {
+describe('parking the document above the composer', () => {
+  it('parks the message the card stands for, with the pages the body rendered', async () => {
     stubFetch()
     stubRasterizer()
     const composer = stubComposer()
@@ -204,22 +186,70 @@ describe('drafting the document', () => {
       ],
       new Uint8Array([0x25, 0x50]),
     )
-    // The annotated copy travels with the pictures, under the name the save gave it.
-    expect(composer.staged).toEqual([
-      'page-1.png:image/png',
-      'page-3.png:image/png',
-      'report.pdf.annotated.pdf:application/pdf',
-    ])
+    const parked = defined(parkedAnnotation('s1'))
+    expect(parked.raw).toContain('第 1 页 矩形1 (10,20)-(60,90)')
+    expect(parked.raw).toContain('第 3 页 箭头1 (1,2) → (3,4)，批注：第三页')
     // The message describes the attachment without naming a path that is about to
-    // be deleted, because the sidecars go once the note has been staged.
-    expect(defined(composer.written[0])).toContain('带批注 PDF 已作为本条消息的附件发送')
-    expect(defined(composer.written[0])).not.toContain('.annotated.pdf')
+    // be deleted, because the sidecars go once the note is handed over.
+    expect(parked.raw).toContain('带批注 PDF 已作为本条消息的附件发送')
+    expect(parked.raw).not.toContain('.annotated.pdf')
+    expect(parked.data.marks).toHaveLength(2)
+    // Parking is the whole hand-off: nothing is written into the draft, and the
+    // reader's own draft is the only thing in the box.
+    expect(composer.written).toEqual([])
     expect(document_.figure.pageCount).toBe(4)
   })
 
-  it('names the annotated copy after the document when the save kept no review copy', async () => {
+  it('sends the annotated copy and the pictures when the card is pressed', async () => {
     stubFetch()
     stubRasterizer()
+    const upload = stubUpload()
+    const stub = stubSessions()
+    const composer = stubComposer()
+    const seat = createDocumentSeat({
+      sessions: stub.sessions,
+      fileUpload: upload.fileUpload,
+      conversation: composer.conversation,
+      sessionId: 's1',
+      locale: 'zh',
+    })
+    await seat.compose(
+      input(),
+      { annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' },
+      [
+        { page: 1, dataUrl: 'data:image/png;base64,cGFnZTE=', width: 595, height: 842 },
+        { page: 3, dataUrl: 'data:image/png;base64,cGFnZTM=', width: 595, height: 842 },
+      ],
+      new Uint8Array([0x25, 0x50]),
+    )
+    // Pressing the card runs the delivery the sheet built when the document was
+    // closed, so what travels is the picture the reader was looking at.
+    expect(stub.prompts).toEqual([])
+    await defined(parkedAnnotation('s1')).send()
+    expect(upload.uploads).toEqual(['report.pdf.annotated.pdf:2'])
+    const parts = (stub.prompts[0] ?? []) as { readonly type: string; readonly name?: string; readonly text?: string }[]
+    expect(parts.map(part => part.type)).toEqual(['file', 'image', 'image', 'text'])
+    expect(parts[1]?.name).toBe('report.pdf.p1.annotated.png')
+    expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
+    // The card is spent by the dock that drew it, not by the seat.
+    expect(parkedAnnotation('s1')).toBeDefined()
+  })
+
+  it('says the sessions service is missing when the card is pressed without one', async () => {
+    const composer = stubComposer()
+    const seat = createDocumentSeat({
+      sessions: undefined,
+      fileUpload: undefined,
+      conversation: composer.conversation,
+      sessionId: 's1',
+      locale: 'zh',
+    })
+    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    await expect(defined(parkedAnnotation('s1')).send())
+      .rejects.toThrow('the sessions service is unavailable')
+  })
+
+  it('parks in English when the panel runs in an English locale', async () => {
     const composer = stubComposer()
     const seat = createDocumentSeat({
       sessions: undefined,
@@ -228,12 +258,11 @@ describe('drafting the document', () => {
       sessionId: 's1',
       locale: 'en',
     })
-    await seat.compose(input(), { annotationPath: '/w/report.pdf.annot.json', reviewPath: null }, [], new Uint8Array([1]))
-    expect(composer.staged).toEqual(['report.pdf:application/pdf'])
-    expect(defined(composer.written[0])).toContain('[figure annotations]')
+    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    expect(defined(parkedAnnotation('s1')).raw).toContain('[figure annotations]')
   })
 
-  it('refuses to draft without a conversation service', async () => {
+  it('refuses to park without a conversation service', async () => {
     const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
     await expect(seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1])))
       .rejects.toThrow('the conversation service is unavailable')

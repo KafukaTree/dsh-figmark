@@ -28,7 +28,7 @@ import {
 import { figureMediaType } from '../shared/figure-kind'
 import { Canvas, type MarkPatch, type Tool } from './Canvas'
 import { captureThumb } from './annotation-thumb'
-import { deliverToComposer } from './composer'
+import { parkInComposer } from './composer'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import { anchorInDocument, loadFrameDocument } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
@@ -1467,10 +1467,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // no trace at all.
       const outcome = await toasts.notify(event, async () => {
         if (sessionId === undefined) throw new Error('the figure address carries no session')
-        if (target === 'composer' && props.conversation === undefined) {
-          throw new Error('the conversation service is unavailable')
-        }
-        if (target === 'agent' && props.sessions === undefined) {
+        // Both hand-offs end in the same delivery, so both need the session service:
+        // parking one above the composer only defers the send, it does not avoid it.
+        // Asking now rather than at the press keeps the answer where the reader still
+        // has the panel open — a card that fails a minute later is a worse refusal,
+        // because by then the figure it described is closed.
+        const sessions = props.sessions
+        if (sessions === undefined) {
           throw new Error('the sessions service is unavailable')
         }
         const document_ = buildDocument(size, scope)
@@ -1498,19 +1501,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         // the same text a moment later. A figure with no review picture files
         // nothing, and its card shows a glyph instead.
         const thumb = await captureThumb(review)
-        if (target === 'composer' && props.conversation !== undefined) {
-          deliverToComposer({
+        if (target === 'composer') {
+          // The card above the composer stands for this delivery, so the delivery
+          // travels with it: pressing send later sends what was on screen when the
+          // figure was closed, not whatever the services happen to hold by then.
+          parkInComposer({
             conversation: props.conversation,
             sessionId,
             document: document_,
             paths: saved,
-            files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
             thumb,
             locale,
+            send: async () => {
+              await deliverAnnotation({
+                sessions,
+                fileUpload: undefined,
+                sessionId,
+                document: document_,
+                paths: saved,
+                pageImages,
+                annotatedPdf: undefined,
+                thumb,
+                locale,
+              })
+            },
           })
-        } else if (props.sessions !== undefined) {
+        } else {
           await deliverAnnotation({
-            sessions: props.sessions,
+            sessions,
             // A single-surface figure is reviewed as the picture it is, which travels
             // as an image part and not as an attached file.
             fileUpload: undefined,

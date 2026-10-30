@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-/** Writing an annotation into the composer draft: what is staged, and what is written. */
-import { afterEach, describe, expect, it, vi } from 'vitest'
+/** Parking an annotation above the composer, and writing it into the draft on demand. */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument } from '../src/shared/annotation'
 import { ANNOTATION_VERSION } from '../src/shared/annotation'
-import { deliverToComposer, type ComposerLike, type ComposerShellLike } from '../src/client/composer'
+import { insertIntoDraft, parkInComposer, type ComposerLike, type ComposerShellLike } from '../src/client/composer'
+import { clearThumbs, thumbFor } from '../src/client/annotation-thumb'
+import { clearParked, parkedAnnotation } from '../src/client/pending'
 import { defined } from './dom'
 
 const document_: AnnotationDocument = {
@@ -21,101 +23,159 @@ const document_: AnnotationDocument = {
   marks: [{ id: 'm1', kind: 'arrow', color: '#e03131', points: [[1, 1], [2, 2]], detail: '指错了' }],
 }
 
+/** A document the message builder cannot spell a parsable header for. */
+const nameless: AnnotationDocument = { ...document_, figure: { ...document_.figure, path: '' } }
+
+const paths = { annotationPath: '/w/fig.annot.json', reviewPath: '/w/fig.annotated.png' }
+
 /** What one composer stub recorded, and how it should behave. */
 interface ComposerLog {
   readonly conversation: ComposerLike
-  readonly staged: { readonly sessionId: string; readonly names: string[] }[]
-  readonly attached: (readonly string[])[]
-  readonly released: (readonly string[])[]
   readonly written: string[]
   readonly draft: { readonly current: string }
 }
 
-/** A composer stub with one shell and a recording draft registry. */
-function stubComposer(options: {
-  readonly draft?: string
-  readonly refusesAttachments?: boolean
-  readonly publishesNothing?: boolean
-} = {}): ComposerLog {
-  const staged: { readonly sessionId: string; readonly names: string[] }[] = []
-  const attached: (readonly string[])[] = []
-  const released: (readonly string[])[] = []
+/** A composer stub with one shell that records every draft it is handed. */
+function stubComposer(options: { readonly draft?: string } = {}): ComposerLog {
   const written: string[] = []
   const draft = { current: options.draft ?? '' }
   const shell: ComposerShellLike = {
     get snapshot() { return { draft: draft.current } },
     setDraft: (text: string) => { draft.current = text; written.push(text) },
-    addAttachments: (ids: readonly string[]) => {
-      if (options.refusesAttachments === true) return false
-      attached.push([...ids])
-      return true
-    },
   }
-  return {
-    staged,
-    attached,
-    released,
-    written,
-    draft,
-    conversation: {
-      input: { shell: () => shell },
-      createDrafts: (sessionId: string, files: readonly File[]) => {
-        staged.push({ sessionId, names: files.map(file => `${file.name}:${file.type}`) })
-        // An empty array is what a composition with no draft registry answers.
-        if (options.publishesNothing === true) return []
-        return files.map((_file, index) => ({ id: `d${index}` }))
-      },
-      releaseDraftAttachments: (drafts: readonly { readonly id: string }[]) => {
-        released.push(drafts.map(entry => entry.id))
-      },
-    },
-  }
+  return { written, draft, conversation: { input: { shell: () => shell } } }
 }
 
-/** One review picture, as the export hands one over. */
-function picture(): File {
-  return new File([new Uint8Array([1, 2])], 'page-1.png', { type: 'image/png' })
-}
-
-const paths = { annotationPath: '/w/fig.annot.json', reviewPath: '/w/fig.annotated.png' }
+beforeEach(() => {
+  clearParked()
+  clearThumbs()
+})
 
 afterEach(() => { vi.unstubAllGlobals() })
 
-describe('writing into the composer', () => {
-  it('stages the pictures and writes the message, and never sends', () => {
-    const log = stubComposer()
-    deliverToComposer({
+describe('parking an annotation above the composer', () => {
+  it('parks the message as a card, and sends nothing', () => {
+    const send = vi.fn(async () => {})
+    parkInComposer({
+      conversation: undefined,
+      sessionId: 's1',
+      document: document_,
+      paths,
+      thumb: undefined,
+      locale: 'zh',
+      send,
+    })
+    const parked = defined(parkedAnnotation('s1'))
+    expect(parked.raw).toContain('【附图标注】')
+    // The sidecars are deleted once the figure is handed off, so the message
+    // describes the picture it carries rather than naming a file that is gone.
+    expect(parked.raw).not.toContain('.annot.json')
+    expect(parked.raw).toContain('标注图已作为本条消息的附件发送')
+    expect(parked.raw).toContain('指错了')
+    expect(parked.data.file).toBe('/w/fig.svg')
+    expect(parked.data.scope).toContain('200×100')
+    expect(parked.data.marks.map(mark => mark.comment)).toEqual(['指错了'])
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('keeps the delivery the reader will send later, without touching the draft', () => {
+    const log = stubComposer({ draft: '先看这张图' })
+    const send = vi.fn(async () => {})
+    parkInComposer({
       conversation: log.conversation,
       sessionId: 's1',
       document: document_,
       paths,
-      files: [picture()],
       thumb: undefined,
       locale: 'zh',
+      send,
     })
-    expect(log.staged).toEqual([{ sessionId: 's1', names: ['page-1.png:image/png'] }])
-    expect(log.attached).toEqual([['d0']])
-    const text = defined(log.written[0])
-    expect(text).toContain('【附图标注】')
-    // The sidecars are deleted after delivery, so the message describes the
-    // attachment it carries rather than naming a file that will be gone.
-    expect(text).not.toContain('.annot.json')
-    expect(text).toContain('标注图已作为本条消息的附件发送')
-    // Nothing in the message asks a session to do anything: the reader sends it.
-    expect(text).toContain('指错了')
+    const parked = defined(parkedAnnotation('s1'))
+    // `send` is the caller's closure, not a re-run of the delivery: a card pressed
+    // minutes later sends what was on screen when the figure was closed.
+    expect(parked.send).toBe(send)
+    expect(parked.conversation).toBe(log.conversation)
+    // Parking is what replaced writing into the draft, so the box keeps only what
+    // the reader typed.
+    expect(log.written).toEqual([])
+    expect(log.draft.current).toBe('先看这张图')
+  })
+
+  it('files the thumbnail under the message the bubble will ask about', () => {
+    const thumb = 'data:image/webp;base64,AAAA'
+    parkInComposer({
+      conversation: undefined,
+      sessionId: 's1',
+      document: document_,
+      paths,
+      thumb,
+      locale: 'zh',
+      send: async () => {},
+    })
+    const parked = defined(parkedAnnotation('s1'))
+    expect(thumbFor(parked.raw)).toBe(thumb)
+  })
+
+  it('speaks English when the panel does', () => {
+    parkInComposer({
+      conversation: undefined,
+      sessionId: 's1',
+      document: document_,
+      paths,
+      thumb: undefined,
+      locale: 'en',
+      send: async () => {},
+    })
+    expect(defined(parkedAnnotation('s1')).raw).toContain('[figure annotations]')
+  })
+
+  it('parks a bare card when the message names no figure', () => {
+    // A message the rule cannot recognise is still the message: the card falls back
+    // to the figure it was made from rather than refusing the hand-off.
+    parkInComposer({
+      conversation: undefined,
+      sessionId: 's1',
+      document: nameless,
+      paths,
+      thumb: undefined,
+      locale: 'zh',
+      send: async () => {},
+    })
+    const parked = defined(parkedAnnotation('s1'))
+    expect(parked.data).toEqual({
+      file: '',
+      scope: '',
+      target: '',
+      instruction: '',
+      html: false,
+      marks: [],
+    })
+    expect(parked.raw).toContain('【附图标注】')
+  })
+
+  it('replaces the previous card for the same session', () => {
+    const first = vi.fn(async () => {})
+    parkInComposer({
+      conversation: undefined, sessionId: 's1', document: document_, paths, thumb: undefined, locale: 'zh', send: first,
+    })
+    const second = vi.fn(async () => {})
+    parkInComposer({
+      conversation: undefined, sessionId: 's1', document: nameless, paths, thumb: undefined, locale: 'zh', send: second,
+    })
+    expect(defined(parkedAnnotation('s1')).send).toBe(second)
+  })
+})
+
+describe('writing the parked message into the draft', () => {
+  it('writes the message into an empty draft, with no leading blank line', () => {
+    const log = stubComposer({ draft: '   ' })
+    insertIntoDraft(log.conversation, 's1', '【附图标注】/w/fig.svg')
+    expect(log.written).toEqual(['【附图标注】/w/fig.svg'])
   })
 
   it('keeps the draft the reader already had, and appends to it', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    deliverToComposer({
-      conversation: log.conversation,
-      sessionId: 's1',
-      document: document_,
-      paths,
-      files: [],
-      thumb: undefined,
-      locale: 'zh',
-    })
+    insertIntoDraft(log.conversation, 's1', '【附图标注】/w/fig.svg')
     const text = defined(log.written[0])
     expect(text.startsWith('先看这张图\n\n')).toBe(true)
     expect(text).toContain('【附图标注】')
@@ -128,67 +188,10 @@ describe('writing into the composer', () => {
     // its indentation is no longer a code block to whoever reads the message.
     const draft = '  indented line\n\nkeep trailing  \n\n'
     const log = stubComposer({ draft })
-    deliverToComposer({
-      conversation: log.conversation,
-      sessionId: 's1',
-      document: document_,
-      paths,
-      files: [],
-      thumb: undefined,
-      locale: 'zh',
-    })
+    insertIntoDraft(log.conversation, 's1', '【附图标注】/w/fig.svg')
     const text = defined(log.written[0])
     expect(text.startsWith(draft)).toBe(true)
     expect(text).toContain('【附图标注】')
-  })
-
-  it('writes into an empty draft with no leading blank line', () => {
-    const log = stubComposer({ draft: '   ' })
-    deliverToComposer({
-      conversation: log.conversation,
-      sessionId: 's1',
-      document: document_,
-      paths,
-      files: [],
-      thumb: undefined,
-      locale: 'zh',
-    })
-    expect(defined(log.written[0]).startsWith('【附图标注】')).toBe(true)
-    // A blank draft is no draft, so nothing is staged and nothing is attached.
-    expect(log.staged).toEqual([])
-    expect(log.attached).toEqual([])
-  })
-
-  it('speaks English when the panel does', () => {
-    const log = stubComposer()
-    deliverToComposer({
-      conversation: log.conversation,
-      sessionId: 's1',
-      document: document_,
-      paths,
-      files: [],
-      thumb: undefined,
-      locale: 'en',
-    })
-    expect(defined(log.written[0])).toContain('[figure annotations]')
-  })
-
-  it('gives the pictures back, and writes nothing, when the composer refuses them', () => {
-    const log = stubComposer({ refusesAttachments: true })
-    expect(() => {
-      deliverToComposer({
-        conversation: log.conversation,
-        sessionId: 's1',
-        document: document_,
-        paths,
-        files: [picture()],
-        thumb: undefined,
-        locale: 'zh',
-      })
-    }).toThrow('the composer refused the attachments')
-    expect(log.released).toEqual([['d0']])
-    // A draft that named pictures which are not in the rail would be a lie.
-    expect(log.written).toEqual([])
   })
 
   it('says the session has no composer when the registry rejects the id', () => {
@@ -197,31 +200,7 @@ describe('writing into the composer', () => {
       ...log.conversation,
       input: { shell: () => { throw new Error('conversation.input: session "s1" resolved no binding') } },
     }
-    expect(() => {
-      deliverToComposer({
-        conversation,
-        sessionId: 's1',
-        document: document_,
-        paths,
-        files: [],
-        thumb: undefined,
-        locale: 'zh',
-      })
-    }).toThrow('the session has no composer to write into')
-  })
-
-  it('writes the message when the registry stages nothing', () => {
-    const log = stubComposer({ publishesNothing: true })
-    deliverToComposer({
-      conversation: log.conversation,
-      sessionId: 's1',
-      document: document_,
-      paths,
-      files: [picture()],
-      thumb: undefined,
-      locale: 'zh',
-    })
-    expect(log.attached).toEqual([])
-    expect(defined(log.written[0])).toContain('【附图标注】')
+    expect(() => { insertIntoDraft(conversation, 's1', 'x') })
+      .toThrow('the session has no composer to write into')
   })
 })

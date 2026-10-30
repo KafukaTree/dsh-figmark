@@ -135,6 +135,10 @@ export const zh = {
   cardMore: '还有 {n} 处',
   cardGoal: '目标',
   cardPage: '第 {n} 页',
+  pendingSend: '发送给智能体',
+  pendingReveal: '改成文本',
+  pendingDrop: '不要了',
+  pendingFailed: '没能发送：',
 } as const
 
 /** English copy. */
@@ -264,6 +268,10 @@ export const en: Record<keyof typeof zh, string> = {
   cardMore: 'and {n} more',
   cardGoal: 'Goal',
   cardPage: 'page {n}',
+  pendingSend: 'Send to the agent',
+  pendingReveal: 'Turn into text',
+  pendingDrop: 'Discard',
+  pendingFailed: 'Could not send: ',
 }
 
 /** Locale namespace this dictionary registers under. */

@@ -726,6 +726,23 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
   overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
 .da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
+/* The parked card above the composer. The dock stacks entries in a column, so the
+   sheet and its actions are one block; the sheet itself is the transcript's card,
+   stretched to the dock's width instead of to a bubble's. */
+.da-pending{display:flex;flex-direction:column;gap:6px;box-sizing:border-box;width:100%;margin:0 0 8px}
+.da-pending .da-card{width:100%;max-width:none;margin:0}
+.da-pending-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:flex-end}
+.da-pending-actions button{appearance:none;font:inherit;font-size:12px;line-height:1;padding:5px 10px;
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35));border-radius:7px;
+  background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));color:inherit;cursor:pointer}
+.da-pending-actions button:hover{background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.16))}
+.da-pending-actions button:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
+/* One class is not enough next to the button base above, whose element selector wins
+   over any single class: the two that are meant to read differently name their parent. */
+.da-pending-actions .da-pending-send{color:var(--da-accent,#176df2);border-color:var(--da-accent,#176df2)}
+.da-pending-actions .da-pending-send[disabled]{opacity:.6;cursor:default}
+.da-pending-actions .da-pending-drop{color:var(--dsw-alias-label-tertiary,inherit)}
+.da-pending-trouble{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-error,#c0392b)}
 /* One figure, one picture. The message that carries an annotation also attaches the
    review picture, and the shell draws that attachment full width above the bubble —
    so the same figure appeared twice, once huge and once as the card's 38px copy. The

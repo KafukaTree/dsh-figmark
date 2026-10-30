@@ -215,11 +215,14 @@ describe('the card in a sent bubble', () => {
   it('is inert where the message is not a sent bubble yet', () => {
     const open = vi.fn()
     mount(<AnnotationCard node={node(DATA)} raw={RAW} interactive={false} open={open} />)
-    // The queue dock has no Sidebar tab to open and no bubble to click: it is a label.
+    // The dock's card has no Sidebar tab to open and no bubble to click, so nothing
+    // around it is a button — but it still lists what is about to be sent, because
+    // that is the whole point of holding it there instead of sending it.
     expect(host.querySelector('button')).toBeNull()
     expect(card().hasAttribute('data-static')).toBe(true)
     expect(host.querySelector('.da-card-go')).toBeNull()
-    expect(rows()).toHaveLength(0)
+    // Two marks and the goal line.
+    expect(rows()).toHaveLength(3)
   })
 
   it('is inert when nothing can open a figure', () => {

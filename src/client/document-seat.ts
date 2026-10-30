@@ -15,7 +15,7 @@ import { ANNOTATION_VERSION, markOrdinals, type AnnotationDocument, type Annotat
 import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { captureThumb } from './annotation-thumb'
-import { deliverToComposer, type ComposerLike } from './composer'
+import { parkInComposer, type ComposerLike } from './composer'
 import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
 
@@ -202,38 +202,41 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
     discard: async (address) => { await deleteAnnotation(address) },
     compose: async (input, saved, pageImages, annotatedPdf) => {
       const conversation = options.conversation
+      // The card is drawn in the composer's own dock, so a seat without the composer
+      // has nowhere to put it: refusing here says so once instead of parking a
+      // hand-off nobody can see.
       if (conversation === undefined) throw new Error('the conversation service is unavailable')
       const document = buildPagedDocument(input)
       const images = await renderPageImages(document, pageImages)
-      deliverToComposer({
+      const thumb = await captureThumb(images[0]?.image)
+      // Parking only defers the send, so the delivery is built now — the pages the
+      // body rendered are held by the card until it is pressed or dropped, and what
+      // is sent is what the reader was looking at, not a re-render of it.
+      const sessions = options.sessions
+      parkInComposer({
         conversation,
         sessionId: options.sessionId,
         document,
         paths: saved,
-        files: [
-          ...images.map(entry => new File(
-            [entry.image],
-            `page-${entry.page}.png`,
-            { type: 'image/png' },
-          )),
-          new File([annotatedPdf], annotatedName(saved, document), { type: 'application/pdf' }),
-        ],
-        thumb: await captureThumb(images[0]?.image),
+        thumb,
         locale: options.locale,
+        send: async () => {
+          if (sessions === undefined) throw new Error('the sessions service is unavailable')
+          await deliverAnnotation({
+            sessions,
+            fileUpload: options.fileUpload,
+            sessionId: options.sessionId,
+            document,
+            paths: saved,
+            pageImages: images,
+            annotatedPdf,
+            thumb,
+            locale: options.locale,
+          })
+        },
       })
     },
   }
-}
-
-/**
- * The name the staged annotated document carries in the composer's attachment rail.
- * @param saved - paths the save wrote.
- * @param document - the saved document.
- * @returns a file name that says which document a second one differs from.
- */
-function annotatedName(saved: SavedPaths, document: AnnotationDocument): string {
-  const base = saved.reviewPath === null ? document.figure.path : saved.reviewPath
-  return base.slice(base.lastIndexOf('/') + 1)
 }
 
 /**

@@ -8,6 +8,7 @@ import { ANNOTATION_VERSION, MAX_SUMMARY_CHARS } from '../src/shared/annotation'
 import { AnnotatorBody, type AnnotatorBodyProps, type PageSurface, type SurfaceDraft } from '../src/client/AnnotatorBody'
 import { en, zh } from '../src/client/locales'
 import type { ComposerLike } from '../src/client/composer'
+import { clearParked, parkedAnnotation } from '../src/client/pending'
 import type { SessionsLike } from '../src/client/session'
 import type { RemoteLike } from '../src/client/host-actions'
 import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
@@ -182,43 +183,19 @@ function stubSessions(): {
   }
 }
 
-/** A conversation service stub that records what it was asked to draft. */
-function stubComposer(outcome: 'ok' | 'refuses' = 'ok'): {
+/** A conversation service stub: the draft box, and whether the seat ever writes it. */
+function stubComposer(): {
   readonly conversation: ComposerLike
-  readonly drafts: string
-  readonly attached: string[][]
-  readonly released: string[][]
+  readonly written: string[]
 } {
-  const state = {
-    draft: 'sketch first',
-    attached: [] as string[][],
-    released: [] as string[][],
-    drafts: '',
-  }
+  const written: string[] = []
   const shell = {
-    get snapshot() { return { draft: state.draft } },
-    setDraft: (text: string) => { state.draft = text },
-    addAttachments: (ids: readonly string[]) => {
-      if (outcome === 'refuses') return false
-      state.attached.push([...ids])
-      return true
-    },
-  }
-  const conversation = {
-    input: { shell: (_id: string) => shell },
-    createDrafts: (_sessionId: string, files: readonly File[]) => {
-      state.drafts = files.map(file => `${file.name}:${file.type}`).join(',')
-      return files.map((_file, index) => ({ id: `d${index}` }))
-    },
-    releaseDraftAttachments: (drafts: readonly { readonly id: string }[]) => {
-      state.released.push(drafts.map(entry => entry.id))
-    },
+    snapshot: { draft: 'sketch first' },
+    setDraft: (text: string) => { written.push(text) },
   }
   return {
-    conversation: conversation as unknown as ComposerLike,
-    get drafts() { return state.drafts },
-    get attached() { return state.attached },
-    get released() { return state.released },
+    written,
+    conversation: { input: { shell: (_id: string) => shell } } as unknown as ComposerLike,
   }
 }
 
@@ -450,6 +427,9 @@ beforeEach(() => {
   // Drawing preferences outlive a figure on purpose, which makes them outlive a test
   // too: without this, one spec's colour and number size leak into the next.
   globalThis.localStorage.clear()
+  // A parked hand-off outlives the panel that made it, which would make it outlive a
+  // test too.
+  clearParked()
   stubRasterizer()
   class StubResizeObserver { observe(): void {} disconnect(): void {} }
   vi.stubGlobal('ResizeObserver', StubResizeObserver)
@@ -1683,16 +1663,18 @@ describe('the figure menu', () => {
     expect(prompts).toHaveLength(1)
   })
 
-  it('hands the figure to the composer from the menu', async () => {
+  it('parks the figure above the composer from the menu', async () => {
     const composer = stubComposer()
-    const { host } = await svgBody({ annotation: saved }, { conversation: composer.conversation })
+    const { sessions } = stubSessions()
+    const { host } = await svgBody({ annotation: saved }, { conversation: composer.conversation, sessions })
     await settle()
     rightClick(host)
     // The second row of the menu is the composer hand-off.
     await click(defined(host.querySelectorAll('.da-menu button')[1] as HTMLButtonElement | undefined))
     await settle()
-    // The draft the composer was handed is the same message the dock's button writes.
-    expect(composer.drafts).toBe('page-1.png:image/png')
+    // The dock card stands for the delivery, and the reader's box is left alone.
+    expect(defined(parkedAnnotation('s1')).raw).toContain('【附图标注】')
+    expect(composer.written).toEqual([])
   })
 
   it('says so when the host refuses to reveal the figure', async () => {
@@ -2143,25 +2125,16 @@ describe('the hand-off inside the comment', () => {
     expect(document.querySelectorAll('.da-comment-send-btn')).toHaveLength(2)
   })
 
-  it('hands the comment to the composer from the pill as well', async () => {
-    const written: string[] = []
-    const conversation: ComposerLike = {
-      input: {
-        shell: () => ({
-          snapshot: { draft: '' },
-          setDraft: (text: string) => { written.push(text) },
-          addAttachments: () => true,
-        }),
-      },
-      createDrafts: () => [],
-      releaseDraftAttachments: () => {},
-    }
-    const result = await svgBody({}, { conversation })
+  it('parks the comment above the composer from the pill as well', async () => {
+    const composer = stubComposer()
+    const { sessions } = stubSessions()
+    const result = await svgBody({}, { conversation: composer.conversation, sessions })
     mounted = result
     await drawArrow(result.host)
     await type(detailBox(result.host), '送进对话框')
     await click(defined(result.host.querySelectorAll('.da-comment-send-btn')[1]))
-    expect(defined(written[0])).toContain('送进对话框')
+    expect(defined(parkedAnnotation('s1')).raw).toContain('送进对话框')
+    expect(composer.written).toEqual([])
   })
 
   it('sends only what the pill is about, not every mark on the figure', async () => {
@@ -2633,59 +2606,55 @@ describe('saving', () => {
     expect(body.annotation?.summary).toBeUndefined()
   })
 
-  it('writes the annotation into the draft instead of sending it', async () => {
+  it('parks the annotation above the composer instead of sending it', async () => {
     const composer = stubComposer()
-    const result = await svgBody({ annotation: saved }, { conversation: composer.conversation })
+    const { sessions, prompts } = stubSessions()
+    const result = await svgBody({ annotation: saved }, { conversation: composer.conversation, sessions })
     mounted = result
     await click(button(document.body, zh.sendToComposer))
     // Only the write to the sidecar happened; nothing was handed to a session.
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
-    const drafts = composer.drafts.split(',')
-    expect(drafts[0]).toBe('page-1.png:image/png')
-    expect(composer.attached).toEqual([['d0']])
+    expect(prompts).toEqual([])
+    const parked = defined(parkedAnnotation('s1'))
+    expect(parked.raw).toContain('【附图标注】')
+    // The message must stand on its own: the sidecars are deleted once the note is
+    // handed over, so a path in the text would be a dead reference by the time the
+    // card is pressed.
+    expect(parked.raw).not.toContain('.annot.json')
+    expect(parked.raw).toContain('标注图已作为本条消息的附件发送')
+    // Parking is not typing: the reader's own draft is untouched.
+    expect(composer.written).toEqual([])
     expect(handoff()).toBe(zh.toastSavedAll)
   })
 
-  it('stages one picture and names the figure in the draft message', async () => {
+  it('sends exactly the parked message when the card is pressed', async () => {
     const composer = stubComposer()
-    const seen: string[] = []
-    const conversation = {
-      ...composer.conversation,
-      input: {
-        shell: (id: string) => {
-          const inner = composer.conversation.input.shell(id)
-          return { ...inner, setDraft: (text: string) => { seen.push(text); inner.setDraft(text) } }
-        },
-      },
-    } as ComposerLike
-    mounted = await svgBody({ annotation: saved }, { conversation })
+    const { sessions, prompts } = stubSessions()
+    mounted = await svgBody({ annotation: saved }, { conversation: composer.conversation, sessions })
     await click(button(document.body, zh.sendToComposer))
-    const text = defined(seen[0])
-    expect(text).toContain('【附图标注】')
-    // The message must stand on its own: the sidecars are deleted once the note is
-    // staged, so a path in the text would be a dead reference by the time it is read.
-    expect(text).not.toContain('.annot.json')
-    expect(text).toContain('标注图已作为本条消息的附件发送')
-    // The reader's own half-sentence survives, with the annotation appended.
-    expect(text.startsWith('sketch first')).toBe(true)
+    expect(prompts).toEqual([])
+    // The panel is closed and the sidecars are gone by now. The card still carries
+    // both the pictures and the text it was handed, so pressing it much later sends
+    // what the reader closed the figure on.
+    await defined(parkedAnnotation('s1')).send()
+    const parts = (prompts[0] ?? []) as { readonly type: string; readonly text?: string }[]
+    expect(parts[0]?.type).toBe('image')
+    expect(parts[1]?.text).toContain('【附图标注】')
+    expect(parts[1]?.text).toContain('标注图已作为本条消息的附件发送')
   })
 
-  it('reports a conversation service the composition does not provide', async () => {
-    const result = await svgBody({ annotation: saved })
+  it('refuses to park without a session service, while the figure is still open', async () => {
+    const composer = stubComposer()
+    const result = await svgBody({ annotation: saved }, { conversation: composer.conversation })
     mounted = result
     await click(button(document.body, zh.sendToComposer))
+    // The card's send is the same delivery the direct button makes, so a composition
+    // with no session service cannot honour it at all. Saying so now costs the reader
+    // nothing; saying it when the card is pressed would cost them the panel they had
+    // already closed.
     expect(handoff()).toBe(zh.toastFailed)
-    // A refusal writes nothing: the sidecar still holds every mark the panel shows,
-    // because the question is asked before the save rather than after it.
+    expect(parkedAnnotation('s1')).toBeUndefined()
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
-  })
-
-  it('gives the staged pictures back when the composer refuses them', async () => {
-    const composer = stubComposer('refuses')
-    mounted = await svgBody({ annotation: saved }, { conversation: composer.conversation })
-    await click(button(document.body, zh.sendToComposer))
-    expect(composer.released).toEqual([['d0']])
-    expect(handoff()).toBe(zh.toastFailed)
   })
 
   it('delivers in English when the panel runs in an English locale', async () => {

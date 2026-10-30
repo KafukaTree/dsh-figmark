@@ -175,9 +175,11 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
       {interactive ? <span className="da-card-go" aria-hidden="true">›</span> : null}
     </span>
   )
-  /* The dock's card is the same sentence at a glance: it has no figure to open and
-     no room for the list, so it stops after the head. */
-  const body = interactive ? (
+  /* The same sheet wherever it stands: the dock's card is the last look the reader
+     gets at the message before it is sent, and a head-only version would hide the
+     very lines that are about to go. What changes without an opener is the button
+     around it, not the contents. */
+  const body = (
     <span className="da-card-body">
       {shown.map((mark, index) => (
         <CardRow
@@ -194,7 +196,7 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
         </span>
       )}
     </span>
-  ) : null
+  )
   const onClick = interactive && open !== undefined
     ? () => { open(data.file) }
     : undefined

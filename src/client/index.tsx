@@ -33,6 +33,7 @@ import { MarkdownBody, type MarkdownInjected } from './markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
+import { PendingCard } from './pending-card'
 import type { FileUploadLike, SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
@@ -97,9 +98,18 @@ interface LocaleLike {
 /** The keyed slot the transcript dispatches one text block to. */
 const USER_TEXT_SLOT = 'conversation.user.text.node'
 
+/** The full-width dock the composer draws above its own card. */
+const PENDING_SLOT = 'conversation.input.dock'
+
 /** The conversation service, as far as a card needs it. */
 interface UiConversationLike {
   readonly userText: { register(rule: typeof annotationRule): () => void }
+}
+
+/** What the input dock injects. */
+interface PendingInjected {
+  readonly sessionId: string
+  readonly localeId: string
 }
 
 /** The Sidebar's navigation controller, as far as a card needs it. */
@@ -285,4 +295,21 @@ export function apply(ctx: Context): void {
       stopRule = undefined
     }
   }, 'dsh-figmark: annotation card')
+  // The same card, parked above the composer instead of inside a sent bubble. The
+  // dock is the one seat beside the draft a plugin can draw in: the editor takes no
+  // children, and the draft's own text is text, so a hand-off that stayed text put a
+  // block of prose and an image chip in the box where the annotation should have
+  // been one thing. Nothing here sends — the card does, and only when pressed.
+  ctx.effect(() => slots.inject(PENDING_SLOT, () => slots.register({
+    name: PENDING_SLOT,
+    id: RULE_ID,
+    // After the queue and the todo list: those answer "what is running", this one
+    // answers "what am I about to send", and it belongs next to the input.
+    order: 40,
+    locale: NAMESPACE,
+    inject: (sessionId: unknown): PendingInjected => ({
+      sessionId: String(sessionId),
+      localeId: locale.getLocale().locale ?? 'zh',
+    }),
+  }, PendingCard)), 'dsh-figmark: parked annotation')
 }

@@ -164,6 +164,7 @@ describe('browser entry', () => {
       'sidebar.right.tab.document', 'sidebar.right.tab.document',
       'sidebar.right.tab.document', 'sidebar.right.tab.document',
       'conversation.user.text.node',
+      'conversation.input.dock',
     ])
     expect(stub.slots[2]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
@@ -338,6 +339,33 @@ describe('browser entry', () => {
     expect(injected.localeId).toBe('en-US')
   })
 
+  it('hands the parked card the session it sits above, and nothing to open', () => {
+    const stub = stubContext({ localeId: 'en-US' })
+    apply(stub.ctx)
+    expect(stub.slots[5]?.options).toMatchObject({
+      name: 'conversation.input.dock',
+      id: RULE_ID,
+      order: 40,
+      locale: NAMESPACE,
+    })
+    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => {
+      readonly sessionId: string
+      readonly localeId: string
+    }
+    const injected = factory('s7')
+    // Nothing to open: the card has not been sent, so there is no bubble to click
+    // through to. Its whole surface is the two ways out of the way.
+    expect(Object.keys(injected).sort()).toEqual(['localeId', 'sessionId'])
+    expect(injected.sessionId).toBe('s7')
+    expect(injected.localeId).toBe('en-US')
+    // A host that has not said which locale it speaks gets the plugin's own, which is
+    // the one its dictionaries are written in first.
+    const quiet = stubContext()
+    apply(quiet.ctx)
+    const zhFactory = quiet.slots[5]?.options['inject'] as (id: unknown) => { readonly localeId: string }
+    expect(zhFactory('s7').localeId).toBe('zh')
+  })
+
   it('opens the annotated figure as a Session file the Sidebar can place', () => {
     const opened: string[] = []
     const stub = stubContext({ sidebarRight: { openResource: (address: string) => { opened.push(address) } } })
@@ -373,7 +401,9 @@ describe('browser entry', () => {
     // A figure is still annotatable without the conversation package; the block
     // simply stays text, which is what a message with no rule renders as.
     expect(stub.rules).toEqual([])
-    expect(stub.slots).toHaveLength(4)
+    // The parked card is not the transcript's: it sits in the composer's dock, so
+    // the four figure renderers and that one entry are all this plugin asks for.
+    expect(stub.slots).toHaveLength(5)
   })
 
   it.each(['locale', 'documentPreviews', 'slots'])('fails loudly without the %s service', (service) => {
