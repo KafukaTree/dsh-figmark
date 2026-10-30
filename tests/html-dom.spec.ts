@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
 import {
-  RENDER_WIDTH, anchorInDocument, buildRenderedDocument, loadFrameDocument, measureFrameContent,
+  anchorInDocument, buildRenderedDocument, loadFrameDocument, measureFrameContent,
 } from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
@@ -21,10 +21,6 @@ function rendered(html: string): Document {
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('rendering a document for the frame', () => {
-  it('renders at one fixed width, so marks mean the same thing wherever they are read', () => {
-    expect(RENDER_WIDTH).toBe(1024)
-  })
-
   it('puts the drawing policy first in the head, where it governs every reference', () => {
     const doc = rendered('<html><head><title>t</title></head><body><p>hi</p></body></html>')
     const first = doc.head.firstElementChild
@@ -131,23 +127,25 @@ describe('measuring a frame', () => {
     expect(measureFrameContent(element)).toBeUndefined()
   })
 
-  it('measures with the frame collapsed and puts its height back afterwards', () => {
+  it('measures the document at the window it is already shown through', () => {
+    // The frame is a window, not a sheet: its size is the pane's, and the length it
+    // reports is the page's. Nothing is resized to measure, so a page written in
+    // `100vh` answers for the window the reader is looking at — which is the height a
+    // browser would give it too, and the reason this needs no collapsing pass.
     const element = loaded()
     element.style.height = '700px'
     const root = defined(element.contentDocument?.documentElement)
-    const heights: string[] = []
+    const asked: string[] = []
     Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1920 })
     Object.defineProperty(root, 'scrollHeight', {
       configurable: true,
       get: () => {
-        heights.push(element.style.height)
+        asked.push(element.style.height)
         return 10800
       },
     })
     expect(measureFrameContent(element)).toEqual({ width: 1920, height: 10800 })
-    // A page sized in `100vh` answers with the frame's own height, so the height it is
-    // asked at must be none at all.
-    expect(heights).toEqual(['0px'])
+    expect(asked).toEqual(['700px'])
     expect(element.style.height).toBe('700px')
   })
 
@@ -182,6 +180,21 @@ describe('asking the document what is under the pointer', () => {
       text: 'second',
       selector: '#s > p:nth-of-type(2)',
     } satisfies MarkAnchor)
+  })
+
+  it('asks about the point the reader is looking at, not the one the page starts at', () => {
+    // The frame is a window: the page scrolls inside it, so a pointer at the top of
+    // the window is over whatever the document has scrolled to, and the box that comes
+    // back is in the document's own coordinates — the ones a mark is stored in.
+    const doc = hitTesting('<html><body><p id="a">first</p><p id="b">second</p></body></html>', new Map())
+    const [first, second] = [...doc.querySelectorAll('p')]
+    stubRect(defined(first), { left: 0, top: 0, width: 600, height: 400 })
+    stubRect(defined(second), { left: 0, top: 0, width: 600, height: 400 })
+    // A parsed document has no browsing context of its own, so the scroll it would have
+    // been read from is the one thing this has to supply.
+    Object.defineProperty(doc, 'defaultView', { configurable: true, value: { scrollX: 0, scrollY: 400 } })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [second] })
+    expect(anchorInDocument(doc, 10, 10)).toMatchObject({ id: 'b', bbox: [0, 400, 600, 400] })
   })
 
   it('withholds the background that covers the whole rendered width', () => {

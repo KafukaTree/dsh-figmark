@@ -282,6 +282,14 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    as more of the figure. The exported picture still gets its white fill: that one is
    looked at by someone who has no board behind it. */
 .da-paper{background:transparent}
+/* A rendered document is a window, not a sheet: the page scrolls inside its frame, and
+   the pane around it must not scroll as well — two scrollbars for one surface is two
+   answers to the same gesture. The overlay above the frame is moved with the page by
+   the same offset, and the window is what clips it, so a mark scrolled out of sight
+   leaves with the element it was drawn on instead of floating over the panel. */
+.da-stage[data-html]{overflow:hidden}
+.da-stage[data-html] .da-paper{overflow:hidden;border-radius:4px;background:var(--dsw-alias-bg-base,#fff)}
+.da-stage[data-html] .da-figure-frame{border-radius:0;box-shadow:none}
 /* The figure is the sheet: white, rounded, lifted off the panel. This is the element
    that carries the paper look, which is why the margin can be see-through without the
    drawing losing its edge. */
@@ -299,6 +307,14 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* The rendered document takes the figure's place; the overlay above it owns every
    pointer event, which is also what keeps a link inside it from navigating. */
 .da-html{display:block;border:0;background:#fff;pointer-events:none}
+/* The name of the element under the pointer, hung at its corner. A label and not a
+   tooltip: it is a chip of the page's own vocabulary — div.relative — so the reader
+   reading it can write the sentence they were about to write. It never takes a press;
+   the press belongs to the element it names. */
+.da-name{position:absolute;z-index:2;max-width:200px;padding:1px 6px;border-radius:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;
+  background:rgba(24,24,27,.92);color:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);
+  font:11px/16px var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-tool="select"]{cursor:inherit}
 .da-overlay:not([data-tool="select"]):not([data-tool="element"]){cursor:crosshair}

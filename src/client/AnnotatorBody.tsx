@@ -18,6 +18,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type WheelEvent as ReactWheelEvent,
 } from 'react'
 import { resolveTranslate, type AnnotatorBodyProps, type TranslateVars } from './annotator-contract'
 import { parseFileAddress } from '../shared/address'
@@ -31,7 +32,7 @@ import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
-import { RENDER_WIDTH, anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
+import { anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
@@ -42,6 +43,7 @@ import {
 } from './host-actions'
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
+import { chipKey, elementName, nameChipAt } from './hover-name'
 import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
@@ -82,6 +84,15 @@ import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
 import { WeightRail } from './annotator/weight-rail'
 
 export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, SurfaceDraft, Translate, TranslateVars } from './annotator-contract'
+
+/**
+ * The margin the pane keeps around the figure, in client pixels.
+ *
+ * Read from the stylesheet's own padding rather than chosen here: the window a
+ * rendered document is shown through is measured as the pane minus this, and a window
+ * wider than the space it is drawn in would put its right edge out of sight.
+ */
+const PANE_INSET = 28
 
 
 
@@ -155,6 +166,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const hovered = useRef<MarkAnchor | undefined>(undefined)
 
   /**
+   * The element whose name is hanging beside it, or null when the chip is away.
+   *
+   * State rather than something read off `hovered`, because `hovered` is a ref: the
+   * light is written straight onto the figure's own DOM and must not re-render the
+   * panel, while the chip is drawn by React and cannot appear without a render.
+   */
+  const [chipAnchor, setChipAnchor] = useState<MarkAnchor | null>(null)
+
+  /** The key behind the chip currently drawn, so a move inside one element is free. */
+  const chipShown = useRef<string>(chipKey(undefined))
+
+  /**
    * Hand the stage to the owner as its scrollport, and keep it here too.
    *
    * Stable on purpose. The owner writes the reader's saved scroll position onto
@@ -176,33 +199,77 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * make the picture trail the hand by a frame. The CSS `overflow` already keeps
    * the offset inside the scrollable range, so an overshoot at an edge simply does
    * nothing instead of needing a clamp here.
+   *
+   * A rendered document scrolls inside its own frame rather than in the stage, so on
+   * that surface the drag is handed to the frame's window — the page moves under the
+   * hand either way, which is what the reader is reaching for.
    * @param dx - horizontal travel of the pointer, in client pixels.
    * @param dy - vertical travel of the pointer.
    */
+  /**
+   * The window a rendered document is shown in.
+   *
+   * A document scrolls inside its frame, and the frame is the only thing that knows
+   * how far it has gone: everything that needs the offset asks here. A surface that is
+   * a picture has no frame at all, and answers with no window.
+   */
+  const documentView = useCallback((): Window | null => {
+    const frame = frameRef.current
+    return frame === null ? null : frame.contentWindow
+  }, [])
+
   const panBy = useCallback((dx: number, dy: number): void => {
     const stage = stageRef.current
     /* v8 ignore next -- a pan comes from the overlay, which only exists inside the stage. */
     if (stage === null) return
     // Dragging right moves the picture right, which means scrolling left: the hand
     // pushes the paper, it does not push a scroll bar.
+    const view = documentView()
+    if (view !== null) {
+      view.scrollBy(-dx, -dy)
+      return
+    }
     stage.scrollLeft -= dx
     stage.scrollTop -= dy
-  }, [])
+  }, [documentView])
+
+  /**
+   * Scroll the document inside its window.
+   *
+   * The overlay takes every pointer event — that is what makes a click a mark — so a
+   * wheel aimed at the page would stop at the overlay and the page itself would never
+   * move. Handing the travel to the frame's own window keeps scrolling where it
+   * belongs: the document, and not the panel around it.
+   * @param event - the wheel event, in client pixels.
+   */
+  const scrollHtml = useCallback((event: ReactWheelEvent<HTMLDivElement>): void => {
+    const view = documentView()
+    if (view === null) return
+    view.scrollBy(event.deltaX, event.deltaY)
+  }, [documentView])
 
   const [fileFigure, setFileFigure] = useState<LoadedFigure | null>(null)
   const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
-  /** Height a rendered document reports, in figure pixels; 0 until the frame has laid out. */
-  const [htmlHeight, setHtmlHeight] = useState(0)
   /**
-   * Width a rendered document's frame is laid out at, in figure pixels.
+   * Width the rendered document's own layout asked for, in figure pixels; 0 until the
+   * frame has been measured.
    *
-   * A document that lays itself out for a stage of its own answers with that stage's
-   * width, and the frame takes it rather than cutting the page at the render width.
-   * Starts at the width the frame is first written at, and only grows: a document
-   * that reflows narrower afterwards keeps the room it asked for instead of the
-   * surface oscillating between two widths.
+   * Usually the pane's width, because the frame is a pane-wide window. A document laid
+   * out for a stage of its own — a slide deck is the usual case — asks for more, and the
+   * window widens to it: the alternative is a page cut off at the pane, with the right
+   * third of every slide not there to annotate. Nothing is guessed here, because a
+   * window that has not been measured has no surface to draw on yet.
    */
-  const [htmlWidth, setHtmlWidth] = useState(RENDER_WIDTH)
+  const [htmlDocWidth, setHtmlDocWidth] = useState(0)
+  /**
+   * How far the document inside its window has been scrolled, in figure pixels.
+   *
+   * A mark is recorded in the document's own coordinates, because that is the space a
+   * source reader can act on, while the reader is looking at one windowful of it. The
+   * difference is this offset: the overlay is shifted by it, so drawing and picking
+   * stay in document pixels without either of them having to know about scrolling.
+   */
+  const [htmlScroll, setHtmlScroll] = useState({ x: 0, y: 0 })
   const [figureError, setFigureError] = useState<string | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
 
@@ -222,6 +289,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const rasterSize = surface === undefined
     ? fileRasterSize
     : { width: surface.width, height: surface.height }
+  /** Whether the surface is a live document, shown through a window rather than laid
+   * out as a sheet. A document scrolls; a sheet does not, and the two gestures that
+   * depend on the difference read this. */
+  const isDocument = figure?.kind === 'html'
 
   const [loaded, setLoaded] = useState<LoadedAnnotation | null>(null)
   const [hostError, setHostError] = useState<string | null>(null)
@@ -398,6 +469,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const [panning, setPanning] = useState(false)
   const [fitWidth, setFitWidth] = useState(0)
+  /**
+   * The pane's own height, beside its width.
+   *
+   * A rendered document's window is the pane in both directions: without this the
+   * document would be given a height of its own content, which is the one thing a
+   * viewport must never be.
+   */
+  const [fitHeight, setFitHeight] = useState(0)
   const [busy, setBusy] = useState<'sending' | null>(null)
   /**
    * The news of the last few clicks, newest first.
@@ -577,13 +656,32 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const layer = useMemo(() => figureLayer(figure, rasterSize), [figure, rasterSize])
 
   /**
+   * The window a rendered document is shown through, in figure pixels; null until the
+   * pane and the document's own width are both known.
+   *
+   * A window, not a sheet. The document is one pane wide and one pane tall and scrolls
+   * inside it, which is the only way a page can lay itself out the way a browser does:
+   * `100vh` is one screenful, a sticky header sticks to the top of the window, a fixed
+   * bar stays where it was put. Sizing the frame to the whole document instead made
+   * every one of those mean something else — and a `100vh` hero became a sheet as long
+   * as the page.
+   */
+  const htmlView = useMemo(
+    () => (htmlDocWidth === 0 || fitHeight === 0
+      ? null
+      : { width: Math.max(fitWidth, htmlDocWidth), height: fitHeight }),
+    [fitHeight, fitWidth, htmlDocWidth],
+  )
+
+  /**
    * The surface's measurable size; null until its content and dimensions are both
-   * known. A rendered document is measurable as soon as its width is — the frame
-   * reports how tall its content is, and until it does the surface has no height.
+   * known. A rendered document's surface is the window it is shown through, not the
+   * document's own length: the page scrolls, so a sheet as long as the page would be a
+   * sheet whose bottom nobody could ever see.
    */
   const size = useMemo(
-    () => figureSize(figure, rasterSize, htmlHeight, htmlWidth),
-    [figure, htmlHeight, htmlWidth, rasterSize],
+    () => figureSize(figure, rasterSize, htmlView),
+    [figure, htmlView, rasterSize],
   )
   /**
    * How big everything drawn is, as a multiple of the base sizes.
@@ -600,8 +698,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * axes, is drawing something the figure does not contain. The paper grows to hold
    * it rather than the mark being clipped — and because the surface is white, a mark
    * out there lands on paper instead of on nothing.
+   *
+   * A rendered document is the exception: it is a window, so it is exactly the size it
+   * is shown at and grows for nothing. The page inside it scrolls instead; a paper that
+   * grew with a mark would be a window onto the desktop rather than onto the page.
    */
-  const paper = size === null ? null : plotBounds(size.width, size.height, marks, unit)
+  const paper = size === null
+    ? null
+    : figure?.kind === 'html'
+      ? { x: 0, y: 0, width: size.width, height: size.height }
+      : plotBounds(size.width, size.height, marks, unit)
 
   /**
    * Everything a background write needs, read at write time.
@@ -637,10 +743,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     if (loaded.kind === 'html') {
-      // The frame is sized to its content, so the height it reports is the whole
-      // document's; until it reports one the marks file has no surface to describe.
-      setHtmlHeight(0)
-      setHtmlWidth(RENDER_WIDTH)
+      // A new document is a new window: it starts unmeasured and unscrolled, so the
+      // marks file is not described against the last document's geometry.
+      setHtmlDocWidth(0)
+      setHtmlScroll({ x: 0, y: 0 })
       setFigureError(null)
     }
     // A raster has no size until the browser has decoded it, and this is a new one.
@@ -656,34 +762,54 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const htmlSource = figure?.kind === 'html' ? figure.document : null
 
   /**
-   * Put the prepared document into the frame and take the size it reports.
+   * Put the prepared document into the frame and learn the width its layout wants.
    *
-   * The frame is a same-origin sandbox with scripts off, so what it holds is
-   * markup the body may read and nothing that runs. Sizing the frame to its own
-   * content is what keeps it from scrolling internally — and that, in turn, is
-   * what makes an element's own box and a mark's figure coordinates one space.
+   * The frame is a same-origin sandbox with scripts off, so what it holds is markup
+   * the body may read and nothing that runs. It is then a *window*: the pane wide and
+   * the pane tall, with the document scrolling inside it. That is what makes the
+   * preview the page the reader will get rather than a re-composition of it — and the
+   * only reason the document's own pixels can be trusted as mark coordinates.
+   *
+   * Only the width is taken from the measurement: a document laid out for a stage of
+   * its own is wider than the pane, and the window takes that width so the page is
+   * whole. Height is the pane's, always — the page scrolls, it does not grow the window.
    */
   useEffect(() => {
     if (htmlSource === null) return
-    const root = loadFrameDocument(frameRef.current, htmlSource)
+    const frame = frameRef.current
+    const root = loadFrameDocument(frame, htmlSource)
     if (root === undefined) return
     const measure = (): void => {
-      // A document that has laid out nothing yet reports no size; keeping the last
-      // measurement leaves the surface where it was rather than collapsing it.
-      const measured = measureFrameContent(frameRef.current)
+      // A document that has laid out nothing yet reports no size; the last
+      // measurement stands rather than the window collapsing to nothing.
+      const measured = measureFrameContent(frame)
       if (measured === undefined) return
-      // A document laid out for a stage of its own is wider than the frame. Widening
-      // the frame to it is what keeps the page whole; the panel scales whatever comes
-      // out, so a stage-sized document is shown smaller rather than cut off.
-      if (measured.width > 0) setHtmlWidth(current => Math.max(current, measured.width))
-      setHtmlHeight(measured.height)
+      if (measured.width > 0) setHtmlDocWidth(current => Math.max(current, measured.width))
     }
     measure()
-    // Content that arrives later — a font, an image, a reflow — changes the height.
+    // Content that arrives later — a font, an image, a reflow — changes the layout.
     const observer = new ResizeObserver(measure)
     observer.observe(root)
     return () => { observer.disconnect() }
   }, [htmlSource])
+
+  /**
+   * Follow the document as it scrolls inside its window.
+   *
+   * The overlay is drawn over the window, so what it needs is the offset the document
+   * has travelled: the marks stay where they were put in the page, and the window moves
+   * over them. Nothing is interpolated — a scroll is read once per frame, and the
+   * figures that follow are the ones the browser is already showing.
+   */
+  useEffect(() => {
+    if (htmlSource === null) return
+    const view = documentView()
+    if (view === null) return
+    const sync = (): void => { setHtmlScroll({ x: view.scrollX, y: view.scrollY }) }
+    sync()
+    view.addEventListener('scroll', sync, { passive: true })
+    return () => { view.removeEventListener('scroll', sync) }
+  }, [documentView, htmlSource, htmlView])
 
   // --- host annotation ------------------------------------------------------
 
@@ -784,7 +910,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     const stage = stageRef.current
     if (stage === null) return
-    const measure = (): void => { setFitWidth(stage.clientWidth - 24) }
+    // The stage's own padding, so what is measured is the pane the reader sees rather
+    // than a box whose bottom edge is scrolled out of sight.
+    // A pane smaller than its own inset has no room to show anything, and a negative
+    // window is not a window: it is held at nothing, which is what makes an empty
+    // pane "not measured yet" rather than "measured at minus twenty-eight".
+    const measure = (): void => {
+      setFitWidth(Math.max(0, stage.clientWidth - PANE_INSET))
+      setFitHeight(Math.max(0, stage.clientHeight - PANE_INSET))
+    }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(stage)
@@ -829,7 +963,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       && previous.left === at.left && previous.top === at.top && previous.bottom === at.bottom
       ? previous
       : at)
-  }, [barSpot, goalOpen, listOpen, size, htmlHeight])
+  }, [barSpot, goalOpen, htmlView, listOpen, size])
 
   /**
    * Whether an upward fold would come out of the top of the panel.
@@ -906,9 +1040,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // pill is placed around its measured box: two floating surfaces that touch read as
     // one control, and the reader asked for a gutter between them.
     const paletteBox = obstacleBox(paletteRef.current, { left: panel.left, top: panel.top })
+    // A document surface is a window onto a longer page: its marks are in document
+    // pixels, while the frame's own box is the window's. Taking the scroll off puts the
+    // card beside the mark the reader can see, and lets a mark that has been scrolled
+    // out of the window be placed out of the panel by the same arithmetic as ever.
+    const shown = figure?.kind === 'html'
+      ? { ...box, x: box.x - htmlScroll.x, y: box.y - htmlScroll.y }
+      : box
     const at = placeCard(
       scaledBox(
-        box,
+        shown,
         { x: measured.left, y: measured.top, width: measured.width, height: measured.height },
         { x: panel.left, y: panel.top, width: panel.width, height: panel.height },
         size.width,
@@ -925,7 +1066,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // `marks` changes on every keystroke in the pill, which is also when the pill's own
     // height can change, so the re-measurement happens by itself. The write is
     // idempotent, so a measured height that did not move re-renders nothing.
-  }, [htmlHeight, liveMark, marks, palette, scale, selectedId, size, unit])
+  }, [figure, htmlScroll, liveMark, marks, palette, scale, selectedId, size, unit])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -1008,6 +1149,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     const stage = stageRef.current
     if (stage === null) return
+    // A document scrolls under the wheel; it does not magnify. There is a window onto
+    // the page, and a reader who wheels is looking further down the page — enlarging
+    // it instead would take the window away from the one thing it is for.
+    if (isDocument) return
     /**
      * The wheel is the magnification, whatever modifier it carries.
      *
@@ -1035,7 +1180,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // what this handler exists to replace.
     stage.addEventListener('wheel', onWheel, { passive: false })
     return () => { stage.removeEventListener('wheel', onWheel) }
-  }, [zoomAt])
+  }, [isDocument, zoomAt])
 
   // --- edits ----------------------------------------------------------------
 
@@ -1831,6 +1976,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const lightElement = useCallback((anchor: MarkAnchor | undefined): void => {
     hovered.current = anchor
     lightUp(anchor)
+    // The pointer reports the element it is on for every move it makes. Naming the
+    // same element again is not news, and a render per pixel would make the page under
+    // the hand feel like it was being dragged rather than pointed at.
+    const key = chipKey(anchor)
+    if (key === chipShown.current) return
+    chipShown.current = key
+    setChipAnchor(anchor ?? null)
   }, [lightUp])
 
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
@@ -1975,6 +2127,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     </>
   )
 
+  /**
+   * The name of the element the pointer is on, written at its own corner.
+   *
+   * Only on a rendered document: an element inside an inline SVG is named by the mark
+   * the reader already drew on it, and a picture has no elements to name at all.
+   */
+  const chip = isHtml && chipAnchor !== null
+    ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
+    : null
+
   return (
     <div className="da-root" ref={rootRef}>
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
@@ -2000,8 +2162,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         figureStyle={figureStyle}
         figure={figure}
         size={size}
-        htmlHeight={htmlHeight}
-        htmlWidth={htmlWidth}
+        // Before the window has been measured the frame is still given the pane, so
+        // the very first layout is the one the reader will be looking at.
+        htmlView={htmlView ?? { width: fitWidth, height: fitHeight }}
+        onWheel={isHtml ? scrollHtml : undefined}
         stageClass={{ hand: tool === 'select', panning }}
         onContextMenu={openMenu}
         onRasterLoad={setFileRasterSize}
@@ -2012,6 +2176,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             width={paper.width}
             height={paper.height}
             origin={[-paper.x, -paper.y]}
+            // A document surface is a window onto a longer page: the marks keep their
+            // document pixels and the overlay is moved under them by however far the
+            // page has been scrolled, which is the same shift the pointer math undoes.
+            shift={figure?.kind === 'html' ? [htmlScroll.x, htmlScroll.y] : undefined}
             // The pen is the figure's, not the paper's: a mark drawn past the edge
             // grows the paper, and a pen that grew with it drew thicker than the
             // picture the agent receives.
@@ -2039,6 +2207,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             onLiveEdit={setLiveMark}
             numbering={props.numbering}
           />
+        )}
+        chip={chip === null ? null : (
+          <span className="da-name" style={{ left: chip.left, top: chip.top }}>
+            {elementName(chip.anchor, findElement)}
+          </span>
         )}
         t={t}
       />

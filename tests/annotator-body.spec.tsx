@@ -202,11 +202,17 @@ function stubComposer(): {
 /** Mount the body and let its effects settle. */
 async function mountBody(
   props: Partial<AnnotatorBodyProps> = {},
-  options: { readonly stageWidth?: number } = {},
+  options: { readonly stageWidth?: number; readonly stageHeight?: number } = {},
 ): Promise<{ readonly host: HTMLElement; readonly root: Root; readonly scrollports: (HTMLElement | null)[] }> {
   if (options.stageWidth !== undefined) {
     const width = options.stageWidth
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+  }
+  // A window is both directions: a rendered document is shown through the pane, and the
+  // pane's height is what makes its `100vh` mean one screenful.
+  if (options.stageHeight !== undefined) {
+    const height = options.stageHeight
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
   }
   const scrollports: (HTMLElement | null)[] = []
   const host = document.createElement('div')
@@ -2801,7 +2807,11 @@ describe('a rendered document', () => {
   const resizeCallbacks: (() => void)[] = []
 
   /** Mount a body over the rendered document. */
-  async function htmlBody(answers: HostAnswers = {}, props: Partial<AnnotatorBodyProps> = {}): Promise<{
+  async function htmlBody(
+    answers: HostAnswers = {},
+    props: Partial<AnnotatorBodyProps> = {},
+    pane: { readonly width: number; readonly height: number } = { width: 800, height: 600 },
+  ): Promise<{
     readonly host: HTMLElement
     readonly root: Root
     readonly calls: Call[]
@@ -2826,7 +2836,7 @@ describe('a rendered document', () => {
       content: { kind: 'bytes', data: htmlBytes() },
       resourceAddress: HTML_ADDRESS,
       ...props,
-    })
+    }, { stageWidth: pane.width, stageHeight: pane.height })
     return { ...result, calls }
   }
 
@@ -2835,26 +2845,51 @@ describe('a rendered document', () => {
     return defined(document.querySelector('iframe.da-html')) as HTMLIFrameElement
   }
 
-  /** Report one content height for the frame, the way a layout pass would. */
-  async function reportHeight(height: number): Promise<void> {
+  /** The window a rendered document is shown through in this spec, in figure pixels. */
+  const WINDOW = { width: 800 - 28, height: 600 - 28 }
+
+  /** Report one layout pass for the frame: the length and width of its document. */
+  async function reportLayout(width: number, height: number): Promise<void> {
     const frameDocument = frame().contentDocument
     if (frameDocument === null) throw new Error('the frame has no document')
-    Object.defineProperty(frameDocument.documentElement, 'scrollHeight', { configurable: true, get: () => height })
+    const root = frameDocument.documentElement
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => width })
+    Object.defineProperty(root, 'scrollHeight', { configurable: true, get: () => height })
     await act(async () => {
       for (const callback of resizeCallbacks) callback()
     })
+  }
+
+  /** Scroll the document inside its window, the way a reader's wheel would. */
+  async function scrollDocument(by: { readonly x: number; readonly y: number }): Promise<void> {
+    const view = frame().contentWindow
+    if (view === null) throw new Error('the frame has no window')
+    Object.defineProperty(view, 'scrollX', { configurable: true, value: by.x })
+    Object.defineProperty(view, 'scrollY', { configurable: true, value: by.y })
+    await act(async () => { view.dispatchEvent(new Event('scroll')) })
   }
 
   /** Draw one arrow on the document, in the frame's own pixels. */
   async function drawOnDocument(host: HTMLElement): Promise<void> {
     await click(button(host, zh.toolArrow))
     const overlay = defined(host.querySelector('svg.da-overlay')) as SVGSVGElement
-    stubRect(overlay, { left: 0, top: 0, width: 1024, height: 1843 })
+    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
     for (const [type, x, y] of [['pointerdown', 10, 10], ['pointermove', 120, 80], ['pointerup', 120, 80]] as const) {
       await act(async () => {
         overlay.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y }))
       })
     }
+  }
+
+  /** Point the picker at whatever the frame's own hit test says is under it. */
+  async function moveOver(hits: readonly Element[]): Promise<void> {
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    const frameDocument = defined(frame().contentDocument)
+    Object.defineProperty(frameDocument, 'elementsFromPoint', { configurable: true, value: () => hits })
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 30, clientY: 40 }))
+    })
   }
 
   beforeEach(() => {
@@ -2876,12 +2911,15 @@ describe('a rendered document', () => {
     const frameDocument = defined(element.contentDocument)
     expect(frameDocument.querySelector('#lead')?.textContent).toBe('第一段')
     expect(frameDocument.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
-    // The frame is the surface: one fixed width, and whatever height it reports.
-    expect(element.style.width).toBe('1024px')
-    // Nothing has laid out yet, so there is no surface to describe.
-    expect(element.style.height).toBe('0px')
-    await reportHeight(1843)
-    expect(element.style.height).toBe('1843px')
+    // The frame is the window: the pane wide and the pane tall from the first frame,
+    // so the document lays out at the width the reader is actually looking at.
+    expect(element.style.width).toBe(`${WINDOW.width}px`)
+    expect(element.style.height).toBe(`${WINDOW.height}px`)
+    // A page longer than its window scrolls inside it; the window does not stretch to
+    // the page, or the reader would have to scroll the panel to read a scrollbar.
+    await reportLayout(WINDOW.width, 1843)
+    expect(element.style.width).toBe(`${WINDOW.width}px`)
+    expect(element.style.height).toBe(`${WINDOW.height}px`)
     expect(element.getAttribute('title')).toBe(zh.htmlFrame)
   })
 
@@ -2895,9 +2933,11 @@ describe('a rendered document', () => {
     await act(async () => {
       for (const callback of resizeCallbacks) callback()
     })
-    // Shown at the width it was written for, rather than cut off at the render width.
+    // Shown at the width it was written for, rather than cut off at the pane's.
     expect(element.style.width).toBe('1920px')
-    expect(element.style.height).toBe('1080px')
+    // The height is still the window's: a deck written 1080 tall is read by scrolling
+    // it, which is what a browser would do with it too.
+    expect(element.style.height).toBe(`${WINDOW.height}px`)
     // A later pass that reports a narrower stage keeps the room it already asked for.
     Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1600 })
     await act(async () => {
@@ -2923,7 +2963,7 @@ describe('a rendered document', () => {
     const { sessions } = stubSessions()
     const result = await htmlBody({}, { sessions })
     mounted = result
-    await reportHeight(1843)
+    await reportLayout(WINDOW.width, 1843)
     const frameDocument = defined(frame().contentDocument)
     stubRect(defined(frameDocument.querySelector('#s')), { left: 0, top: 0, width: 1024, height: 800 })
     stubRect(defined(frameDocument.querySelector('#lead')), { left: 0, top: 0, width: 1024, height: 200 })
@@ -2941,7 +2981,13 @@ describe('a rendered document', () => {
     // the whole artifact and the locator inside it is what a source reader uses.
     expect(body.reviewImage).toBeUndefined()
     expect(body.annotatedPdf).toBeUndefined()
-    expect(body.annotation?.figure).toMatchObject({ mediaType: 'text/html', width: 1024, height: 1843 })
+    // The figure records the window the marks were drawn in: those coordinates only
+    // mean anything at the size the reader saw, and that is what the window is.
+    expect(body.annotation?.figure).toMatchObject({
+      mediaType: 'text/html',
+      width: WINDOW.width,
+      height: WINDOW.height,
+    })
     expect(body.annotation?.marks[0]?.anchor).toEqual({
       tag: 'p',
       id: 'lead',
@@ -2957,7 +3003,7 @@ describe('a rendered document', () => {
   it('sends the marks with no picture attached and the document wording in the message', async () => {
     const { sessions, prompts } = stubSessions()
     mounted = await htmlBody({ annotation: savedHtml }, { sessions })
-    await reportHeight(1843)
+    await reportLayout(WINDOW.width, 1843)
     await click(button(document.body, zh.sendToAgent))
     expect(prompts).toHaveLength(1)
     const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
@@ -2965,7 +3011,7 @@ describe('a rendered document', () => {
     expect(parts).toHaveLength(1)
     expect(parts[0]?.type).toBe('text')
     expect(parts[0]?.text).toContain('【HTML 标注】')
-    expect(parts[0]?.text).toContain('渲染面 1024×1843')
+    expect(parts[0]?.text).toContain(`渲染面 ${WINDOW.width}×${WINDOW.height}`)
     // The hash named a file state no reader of the message can act on; it was in
     // every header and is gone.
     expect(parts[0]?.text).not.toContain('sha256')
@@ -2973,23 +3019,143 @@ describe('a rendered document', () => {
     expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
   })
 
-  it('refuses to save a surface the frame never gave a height to', async () => {
-    const result = await htmlBody()
+  it('refuses to save a surface the pane never gave a height to', async () => {
+    // The document can lay out all the length it likes; without a window there is no
+    // surface, because there is nothing the reader could be looking through.
+    const result = await htmlBody({}, {}, { width: 800, height: 0 })
     mounted = result
     expect(frame().style.height).toBe('0px')
-    await drawArrow(document.body)
+    await reportLayout(WINDOW.width, 1843)
+    expect(frame().style.height).toBe('0px')
     await click(button(document.body, zh.sendToAgent))
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
   })
 
-  it('keeps the last height when the frame reports none later', async () => {
+  it('keeps the last width when the frame reports none later', async () => {
     mounted = await htmlBody()
-    await reportHeight(1843)
-    expect(frame().style.height).toBe('1843px')
-    // A frame that has laid out nothing reports no height; the surface must not
+    await reportLayout(1920, 1080)
+    expect(frame().style.width).toBe('1920px')
+    // A pass that reports nothing is not a measurement of zero: the surface must not
     // collapse under a reader who is drawing on it.
-    await reportHeight(0)
-    expect(frame().style.height).toBe('1843px')
+    await reportLayout(0, 0)
+    expect(frame().style.width).toBe('1920px')
+    expect(frame().style.height).toBe(`${WINDOW.height}px`)
+  })
+
+  it('scrolls the document, not the panel around it, when the wheel turns', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stage.scrollTop = 0
+    const calls: (readonly [number, number])[] = []
+    const view = defined(frame().contentWindow)
+    Object.defineProperty(view, 'scrollBy', {
+      configurable: true,
+      value: (x: number, y: number) => { calls.push([x, y]) },
+    })
+    await act(async () => {
+      stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaX: 0, deltaY: 120 }))
+    })
+    // The page is what moves. The pane stays put, or one gesture would have two
+    // answers and the window would drift out of the panel.
+    expect(calls).toEqual([[0, 120]])
+    expect(stage.scrollTop).toBe(0)
+  })
+
+  it('drags the page under the marks, so a mark stays on the element it was drawn on', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    await scrollDocument({ x: 0, y: 300 })
+    // The overlay holds document coordinates, so it moves up with the document. A
+    // mark at y=400 is then over the element at y=400 and not 300 pixels above it.
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    expect(overlay.style.transform).toBe('translate(0px, -300px)')
+  })
+
+  it('drags the page rather than the pane when the empty canvas is pushed', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const calls: (readonly [number, number])[] = []
+    const view = defined(frame().contentWindow)
+    Object.defineProperty(view, 'scrollBy', {
+      configurable: true,
+      value: (x: number, y: number) => { calls.push([x, y]) },
+    })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stage.scrollTop = 0
+    // Pushing the page right and down scrolls it left and up, the same way the pane
+    // is scrolled for a picture — one gesture, whichever surface is underneath.
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    for (const [type, x, y] of [
+      ['pointerdown', 100, 100], ['pointermove', 140, 130], ['pointerup', 140, 130],
+    ] as const) {
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y }))
+      })
+    }
+    expect(calls).toEqual([[-40, -30]])
+    expect(stage.scrollTop).toBe(0)
+  })
+
+  it('names the element under the pointer in the words of the page itself', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const card = frameDocument.createElement('div')
+    card.className = 'relative'
+    defined(frameDocument.querySelector('#s')).appendChild(card)
+    await click(button(document.body, zh.toolElement))
+    await moveOver([card])
+    const chip = defined(document.querySelector('.da-name')) as HTMLElement
+    // The name is the page's, not the panel's: it is the class its author wrote, and
+    // the class the light adds is the panel's own and is not part of the answer.
+    expect(chip.textContent).toBe('div.relative')
+    expect(card.classList.contains('da-spot')).toBe(true)
+    // Placed in the document's own pixels, inside the paper, so the window clips the
+    // name exactly where it clips the page.
+    expect(chip.closest('.da-paper')).not.toBeNull()
+    expect(chip.style.left).toBe('2px')
+    expect(chip.style.top).toBe('4px')
+    // An element with an id is named by the id, which is the name the page itself uses.
+    await moveOver([defined(frameDocument.querySelector('#lead'))])
+    expect(chip.textContent).toBe('p#lead')
+    // The name travels with the page: the box is in document pixels, and the window
+    // has moved 300px down the document.
+    await moveOver([card])
+    await scrollDocument({ x: 0, y: 300 })
+    expect(chip.style.top).toBe('-296px')
+    // A pointer that names nothing says nothing, rather than leaving an old name up.
+    await moveOver([])
+    expect(document.querySelector('.da-name')).toBeNull()
+  })
+
+  it('draws on a frame that has no window yet, and scrolls nothing', async () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow')
+    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', { configurable: true, value: null })
+    try {
+      mounted = await htmlBody()
+      await reportLayout(WINDOW.width, 1843)
+      const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+      stage.scrollTop = 0
+      // A frame that has not been given a window has nothing to scroll, and saying so
+      // is the whole answer: the surface is still there to draw on.
+      await act(async () => {
+        stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaX: 0, deltaY: 120 }))
+      })
+      expect(stage.scrollTop).toBe(0)
+      expect(document.querySelector('svg.da-overlay')).not.toBeNull()
+    } finally {
+      if (original !== undefined) Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', original)
+    }
+  })
+
+  it('leaves a picture where it is, since nothing scrolls under its marks', async () => {
+    mounted = await svgBody()
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    // No shift means no transform at all, rather than a translate of zero: the paper
+    // of a picture never moves.
+    expect(overlay.style.transform).toBe('')
   })
 
   it('lights an element mark inside the frame, with a rule the document can see', async () => {
@@ -3005,7 +3171,7 @@ describe('a rendered document', () => {
     }
     const result = await htmlBody({ annotation: elementMarked })
     mounted = result
-    await reportHeight(1843)
+    await reportLayout(WINDOW.width, 1843)
     const frameDocument = defined(frame().contentDocument)
     expect(defined(frameDocument.querySelector('#lead')).classList.contains('da-spot')).toBe(true)
     // One rule, written once, in the document the elements are in.
@@ -3022,9 +3188,9 @@ describe('a rendered document', () => {
       mounted = result
       expect(frame()).not.toBeNull()
       expect(document.body.textContent).not.toContain(zh.loading)
-        await drawArrow(document.body)
-      await openList(document.body)
-      expect(document.body.textContent).toContain(zh.emptyDetail)
+      // With no document there is nobody to ask for a width, so the surface stays
+      // unmeasured and no overlay is laid over a page that is not there.
+      expect(document.querySelector('svg.da-overlay')).toBeNull()
     } finally {
       if (original !== undefined) Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', original)
     }
@@ -3721,6 +3887,9 @@ describe('the light the picker shines', () => {
     // And nothing this plugin draws wears it: the overlay is the panel talking, not the
     // figure, so lighting anything in it would be a second language again.
     expect(overlay.querySelectorAll('.da-spot')).toHaveLength(0)
+    // An element in a figure is named by the mark drawn on it; there is no CSS path to
+    // read a name from, and a chip would be the panel inventing one.
+    expect(document.querySelector('.da-name')).toBeNull()
   })
 
   it('keeps an element mark lit on the element it names', async () => {

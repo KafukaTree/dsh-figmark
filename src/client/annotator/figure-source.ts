@@ -13,7 +13,7 @@
  */
 import { bytesToDataUrl, type FigureLayer } from '../export'
 import { figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '../figure-dom'
-import { RENDER_WIDTH, buildRenderedDocument } from '../html-dom'
+import { buildRenderedDocument } from '../html-dom'
 
 /**
  * The surface once its content is readable.
@@ -42,8 +42,6 @@ export type LoadedFigure =
   }
   | {
     readonly kind: 'html'
-    /** Width the document is rendered at, in figure pixels; marks are measured in it. */
-    readonly width: number
     /** Complete document for the frame, drawing policy included. */
     readonly document: string
   }
@@ -92,7 +90,6 @@ export function decodeFigure(data: Uint8Array<ArrayBuffer>, mediaType: string): 
     return {
       figure: {
         kind: 'html',
-        width: RENDER_WIDTH,
         document: buildRenderedDocument(new TextDecoder().decode(data)),
       },
     }
@@ -105,24 +102,25 @@ export function decodeFigure(data: Uint8Array<ArrayBuffer>, mediaType: string): 
  * The surface's measurable size, or null until its content and dimensions are both
  * known.
  *
- * A rendered document is measurable as soon as its width is — the frame reports how
- * tall its content is, and until it does the surface has no height. Its width is the
- * frame's, which is the document's own when the document asked for a wider stage.
+ * A rendered document is measurable as soon as its window is: the surface is the pane
+ * the document is shown through, not the document's own length — a page scrolls inside
+ * its window, so a sheet as long as the page would be a sheet nobody could see the
+ * bottom of. The document's own height is what the marks inside it are measured
+ * against, and the frame keeps that for itself.
  * @param figure - the decoded figure, or null before there is one.
  * @param rasterSize - the size the browser decoded a raster at, or null until it has.
- * @param htmlHeight - the height a rendered document's frame reported.
- * @param htmlWidth - the width a rendered document's frame was laid out at.
+ * @param htmlView - the window a rendered document is shown through, or null until the
+ *   pane has been measured.
  * @returns the surface's size, or null.
  */
 export function figureSize(
   figure: LoadedFigure | null,
   rasterSize: { readonly width: number; readonly height: number } | null,
-  htmlHeight: number,
-  htmlWidth: number = RENDER_WIDTH,
+  htmlView: { readonly width: number; readonly height: number } | null,
 ): { readonly width: number; readonly height: number } | null {
   if (figure === null) return null
   if (figure.kind === 'svg') return { width: figure.width, height: figure.height }
-  if (figure.kind === 'html') return { width: htmlWidth, height: htmlHeight }
+  if (figure.kind === 'html') return htmlView
   return rasterSize
 }
 

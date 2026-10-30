@@ -8,31 +8,17 @@
  * a mark on a document has to name the element it points at, and the source
  * reader can only act on a locator that resolves in the file.
  *
- * The frame is rendered at {@link RENDER_WIDTH} — or at the document's own width when
- * it declares a wider stage — and sized to its own content, so
- * it never scrolls internally and its elements report their own layout pixels —
- * which are exactly the figure pixels marks are recorded in.
+ * The frame is a window onto the document: one pane wide and one pane tall, with the
+ * document scrolling inside it, so the page lays itself out the way it does in a
+ * browser — its own media queries, its own `100vh`, its own sticky header. What it
+ * reports is therefore what the reader sees, and the pixels it reports are the ones a
+ * mark is recorded in.
  * @module dsh-figmark/client/html-dom
  */
 import type { MarkAnchor } from '../shared/annotation'
 import { anchorTextOf } from './anchor-text'
 import { depthBelow, selectorFor } from './dom-path'
 import { isPaper, pickStack } from './pick'
-
-/**
- * Width every document is rendered at, in figure pixels.
- *
- * Fixed rather than the pane's width: a document reflows, so marks measured at
- * one width would mean something else at another. Rendering at one width and
- * scaling the result to the pane gives marks the same standing a PDF page has —
- * the surface has a size of its own, and the pane only changes how it is shown.
- *
- * It is the width a document is *first* laid out at. A document built around a stage
- * of its own — a slide deck is the usual case — answers with that stage's width, and
- * the frame takes it: the alternative is a page cut off at 1024, with the right third
- * of every slide simply not there to annotate.
- */
-export const RENDER_WIDTH = 1024
 
 /**
  * Policy every rendered document carries.
@@ -144,12 +130,17 @@ export interface FrameContentSize {
 /**
  * The size the document inside one frame lays out at.
  *
- * Measured with the frame collapsed to no height at all. A document that sizes a page
- * in `100vh` answers "one screenful per page" once the frame is a screenful tall, and
- * that answer sizes the frame again — a ten-page deck ran a review surface away to tens
- * of millions of pixels that way. At zero height the answer is the content's own, and
- * content does not depend on the frame it is laid out in. Nothing paints between the
- * two writes, so the frame is never seen collapsed.
+ * Read from the frame as it stands, because the frame *is* the viewport the document
+ * believes it is on: the frame is one window tall and the document scrolls inside it,
+ * the way a page scrolls in a browser. Nothing is written here, so what is measured is
+ * what is shown — which is the whole point on a document that sizes itself against its
+ * viewport: `100vh` means one windowful, and a sticky header sticks to the top of the
+ * window rather than to the top of a sheet ten screens tall.
+ *
+ * (Collapsing the frame to measure, which is what this used to do, answered a question
+ * nothing wanted any more: it measured a layout the reader never sees.)
+ *
+ * A document that has laid out nothing yet reports no height, which is not a size.
  * @param frame - the frame holding the document, if there is one.
  * @returns the content's size, or undefined while it has laid out nothing yet.
  */
@@ -158,12 +149,25 @@ export function measureFrameContent(frame: HTMLIFrameElement | null): FrameConte
   const frameDocument = frame.contentDocument
   if (frameDocument === null) return undefined
   const root = frameDocument.documentElement
-  const shown = frame.style.height
-  frame.style.height = '0px'
   const width = root.scrollWidth
   const height = root.scrollHeight
-  frame.style.height = shown
   return height === 0 ? undefined : { width, height }
+}
+
+/**
+ * How far the document has been scrolled inside its frame.
+ *
+ * A document in a window scrolls: everything it reports through
+ * `getBoundingClientRect` is where the element is *in the window*, while a mark is
+ * recorded where the element is *in the document* — the unit a source reader can act
+ * on. The difference is this offset, and it is zero for a document that cannot be
+ * scrolled (and for one parsed outside a window, which is how the tests see it).
+ * @param document - the document to read.
+ * @returns the document's scroll offset in its own pixels.
+ */
+function scrollOf(document: Document): { readonly x: number; readonly y: number } {
+  const view = document.defaultView
+  return { x: view?.scrollX ?? 0, y: view?.scrollY ?? 0 }
 }
 
 /** Whether an element is an anonymous inline wrapper: it names no anchor of its own. */
@@ -188,17 +192,27 @@ function isAnonymousWrapper(element: Element): boolean {
  * only used when it is the last thing there is: text a document leaves directly in the
  * body has nothing else to name.
  *
+ * The point arrives in figure pixels — the document's own coordinates, the same space
+ * a mark is recorded in — while the hit test asks in window pixels, so the document's
+ * scroll offset is taken off here and put back on the box this returns. A document
+ * that has been scrolled to is then named for the element the reader is looking at,
+ * and not for whatever sits that far up the page.
+ *
  * @param document - the frame's document, or nothing when the frame is gone.
  * @param x - point x in figure pixels.
  * @param y - point y in figure pixels.
  * @returns the anchor, or undefined when the point names no element.
  */
 export function anchorInDocument(document: Document | null | undefined, x: number, y: number): MarkAnchor | undefined {
-  const body = document?.body
-  if (body === null || body === undefined) return undefined
+  if (document === null || document === undefined) return undefined
+  const body = document.body
+  if (body === null) return undefined
+  const scroll = scrollOf(document)
+  const hitX = x - scroll.x
+  const hitY = y - scroll.y
   const frame = body.getBoundingClientRect()
-  const stack = pickStack(document, x, y)
-  if (stack === null) return measureInDocument(body, x, y)
+  const stack = pickStack(document, hitX, hitY)
+  if (stack === null) return measureInDocument(body, hitX, hitY)
   let wrapper: Element | undefined
   for (const element of stack) {
     if (!body.contains(element) || element === body) continue
@@ -269,6 +283,10 @@ function measureInDocument(body: Element, x: number, y: number): MarkAnchor | un
  */
 function describeInDocument(described: Element, body: Element): MarkAnchor {
   const rect = described.getBoundingClientRect()
+  // The box comes back in window pixels; a mark records document pixels, which differ
+  // by however far the page has been scrolled. A document parsed outside a window
+  // reports no view and no offset, and its boxes are already document pixels.
+  const scroll = scrollOf(described.ownerDocument)
   // `Element.textContent` is `string | null` in the DOM types, but only a Document or
   // a Doctype can report null; an element always reports its text.
   // Kept apart, so two labels inside one element stay two labels: the same rule the
@@ -276,7 +294,7 @@ function describeInDocument(described: Element, body: Element): MarkAnchor {
   const text = anchorTextOf(described)
   return {
     tag: described.tagName.toLowerCase(),
-    bbox: [rect.left, rect.top, rect.width, rect.height],
+    bbox: [rect.left + scroll.x, rect.top + scroll.y, rect.width, rect.height],
     ...(described.id === '' ? {} : { id: described.id }),
     ...(text === '' ? {} : { text }),
     selector: selectorFor(described, body),

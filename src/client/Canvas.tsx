@@ -55,6 +55,18 @@ export function Canvas(props: CanvasProps): ReactNode {
   const unit = figureUnit(drawnWidth, drawnHeight)
   const gesture = useCanvasGesture(props, { width, height, originX, originY })
   const { handlers } = gesture
+  /**
+   * Where the overlay sits on the paper.
+   *
+   * The overlay is the window onto a scrolled document: it is moved back by the
+   * scroll offset, so the marks drawn in it — which are in the document's own
+   * coordinates — land on the part of the page that is showing, and the pointer math
+   * that reads this box gets document coordinates straight out.
+   */
+  const [shiftX, shiftY] = props.shift ?? [0, 0]
+  const shift = props.shift === undefined
+    ? undefined
+    : { transform: `translate(${-shiftX}px, ${-shiftY}px)` }
 
   return (
     <svg
@@ -67,6 +79,7 @@ export function Canvas(props: CanvasProps): ReactNode {
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}
+      style={shift}
       data-tool={tool}
       onPointerDownCapture={handlers.onPointerDownCapture}
       onPointerDown={handlers.onPointerDown}

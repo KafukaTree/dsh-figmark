@@ -82,6 +82,13 @@ describe('choosing where the card goes', () => {
     expect(at.top).toBe(POPOVER_MARGIN)
   })
 
+  it('hangs the card lower when the mark is near the bottom and neither side fits', () => {
+    // Both sides are short here, and the card is taller than either: the side with the
+    // larger gap wins, so the card hangs from the mark rather than jumping the panel.
+    const at = placeCard(box(100, 40, 40, 20), 600, 120)
+    expect(at.top).toBe(40 + 20 + POPOVER_GAP)
+  })
+
   it('keeps the card off the right edge, so its whole width is inside', () => {
     const at = placeCard(box(560, 10, 30, 9), 600, 600)
     expect(at.left).toBe(600 - DETAIL_WIDTH - POPOVER_MARGIN)

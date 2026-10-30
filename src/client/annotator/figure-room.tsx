@@ -16,7 +16,9 @@
  * this module from learning any of it.
  * @module dsh-figmark/client/annotator/figure-room
  */
-import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from 'react'
+import type {
+  CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject, WheelEvent as ReactWheelEvent,
+} from 'react'
 import type { Translate } from '../translate'
 import type { LoadedFigure } from './figure-source'
 
@@ -42,10 +44,21 @@ export interface FigureRoomProps {
   readonly figure: LoadedFigure | null
   /** The surface's measurable size, or null before it is known. */
   readonly size: { readonly width: number; readonly height: number } | null
-  /** The height a rendered document's frame reported. */
-  readonly htmlHeight: number
-  /** The width a rendered document's frame is laid out at. */
-  readonly htmlWidth: number
+  /**
+   * The window a rendered document is shown through, in figure pixels.
+   *
+   * A frame that has not been measured yet still gets the pane's own size, so the
+   * document's first layout is the pane's and not a placeholder's.
+   */
+  readonly htmlView: { readonly width: number; readonly height: number }
+  /**
+   * Pointer travel that the page, rather than the panel, should take.
+   *
+   * The overlay takes every pointer event — that is what makes a click a mark — so a
+   * wheel over a rendered document has to be handed to the document. Nothing is
+   * forwarded on a figure: a picture does not scroll inside itself.
+   */
+  readonly onWheel: ((event: ReactWheelEvent<HTMLDivElement>) => void) | undefined
   /** The mark surface's own draggable area. */
   readonly stageClass: StageCursor
   /** Right-click on the figure asks for its menu. */
@@ -54,6 +67,13 @@ export interface FigureRoomProps {
   readonly onRasterLoad: (size: { readonly width: number; readonly height: number }) => void
   /** The overlay drawn over the paper: the canvas, when there is a paper to draw on. */
   readonly overlay: ReactNode
+  /**
+   * The name of the element the pointer is on, drawn beside it.
+   *
+   * Passed in rather than built here for the same reason the overlay is: it is about
+   * marks and tools, which is the body's business.
+   */
+  readonly chip?: ReactNode
   /** The translator seat. */
   readonly t: Translate
 }
@@ -78,6 +98,10 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
        the one tool whose drag has no other job; `data-panning` is the hand closed. */
     <div className="da-stage" ref={props.stageRef}
       onContextMenu={props.onContextMenu}
+      onWheel={props.onWheel}
+      /* A rendered document is a window: the page scrolls inside it, so the pane
+         around it must not scroll as well and give the reader two scrollbars. */
+      data-html={figure?.kind === 'html' ? 'true' : undefined}
       data-hand={props.stageClass.hand ? 'true' : undefined}
       data-panning={props.stageClass.panning ? 'true' : undefined}>
       <div className="da-surface" ref={props.surfaceRef} style={props.surfaceStyle}>
@@ -101,19 +125,25 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
               // Same origin, scripts off: the body may read the frame's markup and
               // nothing inside it can run or reach anywhere. The overlay above
               // takes every pointer event, so the document is never navigated.
+              //
+              // The frame is a browser window, not a sheet: the pane's width and the
+              // pane's height, with the document scrolling inside it. That is what
+              // lets a page lay itself out the way its author wrote it — `100vh` is a
+              // screenful, a sticky header sticks — and the frame reports its own
+              // layout pixels, which are the pixels a mark is recorded in.
               <iframe
                 ref={props.frameRef}
                 className="da-html"
                 title={t('htmlFrame')}
                 sandbox="allow-same-origin"
-                // The size the frame reported for its own content: until it reports
-                // one, the surface is not there to draw on. The width is the frame's,
-                // which is the document's own when it asked for a wider stage.
-                style={{ width: props.htmlWidth, height: props.htmlHeight }}
+                style={{ width: props.htmlView.width, height: props.htmlView.height }}
               />
             ) : null}
           </div>
           {props.overlay}
+          {/* Inside the paper, so the name is placed in the document's own pixels and
+              the window clips it exactly where it clips the page. */}
+          {props.chip}
         </div>
       </div>
     </div>

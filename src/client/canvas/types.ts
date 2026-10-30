@@ -98,6 +98,17 @@ export interface CanvasProps {
    * paper starts at the figure's own corner, which is the ordinary case.
    */
   readonly origin?: FigurePoint
+  /**
+   * How far the page under this overlay has been scrolled, in figure pixels.
+   *
+   * A rendered document is shown through a window onto a longer page: the marks keep
+   * the document's own coordinates, and this overlay is moved under them by the scroll
+   * offset. Moving the overlay rather than the marks is what keeps a stroke on the
+   * element it was drawn on — and it keeps every coordinate in this component in the
+   * one space the source reader can act on. Absent means nothing scrolls, which is the
+   * case for a figure.
+   */
+  readonly shift?: FigurePoint | undefined
   /** Committed marks, in draw order. */
   readonly marks: readonly AnnotationMark[]
   /** Active tool. */
