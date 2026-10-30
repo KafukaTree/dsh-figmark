@@ -13,7 +13,7 @@ import {
   pinFontSizeOf, pinNumberCentre, pinPathData, strokeWidthOf,
 } from './render'
 import { figureUnit } from './scale'
-import { lightMarkup, type NamedSpot } from './spotlight'
+import { lightMarkup, type NamedSpot, type WashBox } from './spotlight'
 import { plotBounds } from './plot'
 
 /** The figure layer placed under the marks. */
@@ -142,12 +142,14 @@ export function bytesToDataUrl(bytes: Uint8Array, mediaType: string): string {
  * @param layer - the figure to place underneath.
  * @param marks - marks in draw order.
  * @param numbering - each mark's number, when these marks are a slice of a longer list.
+ * @param boxes - each element mark's box, measured from the laid-out figure.
  * @returns complete SVG markup.
  */
 export function composeReviewSvg(
   layer: FigureLayer,
   marks: readonly AnnotationMark[],
   numbering?: ReadonlyMap<string, number>,
+  boxes?: ReadonlyMap<string, WashBox>,
 ): string {
   // The document's numbers win: this picture may be a page of a longer document,
   // whose pins have to carry the document's count rather than this slice's.
@@ -170,9 +172,14 @@ export function composeReviewSvg(
   const edge = grown ? figureEdge(layer.width, layer.height, unit) : ''
   // Every element mark names one element, and the picture has to say which of them the
   // review is about the same way the panel did: by lighting them.
-  const lit: NamedSpot[] = marks.flatMap(mark => (mark.kind === 'element' && mark.anchor?.selector !== undefined
-    ? [{ selector: mark.anchor.selector, colour: mark.color }]
-    : []))
+  const lit: NamedSpot[] = marks.flatMap((mark): NamedSpot[] => {
+    const selector = mark.kind === 'element' ? mark.anchor?.selector : undefined
+    if (selector === undefined) return []
+    const box = boxes?.get(selector)
+    // A box only exists when the figure was measured; without one the element is
+    // still lit, it just wears the glow without the base under it.
+    return [box === undefined ? { selector, colour: mark.color } : { selector, colour: mark.color, box }]
+  })
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
     + ` width="${paper.width}" height="${paper.height}" viewBox="0 0 ${paper.width} ${paper.height}">`
     + `<rect x="0" y="0" width="${paper.width}" height="${paper.height}" fill="#ffffff"/>`

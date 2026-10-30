@@ -2507,6 +2507,24 @@ describe('saving', () => {
     expect(document.querySelector('.da-dock-count')).toBeNull()
   })
 
+  it('sends an element mark whose element is gone, with no base under it', async () => {
+    // A mark can outlive the element it names: the figure gets rewritten under it. The
+    // note is the reader's and it still goes; there is simply no area left to tint.
+    const { sessions } = stubSessions()
+    const gone: AnnotationDocument = {
+      ...saved,
+      marks: [{
+        id: 'e1', kind: 'element', color: '#e03131', points: [[10, 10], [60, 40]], detail: '这块没了',
+        anchor: { tag: 'g', id: 'gone', bbox: [10, 10, 50, 30], selector: '#not-in-this-figure' },
+      }],
+    }
+    const result = await svgBody({ annotation: gone }, { sessions })
+    mounted = result
+    await click(button(document.body, zh.sendToAgent))
+    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
+    expect(document.body.textContent).toContain(zh.sent)
+  })
+
   it('fills the annotation into the session that owns the figure', async () => {
     const { sessions, prompts } = stubSessions()
     const result = await svgBody({ annotation: saved }, { sessions })
@@ -3686,6 +3704,43 @@ describe('the light the picker shines', () => {
     // Nothing this plugin draws carries the light: the figure's own shapes are what the
     // mark is about, and the overlay is the panel talking.
     expect(defined(document.querySelector('svg.da-overlay')).querySelectorAll('.da-spot')).toHaveLength(0)
+  })
+
+  it('tints an element it can measure, and measures it for the picture it sends', async () => {
+    // An element that IS an area — a plot's face, a band, a panel — has no edges for a
+    // glow to follow, and lighting one changed 754 of 106,000 pixels of the figure this
+    // was reported against. The base is what makes the light arrive at all. Its box is
+    // measured here, where the figure is laid out: the copy the export builds from
+    // markup has no layout to measure.
+    const marked: AnnotationDocument = {
+      ...saved,
+      marks: [{
+        id: 'e1', kind: 'element', color: '#e03131', points: [[10, 20], [40, 40]],
+        detail: '红色的底', anchor: { tag: 'g', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
+      }],
+    }
+    const original = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'getBBox')
+    Object.defineProperty(SVGElement.prototype, 'getBBox', {
+      configurable: true,
+      value: () => ({ x: 4, y: 6, width: 80, height: 90 }),
+    })
+    const { sessions } = stubSessions()
+    try {
+      const result = await svgBody({ annotation: marked }, { sessions })
+      mounted = result
+      const text = defined(document.querySelector('svg.da-figure text'))
+      const wash = defined(document.querySelector('svg.da-figure .da-spot-wash'))
+      expect(wash.getAttribute('x')).toBe('4')
+      expect(wash.getAttribute('height')).toBe('90')
+      // In the element's own parent, in the element's own units: a `<text>` holds no
+      // rendered children, so its base is a sibling rather than a child.
+      expect(wash.parentElement).toBe(text.parentElement)
+      await click(button(document.body, zh.sendToAgent))
+      expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
+    } finally {
+      if (original === undefined) delete (SVGElement.prototype as { getBBox?: unknown }).getBBox
+      else Object.defineProperty(SVGElement.prototype, 'getBBox', original)
+    }
   })
 
   it('lights the selected element mark harder than the others', async () => {

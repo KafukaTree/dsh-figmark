@@ -259,6 +259,34 @@ describe('review image', () => {
     expect(svg).not.toContain('stroke="#1971c2"')
   })
 
+  it('draws an element mark\'s base from the box it was handed', () => {
+    // The composer works on markup, which has no layout: a box measured from the
+    // laid-out figure is the only way the tint can reach the picture.
+    const layer = {
+      kind: 'svg' as const,
+      markup: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">'
+        + '<g id="axes_1"><path d="M 0 0 L 100 100"/></g></svg>',
+      viewBox: '0 0 100 100',
+      width: 100,
+      height: 100,
+    }
+    const mark: AnnotationMark = {
+      id: 'e',
+      kind: 'element',
+      color: '#e03131',
+      points: [[10, 10], [60, 60]],
+      anchor: { tag: 'g', selector: '#axes_1', bbox: [10, 10, 60, 60] },
+    }
+    const measured = composeReviewSvg(layer, [mark], undefined, new Map([['#axes_1', { x: 4, y: 6, width: 80, height: 90 }]]))
+    expect(measured).toContain('class="da-spot-wash"')
+    expect(measured).toContain('width="80"')
+    // An unmeasured element is still lit — the glow says which one it is — it just has
+    // no base under it.
+    const unmeasured = composeReviewSvg(layer, [mark])
+    expect(unmeasured).toContain('class="da-spot"')
+    expect(unmeasured).not.toContain('class="da-spot-wash"')
+  })
+
   it('lights nothing when the figure has no element mark on it', () => {
     const svg = composeReviewSvg(
       { kind: 'svg', markup: '<svg width="10" height="10"><rect width="10" height="10"/></svg>', viewBox: '0 0 10 10', width: 10, height: 10 },
