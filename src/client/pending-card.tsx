@@ -1,11 +1,14 @@
 /**
- * The parked annotation, drawn above the composer as an attachment card.
+ * The parked annotation, drawn inside the composer as an attachment card.
  *
  * The composer is a lexical editor owned by the conversation package: nothing can be
  * written into it that stays a card, and the whole annotation block sitting in the
- * input box is exactly what a reader cannot scan. So the block waits up here instead,
- * as a chip shaped like a file attachment — the figure's thumbnail, how many marks it
- * carries, the file's name, and the first mark's note.
+ * input box is exactly what a reader cannot scan. So the block waits beside the
+ * reader's own attachments instead, as a chip shaped like one — the figure's
+ * thumbnail, how many marks it carries, the file's name, and the first mark's note.
+ * It is portalled into the composer card's own flow (see `composer-seat`), so it
+ * sits where an attached picture sits; the dock entry that owns it holds only the
+ * anchor, and falls back to drawing in the dock itself when there is no card.
  *
  * What the card shows and what it hides is the point. A dimension or a pair of
  * coordinates is not something to read at a glance, so it stays in the block the model
@@ -18,9 +21,11 @@
  * transcript card shows afterwards.
  * @module dsh-figmark/client/pending-card
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useLayoutEffect, useEffect, useRef, useState, type ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { resolveTranslate } from './annotator-contract'
 import { thumbFor } from './annotation-thumb'
+import { mountSeat } from './composer-seat'
 import { parkedAnnotation, unparkAnnotation, watchParked, type ParkedAnnotation } from './pending'
 import { ensureStyles } from './styles'
 import type { Translate } from './translate'
@@ -111,6 +116,16 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
       setShot(true)
     })
   }, [sessionId])
+  // Seated inside the composer card, or — with no card to draw into — in the dock that
+  // owns this entry. The anchor is the only node this component puts in the dock.
+  const anchor = useRef<HTMLSpanElement | null>(null)
+  const [seat, setSeat] = useState<HTMLElement | null>(null)
+  const parked = entry !== undefined
+  useLayoutEffect(() => {
+    const node = anchor.current
+    if (node === null) return undefined
+    return mountSeat(node, setSeat)
+  }, [sessionId, parked])
   if (entry === undefined) return null
   const data = entry.data
   const thumb = shot ? thumbFor(entry.raw) : undefined
@@ -142,7 +157,7 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
     : `${first.label} · ${resolveTranslate(props, 'pendingNote')}：${note}`
   const hover = data.scope === '' ? data.file : `${data.file} · ${data.scope}`
   const removeLabel = resolveTranslate(props, 'pendingRemove')
-  return (
+  const chip = (
     <span className="da-staged">
       <span className="da-staged-card" title={hover}>
         <button
@@ -193,5 +208,11 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
       </span>
       {trouble === '' ? null : <span className="da-staged-trouble">{trouble}</span>}
     </span>
+  )
+  return (
+    <>
+      <span className="da-staged-anchor" ref={anchor} hidden />
+      {seat === null ? chip : createPortal(chip, seat)}
+    </>
   )
 }

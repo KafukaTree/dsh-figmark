@@ -726,13 +726,22 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
   overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
 .da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
-/* The parked annotation above the composer, drawn as an attachment chip. The dock
-   stacks its entries full width, so the chip aligns itself left and keeps a chip's
-   width: it is one attachment among the reader's own, not a banner. Nothing about a
-   figure's size or a mark's coordinates appears on the face — those live in the block
-   the model reads and in the hover titles, because a card is for scanning, not for
-   measuring. Every line is one line, truncated: a card that grows to fit a long note
-   is the wall of text this whole view exists to replace. */
+/* The parked annotation, drawn as an attachment chip. Inside the composer card it is
+   the card's first child, so it takes the attachment rail's inset — the card itself has
+   no horizontal padding, and the rail spends 10px on each side. The dock stacks its
+   entries full width, so the chip aligns itself left and keeps a chip's width: it is
+   one attachment among the reader's own, not a banner. Nothing about a figure's size or
+   a mark's coordinates appears on the face — those live in the block the model reads and
+   in the hover titles, because a card is for scanning, not for measuring. Every line is
+   one line, truncated: a card that grows to fit a long note is the wall of text this
+   whole view exists to replace. */
+.da-staged-seat{box-sizing:border-box;padding:0 10px;
+  /* The card stacks its children 12px apart; the rail pulls up 6px to tighten against
+     the editor, and the chip does the same so it reads as part of that band. */
+  margin-bottom:-6px}
+/* A seat with nothing portalled into it is not a gap in the card. */
+.da-staged-seat:empty{display:none}
+.da-staged-seat .da-staged{margin:0}
 .da-staged{display:flex;flex-direction:column;align-items:flex-start;box-sizing:border-box;width:100%;margin:0 0 8px}
 .da-staged-card{position:relative;box-sizing:border-box;width:min(280px,100%);padding:9px 10px;border-radius:12px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
@@ -742,10 +751,13 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
 .da-staged-open:hover .da-staged-title{color:var(--da-accent,#176df2)}
 .da-staged-open[disabled]{opacity:.65;cursor:default}
 .da-staged-open:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:2px;border-radius:8px}
+/* The thumbnail is a tile on whatever surface the chip sits on, so it takes the same
+   quiet fill the shipped attachment rail gives its thumbnails rather than the surface's
+   own colour — on the card's surface a white tile would be a bare outline. */
 .da-staged-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;
   width:48px;height:48px;overflow:hidden;border-radius:10px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
-  background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-tertiary,inherit)}
+  background:var(--dsw-alias-interactive-bg-hover,#f2f2f4);color:var(--dsw-alias-label-tertiary,inherit)}
 .da-staged-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .da-staged-glyph{width:20px;height:20px}
 /* min-width 0 on the column and on the sentence is what makes the ellipsis possible:

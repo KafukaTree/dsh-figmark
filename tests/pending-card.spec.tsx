@@ -265,6 +265,102 @@ describe('the attachment card above the composer', () => {
   })
 })
 
+/**
+ * The card belongs inside the box, beside the reader's own attachments: the dock entry
+ * only holds the anchor, and the chip is portalled into the composer card's own flow.
+ */
+describe('the attachment card inside the composer', () => {
+  let root: Root
+  let host: HTMLElement
+  let card: HTMLElement
+
+  beforeEach(() => {
+    installDom()
+    clearParked()
+    clearThumbs()
+    const region = document.createElement('div')
+    region.setAttribute('data-conversation-region', 'composer')
+    const dock = document.createElement('div')
+    const bar = document.createElement('div')
+    card = document.createElement('div')
+    card.setAttribute('data-composer-card', '')
+    card.innerHTML = '<span class="overlay"></span><div class="editor"></div>'
+    bar.append(card)
+    region.append(dock, bar)
+    document.body.append(region)
+    host = document.createElement('div')
+    dock.append(host)
+    root = createRoot(host)
+  })
+
+  afterEach(() => {
+    act(() => { root.unmount() })
+    document.body.innerHTML = ''
+    clearParked()
+    clearThumbs()
+  })
+
+  /**
+   * Draw the dock for one session.
+   * @param props - whatever the case is about.
+   */
+  function draw(props: { sessionId?: string } = { sessionId: 's1' }): void {
+    act(() => { root.render(<PendingCard {...props} />) })
+  }
+
+  /**
+   * Park one annotation.
+   * @param send - the delivery the card will make.
+   * @returns the parked entry.
+   */
+  function park(send: () => Promise<void> = async () => {}): ParkedAnnotation {
+    const entry: ParkedAnnotation = {
+      sessionId: 's1',
+      data: DATA,
+      raw: RAW,
+      conversation: undefined,
+      send,
+    }
+    parkAnnotation(entry)
+    return entry
+  }
+
+  it('draws the chip inside the card, at the top, not above the box', () => {
+    park()
+    draw()
+    const seat = defined(card.firstElementChild) as HTMLElement
+    expect(seat.className).toBe('da-staged-seat')
+    expect(defined(seat.querySelector('.da-staged-title')).textContent).toBe(zh['title'])
+    expect(host.querySelector('.da-staged')).toBeNull()
+  })
+
+  it('leaves only a hidden anchor in the dock', () => {
+    park()
+    draw()
+    const anchor = defined(host.querySelector('.da-staged-anchor'))
+    expect(anchor.hasAttribute('hidden')).toBe(true)
+  })
+
+  it('sends from inside the card, and the chip leaves the card with it', async () => {
+    const send = vi.fn(async () => {})
+    park(send)
+    draw()
+    const button = defined(document.querySelector('.da-staged-open')) as HTMLButtonElement
+    await act(async () => { button.click() })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(card.querySelector('.da-staged')).toBeNull()
+  })
+
+  it('moves back into the dock when the composer takes its card away', async () => {
+    park()
+    draw()
+    expect(card.querySelector('.da-staged')).not.toBeNull()
+    act(() => { card.remove() })
+    await act(async () => { await Promise.resolve() })
+    expect(host.querySelector('.da-staged')).not.toBeNull()
+  })
+})
+
 describe('the short name of a mark', () => {
   it('keeps the kind and the number, and drops the coordinates', () => {
     expect(shortLabel('箭头1 (10,20) → (30,40)')).toBe('箭头 1')

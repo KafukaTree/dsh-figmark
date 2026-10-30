@@ -37,6 +37,8 @@ export function installDom(): JSDOM {
   globals['SVGElement'] = dom.window.SVGElement
   globals['Element'] = dom.window.Element
   globals['Node'] = dom.window.Node
+  // The composer seat watches the composer for a card being redrawn.
+  globals['MutationObserver'] = dom.window.MutationObserver
   return dom
 }
 
