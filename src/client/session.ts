@@ -23,7 +23,7 @@ import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
 import { pageFileSuffix } from '../shared/annotation'
 import type { TextDiff } from '../shared/text-diff'
 import { buildAnnotationMessage, type DeliveredPaths } from './annotation-message'
-import { rememberThumb } from './annotation-thumb'
+import { rememberDelivered } from './annotation-thumb'
 import { buildEditMessage, fitDiff } from './edit-message'
 
 /** The session face this module calls. */
@@ -289,7 +289,7 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
         : `${hidden} more annotated pages are not attached as images, and neither is the annotated PDF: their marks travel only as the positions and notes above — work on the original document from those.`))
   }
   const message = buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached)
-  rememberThumb(message, input.thumb)
+  rememberDelivered(message, input.thumb)
   content.push({ type: 'text', text: message })
   await promptSession(input.sessions, input.sessionId, session, content, 'the session refused the annotation message')
   return warnings

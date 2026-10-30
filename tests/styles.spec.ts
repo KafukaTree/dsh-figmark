@@ -66,6 +66,18 @@ describe('the annotator stylesheet', () => {
     for (const selector of selectors) expect(selector?.startsWith('da-')).toBe(true)
   })
 
+  it('hides the large copy of the figure only under a card that can open it', () => {
+    // One figure was drawn twice over a sent annotation: full width above the bubble
+    // by the shell, and again as the card's 38px copy. The reader asked for the card
+    // alone — "上面的大图和那个缩略图其实重复了" — and the card opens the figure itself,
+    // so the large copy is the duplicate. It is selected forward from the attachment
+    // row because CSS has no way back up from the card to its sibling.
+    expect(STYLES).toContain('[data-message-attachments]:has(')
+    expect(STYLES).toContain('~ * .da-card:not([data-static])){display:none}')
+    // A static card is the queue dock's, where that picture is the only one there is.
+    expect(STYLES).not.toContain('[data-message-attachments]:has(~ * .da-card){')
+  })
+
   it('takes its palette from the shell aliases, falling back to what it inherits', () => {
     // The theme owner resolves these per palette, so the panel follows the shell
     // into the light one; a shell without them must leave the panel legible

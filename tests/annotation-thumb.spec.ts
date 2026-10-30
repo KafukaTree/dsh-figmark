@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /** The picture a sent bubble shows: what the cache keeps, and what the scaler refuses. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { captureThumb, clearThumbs, rememberThumb, thumbFor } from '../src/client/annotation-thumb'
+import { captureThumb, clearThumbs, rememberDelivered, rememberThumb, thumbFor } from '../src/client/annotation-thumb'
 import { defined, installDom } from './dom'
 
 /** One block, as the sheet delivers it. */
@@ -118,6 +118,37 @@ describe('remembering a picture', () => {
   it('forgets every picture on request', () => {
     rememberThumb(BLOCK, SHOT)
     clearThumbs()
+    expect(thumbFor(BLOCK)).toBeUndefined()
+  })
+})
+
+describe('remembering a delivered message', () => {
+  it('keys the block inside it, which is what the bubble asks for', () => {
+    // The reader typed a sentence after the annotation before sending, which is how
+    // "但是发到对话框还是没有卡片预览" travelled: the message is longer than the block,
+    // and the card looks up the block, so keying the message alone missed every time.
+    const message = `${BLOCK}\n\n但是发到对话框还是没有卡片预览`
+    rememberDelivered(message, SHOT)
+    expect(thumbFor(BLOCK)).toBe(SHOT)
+    expect(thumbFor(message)).toBe(SHOT)
+  })
+
+  it('keys every block a message carries', () => {
+    const second = BLOCK.replace('/w/fig.svg', '/w/two.svg')
+    rememberDelivered(`${BLOCK}\n\n${second}`, SHOT)
+    expect(thumbFor(BLOCK)).toBe(SHOT)
+    expect(thumbFor(second)).toBe(SHOT)
+  })
+
+  it('stores an ordinary message under its own text', () => {
+    // Most messages are prose; they have no block, and the loop must end on its own.
+    rememberDelivered('hello', SHOT)
+    expect(thumbFor('hello')).toBe(SHOT)
+    expect(thumbFor(BLOCK)).toBeUndefined()
+  })
+
+  it('stores nothing when there is no picture to store', () => {
+    rememberDelivered(`${BLOCK}\n`, undefined)
     expect(thumbFor(BLOCK)).toBeUndefined()
   })
 })

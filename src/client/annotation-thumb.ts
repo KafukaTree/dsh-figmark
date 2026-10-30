@@ -15,6 +15,7 @@
  * twice carries different marks and therefore a different picture.
  * @module dsh-figmark/client/annotation-thumb
  */
+import { matchAnnotation } from './annotation-rule'
 
 /** Longest edge the stored picture is scaled to, in CSS pixels. */
 const THUMB_WIDTH = 120
@@ -75,6 +76,33 @@ export function rememberThumb(block: string, dataUrl: string | undefined): void 
  */
 export function thumbFor(block: string): string | undefined {
   return cache.get(keyOf(block))
+}
+
+/**
+ * Remember the picture for one delivered message.
+ *
+ * The card is handed the block it matched, not the message that carried it: a reader
+ * who types a sentence of their own before or after sending the annotation sends a
+ * message longer than the block — "但是发到对话框还是没有卡片预览", appended to a
+ * delivered annotation, is exactly that. Keying only the message would then make the
+ * bubble look up a block the cache never held, and the card would show an icon while
+ * the figure travelled in the very same message. So the message is stored, and so is
+ * every block inside it, which is the key the bubble actually asks for.
+ * @param message - the message text as delivered.
+ * @param dataUrl - a `data:image/…` URL; anything else is ignored, as in `rememberThumb`.
+ */
+export function rememberDelivered(message: string, dataUrl: string | undefined): void {
+  if (dataUrl === undefined) return
+  rememberThumb(message, dataUrl)
+  let from = 0
+  for (;;) {
+    const block = matchAnnotation(message, from)
+    if (block === undefined) break
+    rememberThumb(message.slice(block.start, block.end), dataUrl)
+    /* v8 ignore next 2 -- a block always ends after it starts, so this only guards a broken rule. */
+    if (block.end <= from) break
+    from = block.end
+  }
 }
 
 /**

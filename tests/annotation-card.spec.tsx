@@ -201,6 +201,17 @@ describe('the card in a sent bubble', () => {
     expect(open).toHaveBeenCalledWith('/w/fig.svg')
   })
 
+  it('opens the figure from its picture too, which is the copy the bubble keeps', () => {
+    // The shell's full-width preview of the same figure is hidden under a sent card,
+    // so the picture inside the card is the only one left to click: it has to be the
+    // way in, not decoration.
+    const open = vi.fn()
+    rememberThumb(RAW, 'data:image/webp;base64,AAAA')
+    mount(<AnnotationCard node={node(DATA)} raw={RAW} open={open} />)
+    act(() => { (defined(host.querySelector('.da-card-shot img')) as HTMLElement).click() })
+    expect(open).toHaveBeenCalledWith('/w/fig.svg')
+  })
+
   it('is inert where the message is not a sent bubble yet', () => {
     const open = vi.fn()
     mount(<AnnotationCard node={node(DATA)} raw={RAW} interactive={false} open={open} />)

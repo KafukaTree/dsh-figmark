@@ -726,6 +726,21 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
   overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
 .da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
+/* One figure, one picture. The message that carries an annotation also attaches the
+   review picture, and the shell draws that attachment full width above the bubble —
+   so the same figure appeared twice, once huge and once as the card's 38px copy. The
+   card can open that figure itself, so the large copy is the one to drop: it is the
+   duplicate, and it was the reason the card sat under a picture the reader had
+   already seen. Selected from the attachment row forward rather than from the card
+   back, because CSS has no parent selector to reach; :has does have a following
+   sibling test, which is exactly this relationship.
+
+   Two guards keep it narrow. :not([data-static]) means a card that cannot open
+   anything (the queue dock's, drawn before sending) hides nothing — that copy is the
+   only picture in the dock. And if a shell ever stops marking its attachment row
+   with data-message-attachments, this rule stops matching rather than breaking
+   anything: the large picture simply returns and the card keeps working. */
+[data-message-attachments]:has(~ * .da-card:not([data-static])){display:none}
 `
 
 /**
