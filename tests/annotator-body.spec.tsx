@@ -1672,10 +1672,11 @@ describe('the figure menu', () => {
     // The second row of the menu is the composer hand-off.
     await click(defined(host.querySelectorAll('.da-menu button')[1] as HTMLButtonElement | undefined))
     await settle()
-    // The dock card stands for the delivery, and the delivery is staged in the box.
+    // The dock card stands for the delivery; the box keeps the reader's own sketch.
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('【附图标注】')
-    expect(composer.written).toEqual([`sketch first\n\n${parked.raw}`])
+    expect(composer.written).toEqual([])
+    expect(composer.conversation.input.shell('s1').snapshot.draft).toBe('sketch first')
   })
 
   it('says so when the host refuses to reveal the figure', async () => {
@@ -2136,7 +2137,8 @@ describe('the hand-off inside the comment', () => {
     await click(defined(result.host.querySelectorAll('.da-comment-send-btn')[1]))
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('送进对话框')
-    expect(composer.written).toEqual([`sketch first\n\n${parked.raw}`])
+    // Armed, not written: the sketch in the box is still only the reader's.
+    expect(composer.written).toEqual([])
   })
 
   it('sends only what the pill is about, not every mark on the figure', async () => {
@@ -2624,9 +2626,9 @@ describe('saving', () => {
     // card is pressed.
     expect(parked.raw).not.toContain('.annot.json')
     expect(parked.raw).toContain('标注图已作为本条消息的附件发送')
-    // Parking is not sending: the block waits in the box, behind the reader's sketch,
-    // for the press of the box's own send.
-    expect(composer.written).toEqual([`sketch first\n\n${parked.raw}`])
+    // Parking is not sending, and not typing either: the block waits beside the box
+    // for the press of the box's own send, and the reader's sketch is untouched.
+    expect(composer.written).toEqual([])
     expect(handoff()).toBe(zh.toastSavedAll)
   })
 

@@ -1,23 +1,23 @@
 /**
  * The annotations waiting above the composer.
  *
- * "Send to the input box" cannot write a card into the box itself: the composer is a
- * lexical editor owned by the conversation package, and its text is text. So the
- * message is staged in the draft and its picture in the rail, and what this module
- * holds is the card that stands for them — the figure, the count, the first note — so
- * the reader can see what the box is about to carry without reading a page of
- * coordinates.
+ * What a card stands for is not in the box. The composer is a lexical editor owned by
+ * the conversation package, and writing six lines of coordinates into it would put the
+ * annotation in front of the sentence the reader is trying to write. So the message and
+ * its picture are armed beside the box, and this module holds the card that stands for
+ * them — the figure, the count, the first note — so the reader can see what the send
+ * will carry without reading a page of coordinates.
  *
  * Cards queue rather than replace. An earlier version kept one card per session, on
  * the argument that two parked cards would be two answers to "what am I about to
  * send" — but a reader reviewing three figures hands over three reviews, and silently
  * dropping the first two is not an answer to that question, it is losing their work.
- * Each card carries its own id, its own staging and its own send, and only its own
- * send takes it away.
+ * Each card carries its own id, its own arming and its own send, and only its own send
+ * takes it away.
  * @module dsh-figmark/client/pending
  */
 import type { FigmarkAnnotation } from './annotation-rule'
-import type { ComposerLike, StagedReview } from './composer'
+import type { ArmedReview, ComposerLike } from './composer'
 
 /** One annotation parked above the composer. */
 export interface ParkedAnnotation {
@@ -38,14 +38,14 @@ export interface ParkedAnnotation {
   /** The composer the card was parked for; the dock needs no write into it. */
   readonly conversation: ComposerLike | undefined
   /**
-   * What the card already put into the composer: the message in the draft, the picture
-   * in the rail.
+   * What the card armed in the composer: the message held beside the box, the picture
+   * uploaded and waiting for the same send.
    *
-   * Present when the host took that staging, which is the ordinary case: the box's own
-   * send then carries the whole annotation, and the card is the receipt for it. Absent
-   * when there is nothing to stage into, and then the card's send is the only one.
+   * Present when the host could be armed, which is the ordinary case: the box's own
+   * send then carries the whole annotation and the card is the receipt for it. Absent
+   * when there is nothing to arm into, and then the card's send is the only one.
    */
-  readonly staged?: StagedReview | undefined
+  readonly armed?: ArmedReview | undefined
   /**
    * Hand the message to the session, the way the direct button does.
    *

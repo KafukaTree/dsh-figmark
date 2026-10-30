@@ -2,21 +2,23 @@
  * Putting one annotation above the composer without sending it.
  *
  * "Send to the agent" hands the message straight to the session; this module is the
- * other half of that pair: the annotation is staged in the composer — its message in
- * the draft, its review picture in the draft's attachment rail — and a card in the
- * input dock stands for what was staged. The reader adds a sentence of their own if
- * they want one and presses the box's own send, which carries the whole thing at once.
+ * other half of that pair: the annotation is armed in the composer — its message and
+ * its review picture are prepared, the picture already uploaded — and a card in the
+ * input dock stands for it. Nothing is written into the box. The reader writes their
+ * own sentence, presses the box's own send, and that one press runs the merge: the
+ * message lands behind their words and the picture joins the same send.
  *
- * Staging is what makes one press enough. A card that sends itself is a second send
- * button next to the real one, and a reader who types a sentence and presses send gets
- * the sentence only — the review stays behind in the dock, which is a worse hand-off
- * than no staging at all. So the message goes where the box's send can see it, and the
- * card is a receipt for it: it says what is staged, and its own send runs the same
- * send the button does.
+ * Not written up front, because the block is six lines of coordinates. Sitting in the
+ * draft it turns the box into a wall of text around the sentence being typed, and the
+ * card above it repeats the same block — the reader ends up reading the annotation
+ * twice and their own sentence once. Arming keeps one face per thing: the card for the
+ * review, the box for the reader's words. The message is built before anything is
+ * armed, so the card is the parsed message and the reader is looking at the very text
+ * the send will deliver.
  *
- * Nothing here reaches into the editor: the draft is written through the shell, the
- * attachment is created by the conversation service, and both are ordinary draft state
- * afterwards — the reader can delete either one by hand and the card follows.
+ * The merge hangs on the shell's own send rather than on a button: the composer's send
+ * is called by the button, by Enter, and by the queue, and only the shell sees all
+ * three. It is patched in place, reversibly, and only while a card is armed.
  * @module dsh-figmark/client/composer
  */
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'
@@ -31,6 +33,9 @@ export interface DraftAttachmentLike {
   readonly id: string
 }
 
+/** The shell's send, whatever arguments the host hands it. */
+export type SubmitLike = (...args: unknown[]) => void
+
 /** The per-session input shell the composer is bound to. */
 export interface ComposerShellLike {
   /** The live input state. */
@@ -39,6 +44,8 @@ export interface ComposerShellLike {
     readonly draft: string
     /** Attachments the draft is holding; absent on a host that keeps none. */
     readonly attachmentIds?: readonly string[] | undefined
+    /** Where the box is in its send transaction; absent on a host that keeps none. */
+    readonly phase?: string | undefined
   }
   /** Replace the draft; the caret lands at the end. */
   setDraft(text: string): void
@@ -51,7 +58,7 @@ export interface ComposerShellLike {
   /** Take one staged attachment back out of the rail. */
   removeAttachment?(id: string): boolean
   /** Run the box's own send, the one the reader's button press runs. */
-  submit?(): void
+  submit?: SubmitLike | undefined
   /** The shell's publication, so a card can tell when its content left the draft. */
   readonly state?: { subscribe(listener: () => void): () => void } | undefined
 }
@@ -82,18 +89,19 @@ export interface ComposerLike {
 }
 
 /**
- * What one card put into the composer, held so it can be taken back out.
+ * What one card armed in the composer, held so the send can carry it and the card can
+ * take it back out.
  *
- * The card reports it rather than owning it: the draft belongs to the reader from the
- * moment the text lands, and a card pressed minutes later must undo exactly what it
- * wrote and nothing else — the sentence typed after it, the picture dropped beside it.
+ * The card reports it rather than owning it: the picture is uploaded and waiting, and
+ * a card pressed minutes later must deliver exactly what it armed and nothing else —
+ * not the sentence typed after it, not the picture dropped beside it.
  */
-export interface StagedReview {
-  /** The shell the text and the attachments were staged in. */
+export interface ArmedReview {
+  /** The shell whose send will carry it. */
   readonly shell: ComposerShellLike
-  /** The message, verbatim, exactly as it sits in the draft. */
+  /** The message, verbatim, exactly as the send will deliver it. */
   readonly text: string
-  /** Attachments staged beside it; empty when the picture could not be staged. */
+  /** The review picture, uploaded and waiting to ride with the message. */
   readonly attachmentIds: readonly string[]
 }
 
@@ -109,143 +117,298 @@ export interface ParkInput {
   readonly paths: DeliveredPaths
   /** A 120px picture of the review, for the card and for the bubble it lands in. */
   readonly thumb: string | undefined
-  /** The review picture itself, staged as a draft attachment when the host takes it. */
+  /** The review picture itself, sent beside the message when the host takes it. */
   readonly file: File | undefined
   /** Message language. */
   readonly locale: SummaryLocale
-  /** Hand the message to the session directly, for when nothing could be staged. */
+  /** Hand the message to the session directly, for when nothing could be armed. */
   readonly send: () => Promise<void>
 }
 
 /**
- * Add one message to the draft, behind whatever is already there.
- * @param shell - the composer's shell.
- * @param message - the message, verbatim.
- * @returns false when the shell refuses the write.
+ * Upload one file as a draft attachment without putting it in the rail yet.
+ * @param conversation - the conversation service.
+ * @param sessionId - session the draft belongs to.
+ * @param file - the file to hold, when there is one.
+ * @returns the ids the send will add, empty when the file could not be made into one.
  */
-function appendDraft(shell: ComposerShellLike, message: string): boolean {
+function holdFile(
+  conversation: ComposerLike,
+  sessionId: string,
+  file: File | undefined,
+): readonly string[] {
+  // Bound to its owner: this is a service method, and a call through a bare reference
+  // would lose the `this` the host's own implementation relies on.
+  const create = conversation.createDrafts?.bind(conversation)
+  if (file === undefined || create === undefined) return []
   try {
-    // `trim` decides only whether there is anything to separate; the draft itself is
-    // kept exactly as it was written. Trimming it removed the reader's own shape — the
-    // two spaces that make a fenced block a code block, the blank lines that end a
-    // paragraph — and in a Markdown draft that shape is what the agent reads.
-    const existing = shell.snapshot.draft
-    shell.setDraft(existing.trim() === '' ? message : `${existing}\n\n${message}`)
-    return true
+    return create(sessionId, [file]).map(draft => draft.id)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Arm one annotation in the composer: nothing in the box, everything ready for its send.
+ * @param conversation - the composer service.
+ * @param sessionId - session the draft belongs to.
+ * @param message - the message, verbatim.
+ * @param file - the review picture, when the surface has one to attach.
+ * @returns what was armed, or undefined when this session cannot be armed.
+ */
+export function armReview(
+  conversation: ComposerLike,
+  sessionId: string,
+  message: string,
+  file: File | undefined,
+): ArmedReview | undefined {
+  let shell: ComposerShellLike
+  try {
+    shell = conversation.input.shell(sessionId)
+  } catch {
+    // The registry only has shells for sessions the app is still holding. A figure
+    // opened from a session that has since been dropped has nowhere to be armed, and
+    // the registry's own message names the registry, not the reader's problem.
+    return undefined
+  }
+  // The merge happens inside the box's send. A shell without one has no send to hang
+  // it on, so the card keeps its own send and the reader presses that instead.
+  if (typeof shell.submit !== 'function') return undefined
+  return { shell, text: message, attachmentIds: holdFile(conversation, sessionId, file) }
+}
+
+/** What one merge put in the box, so a refused send can put the box back. */
+interface Merge {
+  /** The draft exactly as the reader had written it. */
+  readonly typed: string
+}
+
+/** One card riding a shell's send, and where to report that the send took it. */
+interface Claim {
+  /** What the card armed. */
+  readonly armed: ArmedReview
+  /** Called once the send has the annotation, so the card can go. */
+  readonly done: () => void
+}
+
+/** The one patch in place on a shell, and every card riding it. */
+interface Patch {
+  /** The send the shell published before the patch. */
+  readonly original: SubmitLike
+  /** The send the shell publishes now. */
+  readonly patched: SubmitLike
+  /** The cards armed on this shell, in the order the reader parked them. */
+  readonly claims: Claim[]
+}
+
+/**
+ * Patches in place, by the shell they sit on.
+ *
+ * One patch per shell rather than one per card: two cards are two reviews, and a press
+ * of Send is one message, so the patch merges every card that is currently armed. It
+ * also keeps dropping a card honest — a card taken off the queue leaves the list, and
+ * a send after that carries only what is still on screen.
+ */
+const patches = new WeakMap<ComposerShellLike, Patch>()
+
+/**
+ * Ask the rail to hold an armed picture.
+ * @param shell - the box the send will run in.
+ * @param ids - the drafts the picture was uploaded as.
+ * @returns whether the rail took them.
+ */
+function attach(shell: ComposerShellLike, ids: readonly string[]): boolean {
+  try {
+    return shell.addAttachments?.(ids) ?? false
   } catch {
     return false
   }
 }
 
 /**
- * Stage one file in the draft's attachment rail.
- * @param conversation - the conversation service.
- * @param sessionId - session the draft belongs to.
- * @param shell - the composer's shell.
- * @param file - the file to stage, when there is one.
- * @returns the ids the rail is holding.
+ * Put the box back the way the merge found it.
+ * @param shell - the box.
+ * @param typed - the draft the reader had written.
+ * @param added - attachments the merge had already put in the rail.
  */
-function stageFile(
-  conversation: ComposerLike,
-  sessionId: string,
-  shell: ComposerShellLike,
-  file: File | undefined,
-): readonly string[] {
-  // Bound to their owners: these are service methods, and a call through a bare
-  // reference would lose the `this` the host's own implementation may rely on.
-  const create = conversation.createDrafts?.bind(conversation)
-  const add = shell.addAttachments?.bind(shell)
-  if (file === undefined || create === undefined || add === undefined) return []
-  let drafts: readonly DraftAttachmentLike[]
-  try {
-    drafts = create(sessionId, [file])
-  } catch {
-    return []
+function unwind(shell: ComposerShellLike, typed: string, added: readonly string[]): void {
+  const drop = shell.removeAttachment?.bind(shell)
+  for (const id of added) {
+    if (drop !== undefined) drop(id)
   }
-  const ids = drafts.map(draft => draft.id)
-  if (ids.length === 0) return []
-  let staged = false
   try {
-    staged = add(ids)
-  } catch {
-    staged = false
-  }
-  // A refused rail — the box was mid-send — would otherwise leave an attachment the
-  // draft does not hold and nothing will ever release.
-  if (!staged) for (const id of ids) conversation.releaseDraftAttachment?.(id)
-  return staged ? ids : []
+    shell.setDraft(typed)
+  } catch { /* the reader will see and fix what is left in the box */ }
 }
 
 /**
- * Write one annotation into the composer: its message into the draft, its picture into
- * the rail. Nothing is sent.
- * @param conversation - the composer service.
- * @param sessionId - session the draft belongs to.
- * @param message - the message, verbatim.
- * @param file - the review picture, when the surface has one to attach.
- * @returns what was staged, or undefined when the session has no composer.
+ * Write every armed message behind the reader's own words, and the pictures beside them.
+ *
+ * All of it happens here, in one write, at the press: a draft written before the press
+ * would be a wall of coordinates around the sentence being typed, and a write per card
+ * would cost the reader their caret as many times as there are cards.
+ * @param shell - the box whose send is running.
+ * @param claims - the cards armed on it, oldest first.
+ * @returns the box as it was before the merge, or undefined when this press is not the
+ * send that carries the annotations.
  */
-export function stageReview(
-  conversation: ComposerLike,
-  sessionId: string,
-  message: string,
-  file: File | undefined,
-): StagedReview | undefined {
-  let shell: ComposerShellLike
+function mergeInto(shell: ComposerShellLike, claims: readonly Claim[]): Merge | undefined {
+  let live: ComposerShellLike['snapshot']
   try {
-    shell = conversation.input.shell(sessionId)
+    live = shell.snapshot
   } catch {
-    // The registry only has shells for sessions the app is still holding. A figure
-    // opened from a session that has since been dropped has nowhere to be staged, and
-    // the registry's own message names the registry, not the reader's problem.
+    // A box that cannot be read cannot say what it holds; merging blind would put the
+    // block into somebody else's draft.
     return undefined
   }
-  if (!appendDraft(shell, message)) return undefined
-  return { shell, text: message, attachmentIds: stageFile(conversation, sessionId, shell, file) }
+  // Mid-send the box is not taking text: the draft already on its way would carry the
+  // block twice, once as typed and once merged.
+  if (live.phase !== undefined && live.phase !== 'plain') return undefined
+  const typed = live.draft
+  let draft = typed
+  const added: string[] = []
+  for (const claim of claims) {
+    const { text, attachmentIds } = claim.armed
+    // Already merged — the card's own press lands on the same send this patch hooked.
+    // Writing it again is the one way to send the annotation twice.
+    if (draft.includes(text)) continue
+    if (attachmentIds.length > 0) {
+      if (!attach(shell, attachmentIds)) {
+        // A refused rail leaves a message promising a picture it does not carry. Half
+        // a review is worse than none: the box goes back and the card waits.
+        unwind(shell, typed, added)
+        return undefined
+      }
+      added.push(...attachmentIds)
+    }
+    draft = draft.trim() === '' ? text : `${draft}\n\n${text}`
+  }
+  if (draft !== typed) {
+    try {
+      shell.setDraft(draft)
+    } catch {
+      unwind(shell, typed, added)
+      return undefined
+    }
+  }
+  return { typed }
 }
 
 /**
- * Take a staged annotation back out of the composer.
- *
- * Only the exact message this card wrote is cut: the reader may have typed around it,
- * and their words are not this card's to delete. A draft that held nothing else is
- * left empty rather than as a pair of blank lines where the block used to be.
- * @param staged - what `stageReview` reported.
- * @param conversation - the composer service, for releasing the staged attachments.
+ * Decide what became of one press, now that the send has run.
+ * @param shell - the box whose send ran.
+ * @param claims - the cards that were armed on it.
+ * @param merge - the box as it was before the merge.
  */
-export function unstageReview(staged: StagedReview, conversation: ComposerLike | undefined): void {
-  for (const id of staged.attachmentIds) {
-    staged.shell.removeAttachment?.(id)
-    conversation?.releaseDraftAttachment?.(id)
-  }
-  let at: number
+function settleClaims(shell: ComposerShellLike, claims: readonly Claim[], merge: Merge): void {
+  let live: ComposerShellLike['snapshot']
   try {
-    at = staged.shell.snapshot.draft.indexOf(staged.text)
+    live = shell.snapshot
   } catch {
+    // Nothing left to put back and nothing to take out: the cards have done their part.
+    for (const claim of claims) claim.done()
     return
   }
-  if (at < 0) return
-  const draft = staged.shell.snapshot.draft
-  // The block sat between two blank lines, so cutting it out leaves four newlines
-  // where the paragraph break should be. Collapsing only the seam — the run of blank
-  // lines across the cut — leaves the reader's own spacing elsewhere alone.
-  const rest = `${draft.slice(0, at)}${draft.slice(at + staged.text.length)}`
-    .replace(/\n{3,}/gu, '\n\n')
+  // Out of the send — delivered, or queued behind a running turn — the cards are spent.
+  if (live.phase !== undefined && live.phase !== 'plain') {
+    for (const claim of claims) claim.done()
+    return
+  }
+  const draft = live.draft
+  if (claims.every(claim => !draft.includes(claim.armed.text))) {
+    for (const claim of claims) claim.done()
+    return
+  }
+  // A send that never left the box leaves the draft holding the blocks. The reader's
+  // sentence must not come back wearing six lines of coordinates they did not type,
+  // and the pictures must not stay in the rail of a review that was not sent.
   try {
-    staged.shell.setDraft(rest.trim() === '' ? '' : rest.replace(/^\n+|\n+$/gu, ''))
+    shell.setDraft(merge.typed)
+  } catch { /* the reader will see and fix what is left in the box */ }
+  for (const claim of claims) {
+    for (const id of claim.armed.attachmentIds) shell.removeAttachment?.(id)
+  }
+}
+
+/**
+ * Take one card off whatever patch its shell is currently carrying.
+ * @param shell - the box the card was armed on.
+ * @param armed - what the card armed.
+ */
+function release(shell: ComposerShellLike, armed: ArmedReview): void {
+  const patch = patches.get(shell)
+  if (patch === undefined) return
+  const at = patch.claims.findIndex(claim => claim.armed === armed)
+  if (at >= 0) patch.claims.splice(at, 1)
+  if (patch.claims.length > 0) return
+  patches.delete(shell)
+  // A host that put its own send back, or replaced it, has already unhooked this patch;
+  // restoring over it would put a merge in front of a send that never asked for one.
+  if (Object.getOwnPropertyDescriptor(shell, 'submit')?.value !== patch.patched) return
+  try {
+    Object.defineProperty(shell, 'submit', { configurable: true, writable: true, value: patch.original })
+  } catch { /* nothing left to restore */ }
+}
+
+/**
+ * Hang one armed message on the box's own send, and take it off again.
+ *
+ * The send is patched in place on the shell object: the button, Enter and the queue all
+ * call it, and there is no other seam that sees all three. A second card joins the patch
+ * already in place rather than stacking another one, so one press merges the whole queue
+ * and dropping one card does not unhook its neighbours.
+ * @param armed - what the card armed.
+ * @param done - called once the send has the annotation, so the card can go.
+ * @returns a function that unhooks this card.
+ */
+export function holdSubmit(armed: ArmedReview, done: () => void): () => void {
+  const shell = armed.shell
+  const existing = patches.get(shell)
+  if (existing !== undefined) {
+    existing.claims.push({ armed, done })
+    return () => { release(shell, armed) }
+  }
+  const original = shell.submit
+  if (original === undefined) return () => {}
+  const claims: Claim[] = [{ armed, done }]
+  const patched: SubmitLike = (...args) => {
+    const merge = mergeInto(shell, claims)
+    original.apply(shell, args)
+    // The merge decided this press was not the one carrying the annotations — a box
+    // mid-send, or one that cannot be read — so nothing here belongs to the cards.
+    if (merge !== undefined) settleClaims(shell, claims, merge)
+  }
+  try {
+    Object.defineProperty(shell, 'submit', { configurable: true, writable: true, value: patched })
   } catch {
-    // A shell that took the attachments back has nothing left to clean, and a draft
-    // this card cannot rewrite is a draft the reader will see and fix themselves.
+    // A frozen shell keeps its own send: the reader presses the card instead.
+    return () => {}
+  }
+  patches.set(shell, { original, patched, claims })
+  return () => { release(shell, armed) }
+}
+
+/**
+ * Take an armed annotation back out of the composer.
+ *
+ * Nothing was written into the box, so there is no text to cut: only the picture the
+ * card uploaded, released so the draft stops holding a file nobody will send.
+ * @param armed - what `armReview` reported.
+ * @param conversation - the composer service, for releasing the held attachment.
+ */
+export function disarmReview(armed: ArmedReview, conversation: ComposerLike | undefined): void {
+  for (const id of armed.attachmentIds) {
+    armed.shell.removeAttachment?.(id)
+    conversation?.releaseDraftAttachment?.(id)
   }
 }
 
 /**
  * Park one annotation above the composer, without sending it.
  *
- * The message is built before anything is parked: the card is the parsed message, so
- * the reader is looking at the very text that will be delivered, and a parser that
- * stopped recognising it would leave the card showing that text rather than a card
- * that promises something the send does not do.
+ * The message is built before anything is armed: the card is the parsed message, so a
+ * parser that stopped recognising it would leave the card showing that text rather than
+ * a card promising something the send does not do.
  * @param input - the annotation and the delivery the card stands for.
  */
 export function parkInComposer(input: ParkInput): void {
@@ -256,9 +419,9 @@ export function parkInComposer(input: ParkInput): void {
   // picture is already there when the send puts the bubble on screen.
   rememberDelivered(message, input.thumb)
   const block = matchAnnotation(message, 0)
-  const staged = input.conversation === undefined
+  const armed = input.conversation === undefined
     ? undefined
-    : stageReview(input.conversation, sessionId, message, input.file)
+    : armReview(input.conversation, sessionId, message, input.file)
   parkAnnotation({
     sessionId,
     data: block?.data ?? {
@@ -271,7 +434,7 @@ export function parkInComposer(input: ParkInput): void {
     },
     raw: message,
     conversation: input.conversation,
-    staged,
+    armed,
     send: input.send,
   })
 }
