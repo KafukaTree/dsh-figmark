@@ -4,6 +4,9 @@ node_modules/
 # 构建产物 lib/ 与 tsdown cache 之外的临时件
 .cache/
 
+# 演示页的打包产物，由 pnpm run demo:toast 生成
+/demo/toast-demo.js
+
 # 测试覆盖率
 coverage/
 

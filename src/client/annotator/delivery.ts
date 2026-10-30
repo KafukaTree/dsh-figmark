@@ -71,57 +71,6 @@ function describeFailure(t: Translate, error: unknown): string {
 }
 
 /**
- * The line that says there was nothing to hand over.
- *
- * The toolbar's two buttons stay lit rather than going disabled, so that pressing one
- * when there is nothing to send is answered rather than silently dropped: a live button
- * that does nothing reads as a broken button. A surface with no marks — or one whose
- * figure never finished decoding, so nothing could have been drawn on it — has nothing
- * a sidecar could describe, and the reader is told which of the two it was.
- * @param t - the translator seat.
- * @param reason - why there is nothing to send.
- * @returns the explanation.
- */
-export function handoffRefused(t: Translate, reason: 'noMarks' | 'noFigure'): DeliveryStatus {
-  return { tone: 'error', text: t(reason === 'noMarks' ? 'sendNothingToSend' : 'sendNoFigure') }
-}
-
-/**
- * The line that says a hand-off has started.
- * @param t - the translator seat.
- * @param target - who is about to receive it.
- * @returns the in-progress line.
- */
-export function handoffStarted(t: Translate, target: DeliveryTarget): DeliveryStatus {
-  return { tone: 'info', text: t(target === 'agent' ? 'sending' : 'composing') }
-}
-
-/**
- * The line that says a hand-off has landed, named for where it went.
- * @param t - the translator seat.
- * @param target - who received it.
- * @returns the success line.
- */
-export function handoffDelivered(t: Translate, target: DeliveryTarget): DeliveryStatus {
-  return { tone: 'ok', text: t(target === 'composer' ? 'composed' : 'sent') }
-}
-
-/**
- * The line that says one mark of several was handed somewhere.
- *
- * A per-mark hand-off is the same act as a whole-figure one, but its aftermath is
- * the opposite: what the reader can see afterwards is the rest of the work, not an
- * empty panel. Saying "cleared" there would be false, and leaving the sentence
- * unchanged is what makes the difference invisible until the reader counts.
- * @param t - the translator seat.
- * @param target - who received it.
- * @returns the success line for a single mark.
- */
-export function handoffDeliveredOne(t: Translate, target: DeliveryTarget): DeliveryStatus {
-  return { tone: 'ok', text: t(target === 'composer' ? 'composedOne' : 'sentOne') }
-}
-
-/**
  * The line for a menu row that asks the Host to do something.
  *
  * The two rows that touch the desktop are the only ones whose outcome is not the

@@ -440,8 +440,13 @@ async function selectFirstMark(host: HTMLElement): Promise<void> {
 }
 
 let mounted: { readonly root: Root } | undefined
+/** What the panel wrote to the log, for the details a bubble does not carry. */
+let consoleError: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  // A failure says one line to the reader and its detail to the log: a spec that
+  // wants the detail reads it here rather than in a bubble never meant to hold it.
+  consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
   // Drawing preferences outlive a figure on purpose, which makes them outlive a test
   // too: without this, one spec's colour and number size leak into the next.
   globalThis.localStorage.clear()
@@ -454,9 +459,25 @@ afterEach(() => {
   mounted?.root.unmount()
   mounted = undefined
   vi.unstubAllGlobals()
+  consoleError.mockRestore()
   document.body.innerHTML = ''
   if (Object.hasOwn(HTMLElement.prototype, 'clientWidth')) delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth
 })
+
+/** Everything the panel logged, as one string. */
+function logged(): string {
+  return consoleError.mock.calls.map(args => args.map(arg => String(arg)).join(' ')).join('\n')
+}
+
+/** The line the panel is showing about a hand-off, whole rather than as far as it is typed. */
+function handoff(): string | null | undefined {
+  return document.querySelector<HTMLElement>('.da-toast[data-kind="send"]')?.getAttribute('data-text')
+}
+
+/** The line the panel is saying to itself — a refusal, a save failure, a copy. */
+function aside(): string | null | undefined {
+  return document.querySelector<HTMLElement>('.da-toast[data-kind="note"]')?.getAttribute('data-text')
+}
 
 describe('addresses', () => {
   it('refuses anything that is not a file address', async () => {
@@ -2235,7 +2256,7 @@ describe('the hand-off inside the comment', () => {
     expect(last).not.toContain('第二条')
   })
 
-  it('says the rest stayed, so the reader is not left counting', async () => {
+  it('keeps the rest of the marks, so the reader is not left counting', async () => {
     const { sessions } = stubSessions()
     const result = await svgBody({}, { sessions })
     mounted = result
@@ -2244,9 +2265,11 @@ describe('the hand-off inside the comment', () => {
     await drawArrow(result.host)
     await type(detailBox(result.host), '第二条')
     await click(defined(result.host.querySelector('.da-comment-send-primary')))
-    // The whole-figure copy says the panel was cleared. Saying that here would be
-    // false, and a reader who trusted it would not look for the mark they kept.
-    expect(defined(document.querySelector('.da-toast-text')).textContent).toBe(zh.sentOne)
+    // One line for one send, and the mark that was not part of it is still on the
+    // panel: saying everything went would make a reader stop looking for the mark
+    // they kept.
+    expect(handoff()).toBe(zh.toastSentAgent)
+    expect(defined(document.querySelector('.da-dock-count')).textContent).toBe('1')
   })
 
   it('hands the mark to its owner instead of sending for itself, when it has one', async () => {
@@ -2498,7 +2521,7 @@ describe('saving', () => {
     const body = postBody(post)
     expect(body['address']).toBe(SVG_ADDRESS)
     expect(typeof body['reviewImage']).toBe('string')
-    expect(document.body.textContent).toContain(zh.sent)
+    expect(handoff()).toBe(zh.toastSentAgent)
     // The panel is empty again, because the marks were delivered.
     // Delivered means done: the sidecars go, so a reload cannot bring the marks back.
     expect(result.calls.some(call => call.init?.method === 'DELETE')).toBe(true)
@@ -2522,7 +2545,7 @@ describe('saving', () => {
     mounted = result
     await click(button(document.body, zh.sendToAgent))
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
-    expect(document.body.textContent).toContain(zh.sent)
+    expect(handoff()).toBe(zh.toastSentAgent)
   })
 
   it('fills the annotation into the session that owns the figure', async () => {
@@ -2531,7 +2554,7 @@ describe('saving', () => {
     mounted = result
     await click(button(document.body, zh.sendToAgent))
     expect(prompts).toHaveLength(1)
-    expect(document.body.textContent).toContain(zh.sent)
+    expect(handoff()).toBe(zh.toastSentAgent)
   })
 
   it('does nothing at all when there is nothing to save', async () => {
@@ -2556,9 +2579,10 @@ describe('saving', () => {
   it('reports a session service the composition does not provide', async () => {
     mounted = await svgBody({ annotation: saved })
     await click(button(document.body, zh.sendToAgent))
-    // Translated, not the guard's English literal: the reader gets a sentence in
-    // their own language at the one moment they need to know what went wrong.
-    expect(document.body.textContent).toContain('会话服务不可用')
+    // One line, in the reader's own language. What exactly the host refused goes to
+    // the log, where it can be read whole, rather than into a bubble that has to be
+    // short enough to sit over the figure.
+    expect(handoff()).toBe(zh.toastFailed)
     expect(document.body.textContent).not.toContain('the sessions service is unavailable')
   })
 
@@ -2566,14 +2590,16 @@ describe('saving', () => {
     const { sessions } = stubSessions()
     mounted = await svgBody({ annotation: saved }, { sessions, resourceAddress: ABSOLUTE_ADDRESS })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain('这个图不属于任何会话')
+    expect(handoff()).toBe(zh.toastFailed)
   })
 
   it('reports a refused write without losing the panel', async () => {
     const { sessions } = stubSessions()
     mounted = await svgBody({ annotation: saved, saveError: 'annotation document version 9 is not 1' }, { sessions })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain('annotation document version 9 is not 1')
+    // The mark is still there to press send on again: a refusal is not a loss.
+    expect(handoff()).toBe(zh.toastFailed)
+    expect(defined(document.querySelector('.da-dock-count')).textContent).toBe('1')
   })
 
   it('reports a figure the host would not read as a save failure too', async () => {
@@ -2581,7 +2607,7 @@ describe('saving', () => {
     mounted = await svgBody({ readError: 'no such figure' }, { sessions })
     await drawArrow(document.body)
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain(zh.loadFailed)
+    expect(handoff()).toBe(zh.toastFailed)
   })
 
   it('uses a caller-supplied translator when the shell binds one', async () => {
@@ -2617,7 +2643,7 @@ describe('saving', () => {
     const drafts = composer.drafts.split(',')
     expect(drafts[0]).toBe('page-1.png:image/png')
     expect(composer.attached).toEqual([['d0']])
-    expect(document.body.textContent).toContain(zh.composed)
+    expect(handoff()).toBe(zh.toastSavedAll)
   })
 
   it('stages one picture and names the figure in the draft message', async () => {
@@ -2648,7 +2674,7 @@ describe('saving', () => {
     const result = await svgBody({ annotation: saved })
     mounted = result
     await click(button(document.body, zh.sendToComposer))
-    expect(document.body.textContent).toContain('会话面板不可用')
+    expect(handoff()).toBe(zh.toastFailed)
     // A refusal writes nothing: the sidecar still holds every mark the panel shows,
     // because the question is asked before the save rather than after it.
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
@@ -2659,7 +2685,7 @@ describe('saving', () => {
     mounted = await svgBody({ annotation: saved }, { conversation: composer.conversation })
     await click(button(document.body, zh.sendToComposer))
     expect(composer.released).toEqual([['d0']])
-    expect(document.body.textContent).toContain(zh.saveError)
+    expect(handoff()).toBe(zh.toastFailed)
   })
 
   it('delivers in English when the panel runs in an English locale', async () => {
@@ -2674,7 +2700,10 @@ describe('saving', () => {
     const { sessions } = stubSessions()
     mounted = await svgBody({ annotation: saved, saveThrows: 'the socket died' }, { sessions })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.body.textContent).toContain(`${zh.saveError}the socket died`)
+    expect(handoff()).toBe(zh.toastFailed)
+    // The thrown value is not an Error, so it has no message to read: it is logged as
+    // it came, which is the only place the reader can find it afterwards.
+    expect(logged()).toContain('the socket died')
   })
 })
 
@@ -2927,7 +2956,7 @@ describe('a rendered document', () => {
       selector: '#lead',
       bbox: [0, 0, 1024, 200],
     })
-    expect(document.body.textContent).toContain(zh.sent)
+    expect(handoff()).toBe(zh.toastSentAgent)
   })
 
   it('sends the marks with no picture attached and the document wording in the message', async () => {
@@ -3005,6 +3034,23 @@ describe('a rendered document', () => {
       if (original !== undefined) Object.defineProperty(HTMLIFrameElement.prototype, 'contentDocument', original)
     }
   })
+
+  it('says the figure has not loaded, rather than that there is nothing marked', async () => {
+    // The two refusals ask for different things, so they are told apart: one wants a
+
+    // mark, the other wants a moment. Here the marks are known and the document has
+
+    // not reported a height, so there is no surface to hand anyone yet.
+
+    mounted = await htmlBody({ annotation: savedHtml })
+
+    await click(button(document.body, zh.sendToAgent))
+
+    expect(aside()).toBe(zh.sendNoFigure)
+
+    expect(aside()).not.toBe(zh.toastNone)
+
+  })
 })
 
 describe('autosave', () => {
@@ -3056,9 +3102,13 @@ describe('autosave', () => {
     mounted = result
     await drawArrow(result.host)
     await click(button(result.host, zh.sendToAgent))
-    expect(document.body.textContent).toContain('已发送给智能体')
+    // The bubble carries its whole sentence from the start, even while it is still
+    // spelling it out, so the assertion reads the line rather than the letters typed so far.
+    const said = (): string | null | undefined =>
+      document.querySelector<HTMLElement>('.da-toast[data-kind="send"]')?.getAttribute('data-text')
+    expect(said()).toBe(zh.toastSentAgent)
     await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
-    expect(document.body.textContent).toContain('已发送给智能体')
+    expect(said()).toBe(zh.toastSentAgent)
   })
 
   it('does not write a loaded annotation straight back', async () => {
@@ -3085,17 +3135,7 @@ describe('autosave', () => {
     // nothing happen. The buttons stay lit on purpose, so the refusal has to be said.
     mounted = await svgBody()
     await click(button(document.body, zh.sendToAgent))
-    expect(document.querySelector('.da-toast-text')?.textContent).toContain(zh.sendNothingToSend)
-  })
-
-  it('says the figure has not loaded, rather than that there is nothing marked', async () => {
-    // The two refusals ask for different things, so they are told apart: one wants a
-    // mark, the other wants a moment.
-    mounted = await svgBody()
-    await drawArrow(document.body)
-    await act(async () => { document.body.querySelector('.da-overlay')?.remove() })
-    await click(button(document.body, zh.sendToAgent))
-    expect(document.querySelector('.da-toast-text')?.textContent).not.toContain(zh.sendNothingToSend)
+    expect(aside()).toBe(zh.toastNone)
   })
 
   it('flushes a pending draft when the tab goes away', async () => {

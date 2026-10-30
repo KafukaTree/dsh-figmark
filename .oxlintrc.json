@@ -1,9 +1,12 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript"],
+  "plugins": [
+    "typescript"
+  ],
   "ignorePatterns": [
     "lib/**",
-    "coverage/**"
+    "coverage/**",
+    "demo/toast-demo.js"
   ],
   "rules": {
     "no-explicit-any": "error",
@@ -13,7 +16,17 @@
     "no-unsafe-return": "error",
     "no-non-null-assertion": "error",
     "switch-exhaustiveness-check": "error",
-    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-    "ban-ts-comment": ["error", { "minimumDescriptionLength": 10 }]
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_"
+      }
+    ],
+    "ban-ts-comment": [
+      "error",
+      {
+        "minimumDescriptionLength": 10
+      }
+    ]
   }
 }

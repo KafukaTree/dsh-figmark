@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
+import { TOAST_LEAVE_MS } from '../src/client/annotator/toast-model'
 import { MarkdownBody, type MarkdownBodyProps } from '../src/client/markdown/MarkdownBody'
 import { en, zh } from '../src/client/locales'
 import type { SessionsLike } from '../src/client/session'
@@ -502,6 +503,10 @@ describe('copying the difference', () => {
     await type(host, 'title\n\nchanged body\n')
     await click(button(host, zh.copyDiff))
     await click(defined(host.querySelector('.da-toast-close')))
+    // The cross starts the bubble out rather than making it vanish under the cursor
+    // that pressed it: it has to fade before React can take it away.
+    expect(defined(host.querySelector('.da-toast')).getAttribute('data-leaving')).toBe('true')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, TOAST_LEAVE_MS + 50)) })
     expect(host.querySelector('.da-toast')).toBeNull()
   })
 

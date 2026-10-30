@@ -67,7 +67,7 @@ import {
 import { buildAnnotationDocument } from './annotator/documents'
 import { DEFAULT_PALETTE, draggedSpot, placementStyle } from './annotator/placement'
 import {
-  clipStatus, failureStatus, handoffDelivered, handoffDeliveredOne, handoffRefused, handoffStarted, hostGestureStatus,
+  clipStatus, failureStatus, hostGestureStatus,
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
@@ -75,9 +75,7 @@ import {
 } from './annotator/mark-edits'
 import { MarkList, SummaryRecord } from './annotator/records'
 import { collectLitSpots } from './annotator/spotlights'
-import {
-  ToastStack, dropToast, dropTone, pushToast, type Toast, type ToastTone,
-} from './annotator/toasts'
+import { ToastStack, useToasts } from './annotator/toasts'
 import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
 import { WeightRail } from './annotator/weight-rail'
 
@@ -405,18 +403,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * looks at the panel — a save that failed and a handoff that went through — and the
    * second used to overwrite the first. A failure stays; the rest leave on their own.
    */
-  const [toasts, setToasts] = useState<readonly Toast[]>([])
-  /** Handed to each bubble so two of them can never share an identity. */
-  const nextToastId = useRef(0)
+  /**
+   * The bubbles over the figure.
+   *
+   * A bubble is news, not a control, so it lives beside the panel rather than in it:
+   * the stack owns its own timers and takes no pointer events that are not aimed at
+   * one of its buttons. `setStatus` is the plain way in — one sentence, no task, gone
+   * in a few seconds — and is what every condition and every failure detail uses.
+   */
+  const toasts = useToasts(t)
   /** Say something over the figure, without moving it. */
-  const setStatus = useCallback((entry: { readonly tone: ToastTone; readonly text: string }): void => {
-    nextToastId.current += 1
-    setToasts(list => pushToast(list, { id: nextToastId.current, ...entry }))
-  }, [])
-  /** Take one bubble away, whether it left on its own or was dismissed. */
-  const dismissToast = useCallback((id: number): void => {
-    setToasts(list => dropToast(list, id))
-  }, [])
+  const setStatus = toasts.note
   /** Where the figure's context menu was asked for, or null when it is closed. */
   const [menuAt, setMenuAt] = useState<{
     left: number
@@ -1312,8 +1309,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * saying a handoff went through is news of its own and is not this one's to drop.
    */
   const clearSaveError = useCallback((): void => {
-    setToasts(list => dropTone(list, 'error'))
-  }, [])
+    toasts.dropTone('error')
+  }, [toasts])
 
   /**
    * Write the surface's current marks to disk, without a review image.
@@ -1435,81 +1432,97 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // is what decides, not a disabled attribute that hides the reason.
     //
     // "Decides" has to mean "answers". A guard that returned in silence dropped the
-    // press before the busy state and before any status line, so a reader who had
+    // press before the busy state and before anything was said, so a reader who had
     // written the figure-level note but drawn no mark pressed send, watched nothing
     // happen, and pressed again — the panel looked broken while nothing on disk was.
     // The two refusals are told apart because they ask for different things: an
     // unmarked figure wants marks, an unloaded one wants a moment.
     const scope = only === undefined ? marks : [only]
     if (scope.length === 0) {
-      setStatus(handoffRefused(t, 'noMarks'))
+      await toasts.notify('annotate.none')
       return
     }
     // A surface with no height is one nothing could have been drawn on, and it is not a
     // surface a marks file may describe.
     if (size === null || size.height <= 0) {
-      setStatus(handoffRefused(t, 'noFigure'))
+      setStatus({ tone: 'info', text: t('sendNoFigure') })
       return
     }
+    // Which of the four things the panel can say this is. A hand-off to the composer
+    // is a draft write — of everything, or of the one mark whose pill was pressed —
+    // and it says so; only the agent is a send.
+    const event = target === 'agent'
+      ? 'annotate.send.agent'
+      : only === undefined ? 'annotate.save.all' : 'annotate.save.one'
     setBusy('sending')
-    setStatus(handoffStarted(t, target))
     try {
-      // Everything that can refuse the hand-off is asked *before* anything is
-      // written. Saving first and asking afterwards left a narrowed document on disk
-      // for a send that never happened: the reader was told the save failed and the
-      // screen looked untouched, while the sidecar already held the subset. A refusal
-      // has to leave no trace at all.
-      if (sessionId === undefined) throw new Error('the figure address carries no session')
-      if (target === 'composer' && props.conversation === undefined) {
-        throw new Error('the conversation service is unavailable')
-      }
-      if (target === 'agent' && props.sessions === undefined) {
-        throw new Error('the sessions service is unavailable')
-      }
-      const document_ = buildDocument(size, scope)
-      if (document_ === null) throw new Error(t('loadFailed'))
-      // A picture is only needed when the marks claim an extent. A figure whose
-      // marks are all points carries its whole meaning in the numbered list, and a
-      // rendered document cannot be flattened at all — both travel as text.
-      const review = layer === null || !needsReviewImage(document_)
-        ? undefined
-        // Numbered from the scope's own order, which is the order the message numbers
-        // it in: the picture says ① next to the shape the prose calls ①.
-        : await exportPng(layer, scope)
-      const saved = await saveAnnotation(address, document_, review)
-      // The delivered document is what is on disk now; a pending draft write would
-      // only repeat it (or, worse, race the delete that follows the hand-off).
-      autosave.current?.cancel()
-      writtenSignature.current = annotationSignature(document_.marks, document_.summary ?? '')
-      setCreatedAt(document_.createdAt)
-      setStale(false)
-      const pageImages = review === undefined ? [] : [{ page: 1, image: review }]
-      const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
-      if (target === 'composer' && props.conversation !== undefined) {
-        deliverToComposer({
-          conversation: props.conversation,
-          sessionId,
-          document: document_,
-          paths: saved,
-          files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
-          locale,
-        })
-      } else if (props.sessions !== undefined) {
-        await deliverAnnotation({
-          sessions: props.sessions,
-          // A single-surface figure is reviewed as the picture it is, which travels
-          // as an image part and not as an attached file.
-          fileUpload: undefined,
-          sessionId,
-          document: document_,
-          paths: saved,
-          pageImages,
-          annotatedPdf: undefined,
-          locale,
-        })
-      }
+      // The work is the bubble's task, so a reader who asks for it again from the
+      // failure bubble gets the same work and not a second, subtly different, run.
+      //
+      // Everything that can refuse it is asked *before* anything is written. Saving
+      // first and asking afterwards left a narrowed document on disk for a send that
+      // never happened: the reader was told the save failed and the screen looked
+      // untouched, while the sidecar already held the subset. A refusal has to leave
+      // no trace at all.
+      const outcome = await toasts.notify(event, async () => {
+        if (sessionId === undefined) throw new Error('the figure address carries no session')
+        if (target === 'composer' && props.conversation === undefined) {
+          throw new Error('the conversation service is unavailable')
+        }
+        if (target === 'agent' && props.sessions === undefined) {
+          throw new Error('the sessions service is unavailable')
+        }
+        const document_ = buildDocument(size, scope)
+        if (document_ === null) throw new Error(t('loadFailed'))
+        // A picture is only needed when the marks claim an extent. A figure whose
+        // marks are all points carries its whole meaning in the numbered list, and a
+        // rendered document cannot be flattened at all — both travel as text.
+        const review = layer === null || !needsReviewImage(document_)
+          ? undefined
+          // Numbered from the scope's own order, which is the order the message
+          // numbers it in: the picture says ① next to the shape the prose calls ①.
+          : await exportPng(layer, scope)
+        const saved = await saveAnnotation(address, document_, review)
+        // The delivered document is what is on disk now; a pending draft write would
+        // only repeat it (or, worse, race the delete that follows the hand-off).
+        autosave.current?.cancel()
+        writtenSignature.current = annotationSignature(document_.marks, document_.summary ?? '')
+        setCreatedAt(document_.createdAt)
+        setStale(false)
+        const pageImages = review === undefined ? [] : [{ page: 1, image: review }]
+        const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
+        if (target === 'composer' && props.conversation !== undefined) {
+          deliverToComposer({
+            conversation: props.conversation,
+            sessionId,
+            document: document_,
+            paths: saved,
+            files: pageImages.map(entry => new File([entry.image], `page-${entry.page}.png`, { type: 'image/png' })),
+            locale,
+          })
+        } else if (props.sessions !== undefined) {
+          await deliverAnnotation({
+            sessions: props.sessions,
+            // A single-surface figure is reviewed as the picture it is, which travels
+            // as an image part and not as an attached file.
+            fileUpload: undefined,
+            sessionId,
+            document: document_,
+            paths: saved,
+            pageImages,
+            annotatedPdf: undefined,
+            locale,
+          })
+        }
+      })
+      if (outcome !== 'ok') return
+      // What happens to the marks afterwards depends on what was sent. A whole-figure
+      // hand-off has delivered everything the sidecar described, so the sidecars are
+      // deleted and the surface cleared: leaving them would make the reader clear the
+      // same work twice. A hand-off of *one* mark has delivered that mark only, so it
+      // leaves the surface and the sidecar holding the rest — the reader pressed a
+      // button beside one sentence, and one sentence is what it meant.
       if (only === undefined) {
-        setStatus(handoffDelivered(t, target))
         await discard()
         return
       }
@@ -1522,14 +1535,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // showing a sentence for a mark that is no longer on the figure.
       setSelectedId(null)
       autosave.current?.schedule()
-      setStatus(handoffDeliveredOne(t, target))
-    } catch (error) {
-      setStatus(failureStatus(t, 'saveError', error))
     } finally {
+      // A failure never reaches here: the bubble answers with its outcome instead of
+      // throwing, and logs the reason itself. What is left to unwind is the busy
+      // state, which must lift whether the hand-off worked or not.
       setBusy(null)
     }
-  }, [address, buildDocument, commit, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, t])
-
+  }, [address, buildDocument, commit, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, t, toasts])
   /**
    * Hand the sentence beside one mark to someone.
    *
@@ -1945,7 +1957,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         <div className="da-status" data-tone="error">{`${t('annotationUnreadable')}${loaded.unreadable.join(', ')}`}</div>
       )}
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
-      <ToastStack toasts={toasts} label={t('close')} onDismiss={dismissToast} />
+      <ToastStack view={toasts} label={t('close')} resendLabel={t('toastResend')} />
 
       <FigureRoom
         stageRef={attachStage}

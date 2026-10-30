@@ -538,47 +538,101 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 
 /* --- the bubbles --------------------------------------------------------- */
 /* What a click just did, said over the figure rather than under it: a reply that
-   arrives and leaves again must not move the picture it is about. The host keeps the
-   bottom slot above the bar and takes no pointer events of its own, so the figure
-   underneath stays reachable while a bubble is up. */
-.da-toasts{position:absolute;z-index:10;left:12px;right:12px;bottom:60px;
-  display:flex;flex-direction:column-reverse;gap:8px;pointer-events:none}
-/* Above the figure and the weight rail, below everything the reader opened. The rail
-   and the bar draw at 12 — not because they sit over a bubble (they do not: the stack
-   starts above the bar) but because the colour fold and the records are children of
-   the bar, and a child cannot climb out of its parent's stacking context. News never
-   makes a control unclickable; a bubble behind an open card is still there when the
-   card closes. */
-/* News never covers a control. The bubble is the only thing here the reader did not
-   open, so everything they did open — the rail, the colour fold, a record — draws
-   over it: a bubble that hid a swatch would make the panel look broken for as long
-   as it lived, while a bubble behind a card is still there when the card closes. */
-/* The bubble carries the old line's class as well, so anything that looked a status
-   line up still finds one; everything the line used to be is overridden here. */
-.da-status.da-toast{display:flex;align-items:center;gap:8px;padding:7px 7px 7px 11px;
-  border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);
-  box-shadow:0 6px 20px rgba(20,40,80,.16),0 0 0 1px var(--dsw-alias-border-l2,rgba(20,40,80,.08));
-  color:var(--dsw-alias-label-primary,inherit);pointer-events:auto;
-  animation:da-toast-in 160ms cubic-bezier(.2,.8,.3,1) both}
-/* The tone as a dot, not as the colour of the sentence: a saved annotation should not
-   arrive as green text, and one small mark says how it went without shouting. */
-.da-toast-dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;
-  background:var(--dsw-alias-label-tertiary,#a1a1aa)}
-.da-toast[data-tone="ok"] .da-toast-dot{background:var(--dsw-alias-state-success-primary,#2f9e44)}
-.da-toast[data-tone="error"] .da-toast-dot{background:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,#e03131))}
-.da-toast-text{flex:1 1 auto;min-width:0;font-size:12px;line-height:1.45}
-.da-toast-close{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  width:18px;height:18px;padding:0;border:0;border-radius:6px;background:transparent;
-  color:var(--dsw-alias-label-tertiary,inherit);font:inherit;font-size:13px;line-height:1;cursor:pointer}
-.da-toast-close:hover{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.12));color:var(--dsw-alias-label-primary,inherit)}
-.da-toast-close:focus-visible{outline:2px solid var(--da-accent,currentColor);outline-offset:1px}
-/* Rising into place is the whole animation: it says where the bubble came from, and
-   it is short enough not to be something the reader waits for. */
-@keyframes da-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){.da-status.da-toast{animation:none}}
-/* The editor has no bar over its bottom edge, so its bubbles sit on the edge itself
-   rather than where the annotator's bar would be. */
-.da-md > .da-toasts{bottom:10px}
+   arrives and leaves again must not move the picture it is about. The stack is a
+   column zero pixels tall that grows to fit its cards, so the newest card rises from
+   under the last one instead of shoving it down, and it takes no pointer events of
+   its own — only its buttons do, so the figure underneath stays reachable. */
+.da-toasts{position:absolute;z-index:11;top:14px;left:14px;width:272px;height:0;
+  pointer-events:none;transition:height .35s cubic-bezier(.34,1.4,.5,1)}
+/* A card is as wide as its sentence, up to the stack's width: a two-word note should
+   not look like a dialog. Its place in the column comes from the inline transform and
+   its depth from the inline opacity, because both are counts rather than styles. */
+.da-toast{position:absolute;top:0;left:0;box-sizing:border-box;width:max-content;max-width:272px;
+  display:flex;align-items:flex-start;gap:7px;padding:9px 10px 9px 12px;border-radius:14px;
+  background:linear-gradient(180deg,rgba(52,52,56,.90) 0%,rgba(36,36,38,.95) 100%);
+  -webkit-backdrop-filter:saturate(180%) blur(22px);backdrop-filter:saturate(180%) blur(22px);
+  border:0.5px solid rgba(255,255,255,.12);color:#f5f5f7;font-size:13px;line-height:1.42;
+  letter-spacing:.1px;opacity:0;
+  box-shadow:inset 0 0.5px 0 rgba(255,255,255,.07),0 6px 18px rgba(0,0,0,.13),0 1px 2px rgba(0,0,0,.10);
+  transition:transform .5s cubic-bezier(.34,1.4,.5,1),opacity .4s ease;
+  will-change:transform,opacity;pointer-events:auto}
+/* On its way out a card fades and loses focus; both are on the same clock so it goes
+   as one thing rather than as a rectangle that dims. */
+.da-toast[data-leaving="true"]{opacity:0!important;filter:blur(2px);
+  transition:opacity .5s ease,filter .5s ease}
+/* The height is stated rather than left to the content, because the stack places its
+   cards by arithmetic: a pixel of drift between a card's box and the number that
+   moved it would show up as a seam between the last two bubbles. */
+.da-toast[data-kind="note"]{height:38px}
+/* A send is a piece of work, not a notice: it keeps one width so the ring has room. */
+.da-toast[data-kind="send"]{width:228px;height:41px}
+.da-toast-ico{flex:0 0 auto;position:relative;display:flex;align-items:center;
+  color:rgba(255,255,255,.55);margin-top:1.5px}
+/* The destination sits in a slot wide enough for the ring that replaces it, so the
+   sentence does not shift by a pixel when the send lands. */
+.da-toast-ico[data-slot="send"]{position:relative;flex:0 0 22px;width:22px;height:22px;
+  margin-top:0;align-self:center;display:grid;place-items:center;color:rgba(255,255,255,.92)}
+/* The four shapes share the slot's box, so each one lands on the centre the
+   destination occupied: the icons are absolute inside the slot, which is the
+   positioned parent they were always meant to have. */
+.da-toast-ico .da-dest{position:relative;z-index:1;width:11px;height:11px;color:rgba(255,255,255,.92)}
+.da-toast-ico .da-spin,.da-toast-ico .da-ring,.da-toast-ico .da-check,.da-toast-ico .da-cross{
+  display:none;position:absolute;inset:0;margin:auto;transform-origin:50% 50%}
+.da-toast-ico .da-spin{display:block;width:22px;height:22px;color:rgba(255,255,255,.85);
+  animation:da-toast-spin .9s linear infinite}
+.da-toast-ico .da-ring{width:22px;height:22px;color:rgba(255,255,255,.92);
+  transform:rotate(-90deg)}
+.da-toast-ico .da-ring circle{stroke-dasharray:63;stroke-dashoffset:63;
+  animation:da-toast-ring .22s ease-out both}
+.da-toast-ico .da-check{width:13px;height:13px;color:#fff}
+.da-toast-ico .da-check path{stroke-dasharray:26;stroke-dashoffset:26;
+  animation:da-toast-check .26s ease-out .18s both}
+.da-toast-ico .da-cross{width:11px;height:11px;color:#fff;animation:da-toast-cross .3s cubic-bezier(.34,1.56,.64,1) .16s both}
+/* The send, landing: the arc closes as the destination goes, then the mark is drawn.
+   White throughout — a check is a shape, and colouring it would make the panel speak
+   a second language for the same news. */
+.da-toast[data-state="ok"] .da-spin,.da-toast[data-state="fail"] .da-spin{display:none}
+.da-toast[data-state="ok"] .da-ring,.da-toast[data-state="fail"] .da-ring{display:block}
+.da-toast[data-state="ok"] .da-dest,.da-toast[data-state="fail"] .da-dest{
+  animation:da-toast-dest .2s ease both}
+.da-toast[data-state="ok"] .da-check{display:block}
+.da-toast[data-state="fail"] .da-cross{display:block}
+.da-toast-msg{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The caret is the only sign that more is coming: a cursor at the end of the line. */
+.da-toast-msg[data-typing="true"]::after{content:"";display:inline-block;width:1.5px;height:1em;
+  margin-left:2px;vertical-align:-2px;background:rgba(255,255,255,.8);
+  animation:da-toast-caret .9s steps(1) infinite}
+.da-toast-close,.da-toast-resend{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  width:20px;height:20px;padding:0;border:0;border-radius:50%;background:transparent;
+  color:rgba(255,255,255,.4);font:inherit;font-size:15px;line-height:1;margin-top:-1px;
+  cursor:pointer;transition:background .16s ease,color .16s ease,transform .16s ease}
+.da-toast-resend{display:none;font-size:inherit}
+.da-toast-close:hover,.da-toast-resend:hover{background:rgba(255,255,255,.12);color:#fff}
+.da-toast-close:active{transform:scale(.9)}
+.da-toast-resend:active{transform:scale(.9) rotate(-25deg)}
+.da-toast-close:focus-visible,.da-toast-resend:focus-visible{outline:2px solid rgba(255,255,255,.7);outline-offset:1px}
+/* A failure trades its × for the ↻ in the same slot: the bubble that could not finish
+   the sentence is the one that can start it again. */
+.da-toast[data-state="fail"] .da-toast-close{display:none}
+.da-toast[data-state="fail"] .da-toast-resend{display:flex}
+.da-toast[data-shake="true"]{animation:da-toast-shake .5s cubic-bezier(.36,.07,.19,.97)}
+@keyframes da-toast-spin{to{transform:rotate(360deg)}}
+@keyframes da-toast-ring{to{stroke-dashoffset:0}}
+@keyframes da-toast-dest{to{opacity:0;transform:scale(.6)}}
+@keyframes da-toast-check{from{stroke-dasharray:26;stroke-dashoffset:26}to{stroke-dasharray:26;stroke-dashoffset:0}}
+@keyframes da-toast-cross{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:none}}
+@keyframes da-toast-caret{50%{opacity:0}}
+@keyframes da-toast-shake{10%,90%{translate:-1px 0}25%,75%{translate:2px 0}
+  40%,60%{translate:-3px 0}50%{translate:3px 0}}
+/* Motion is decoration here: every state has a resting form that says the same thing,
+   so the whole set can be switched off without losing a word. */
+@media (prefers-reduced-motion:reduce){
+  .da-toast,.da-toast[data-leaving="true"],.da-toasts{transition:none!important;animation:none!important}
+  .da-toast *{animation-duration:.001s!important;animation-delay:0s!important}
+}
+/* The editor has no bar over its top edge either, so its bubbles sit a little closer
+   to the corner than the annotator's, whose canvas starts under a strip of its own. */
+.da-md > .da-toasts{top:10px;left:10px}
 .da-hint{padding:10px 2px;font-size:12px;line-height:1.6;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit))}
 /* The grey above is for "still working". A failure is not quieter than a wait. */
 .da-hint[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
