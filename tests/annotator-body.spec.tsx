@@ -2246,7 +2246,7 @@ describe('the hand-off inside the comment', () => {
     await click(defined(result.host.querySelector('.da-comment-send-primary')))
     // The whole-figure copy says the panel was cleared. Saying that here would be
     // false, and a reader who trusted it would not look for the mark they kept.
-    expect(defined(document.querySelector('.da-status')).textContent).toBe(zh.sentOne)
+    expect(defined(document.querySelector('.da-toast-text')).textContent).toBe(zh.sentOne)
   })
 
   it('hands the mark to its owner instead of sending for itself, when it has one', async () => {
@@ -3067,7 +3067,7 @@ describe('autosave', () => {
     // nothing happen. The buttons stay lit on purpose, so the refusal has to be said.
     mounted = await svgBody()
     await click(button(document.body, zh.sendToAgent))
-    expect(document.querySelector('.da-status')?.textContent).toContain(zh.sendNothingToSend)
+    expect(document.querySelector('.da-toast-text')?.textContent).toContain(zh.sendNothingToSend)
   })
 
   it('says the figure has not loaded, rather than that there is nothing marked', async () => {
@@ -3077,7 +3077,7 @@ describe('autosave', () => {
     await drawArrow(document.body)
     await act(async () => { document.body.querySelector('.da-overlay')?.remove() })
     await click(button(document.body, zh.sendToAgent))
-    expect(document.querySelector('.da-status')?.textContent).not.toContain(zh.sendNothingToSend)
+    expect(document.querySelector('.da-toast-text')?.textContent).not.toContain(zh.sendNothingToSend)
   })
 
   it('flushes a pending draft when the tab goes away', async () => {

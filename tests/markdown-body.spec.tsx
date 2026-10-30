@@ -493,6 +493,18 @@ describe('copying the difference', () => {
     expect(host.textContent).toContain(zh.diffCopied)
   })
 
+  it('lets the reader put the answer away before it goes on its own', async () => {
+    // The bubble is news, not a button: hiding the receipt of a copy is the reader's
+    // call, and the cross is the only way to make it now.
+    stubClipboard()
+    const { host, root } = await mountBody()
+    mounted = root
+    await type(host, 'title\n\nchanged body\n')
+    await click(button(host, zh.copyDiff))
+    await click(defined(host.querySelector('.da-toast-close')))
+    expect(host.querySelector('.da-toast')).toBeNull()
+  })
+
   it('reports an environment that has no clipboard at all', async () => {
     const { host, root } = await mountBody()
     mounted = root

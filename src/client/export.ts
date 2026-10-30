@@ -13,7 +13,7 @@ import {
   pinFontSizeOf, pinNumberCentre, pinPathData, strokeWidthOf,
 } from './render'
 import { figureUnit } from './scale'
-import { lightMarkup } from './spotlight'
+import { lightMarkup, type NamedSpot } from './spotlight'
 import { plotBounds } from './plot'
 
 /** The figure layer placed under the marks. */
@@ -104,10 +104,10 @@ function markSvg(mark: AnnotationMark, number: number | undefined, unit: number)
  * rectangle around it.
  *
  * @param layer - the figure to place.
- * @param lit - selectors of the elements to light, already resolved from the marks.
+ * @param lit - the elements to light and their colours, already resolved from the marks.
  * @returns the figure's elements.
  */
-function figureSvg(layer: FigureLayer, lit: readonly string[] = []): string {
+function figureSvg(layer: FigureLayer, lit: readonly NamedSpot[] = []): string {
   if (layer.kind === 'raster') {
     return `<image x="0" y="0" width="${layer.width}" height="${layer.height}" href="${layer.dataUrl}"/>`
   }
@@ -170,8 +170,8 @@ export function composeReviewSvg(
   const edge = grown ? figureEdge(layer.width, layer.height, unit) : ''
   // Every element mark names one element, and the picture has to say which of them the
   // review is about the same way the panel did: by lighting them.
-  const lit = marks.flatMap(mark => (mark.kind === 'element' && mark.anchor?.selector !== undefined
-    ? [mark.anchor.selector]
+  const lit: NamedSpot[] = marks.flatMap(mark => (mark.kind === 'element' && mark.anchor?.selector !== undefined
+    ? [{ selector: mark.anchor.selector, colour: mark.color }]
     : []))
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
     + ` width="${paper.width}" height="${paper.height}" viewBox="0 0 ${paper.width} ${paper.height}">`

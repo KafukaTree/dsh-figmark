@@ -24,6 +24,7 @@ import type { LitSpot } from '../spotlight'
  * @param input.marks - every mark the surface holds.
  * @param input.selectedId - the mark the reader picked out, if any.
  * @param input.preview - the element the picker is offering, if any.
+ * @param input.colour - the colour a click would take, which is what the preview is lit in.
  * @param input.findElement - turns an anchor's selector into an element, or
  *   undefined when the figure no longer has one by that name.
  * @returns what to light, in a stable enough order that the class work is minimal.
@@ -32,6 +33,7 @@ export function collectLitSpots(input: {
   readonly marks: readonly AnnotationMark[]
   readonly selectedId: string | null | undefined
   readonly preview: MarkAnchor | undefined
+  readonly colour: string
   readonly findElement: (selector: string) => Element | undefined
 }): readonly LitSpot[] {
   const spots: LitSpot[] = []
@@ -42,7 +44,7 @@ export function collectLitSpots(input: {
     const element = input.findElement(selector)
     if (element === undefined || seen.has(element)) continue
     seen.add(element)
-    spots.push({ element, selected: input.selectedId === mark.id })
+    spots.push({ element, colour: mark.color, selected: input.selectedId === mark.id })
   }
   const previewSelector = input.preview?.selector
   if (previewSelector !== undefined) {
@@ -51,7 +53,7 @@ export function collectLitSpots(input: {
     // classes on one element would be two statements about the same shape.
     if (element !== undefined && !seen.has(element)) {
       seen.add(element)
-      spots.push({ element, selected: false })
+      spots.push({ element, colour: input.colour, selected: false })
     }
   }
   return spots

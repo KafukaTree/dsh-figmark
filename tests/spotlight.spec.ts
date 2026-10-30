@@ -2,15 +2,15 @@
 /** The light the element picker shines on the element a click would take. */
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-  SPOTLIGHT_CLASS, SPOTLIGHT_SELECTED_CLASS, SPOT_RULE,
-  elementAt, ensureSpotlight, lightMarkup, moveSpotlight, type LitSpot,
+  SPOTLIGHT_CLASS, SPOTLIGHT_SELECTED_CLASS,
+  elementAt, ensureSpotlight, lightMarkup, moveSpotlight, spotRule, type LitSpot,
 } from '../src/client/spotlight'
 import { defined } from './dom'
 
-/** One element, lit plainly. */
-function spot(element: Element | null, selected = false): LitSpot {
+/** One element, lit in a colour. */
+function spot(element: Element | null, colour = '#e03131', selected = false): LitSpot {
   if (element === null) throw new Error('expected an element')
-  return { element, selected }
+  return { element, colour, selected }
 }
 
 /** A root holding one element under a name, the way a figure's document does. */
@@ -21,8 +21,16 @@ function rootHolding(markup: string): Element {
   return host
 }
 
+/** The rules the panel's own document has been taught, as text. */
+function written(): string {
+  return document.querySelector('style[data-da-spot]')?.textContent ?? ''
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
+  // The rules live in the head and are written once per colour, so a test that leaves
+  // them behind would hand the next one a document that already knows its colours.
+  for (const style of document.querySelectorAll('style[data-da-spot]')) style.remove()
 })
 
 describe('finding the element an anchor names', () => {
@@ -86,12 +94,73 @@ describe('keeping one element lit', () => {
     expect(a?.classList.contains(SPOTLIGHT_CLASS)).toBe(false)
   })
 
+  it('takes the colour off with the light, so a later element does not inherit it', () => {
+    // The attribute and the rule are a pair: a colour left behind on an unlit element
+    // would come back the next time something lit it in another colour.
+    const root = rootHolding('<svg><g id="a" /></svg>')
+    const a = root.querySelector('#a')
+    moveSpotlight([], [spot(a, '#e03131')])
+    moveSpotlight([spot(a)], [])
+    expect(a?.getAttribute('data-da-spot-color')).toBeNull()
+  })
+
   it('puts the light on an element it was not told was lit', () => {
     // The pointer can arrive before anything was lit, and the class still has to land.
     const root = rootHolding('<svg><g id="a" /></svg>')
     const a = root.querySelector('#a')
     moveSpotlight([], [spot(a)])
     expect(root.querySelectorAll(`.${SPOTLIGHT_CLASS}`)).toHaveLength(1)
+  })
+})
+
+describe('lighting in the mark\'s colour', () => {
+  it('rides the colour on the element and writes a rule for it', () => {
+    // The colour is not inlined into a `style` attribute: that attribute may be the
+    // figure author's, and a rule keyed on a `data-` attribute cannot collide with it.
+    const root = rootHolding('<svg><g id="a" /></svg>')
+    const a = defined(root.querySelector('#a'))
+    moveSpotlight([], [spot(a, '#1971c2')])
+    expect(a.getAttribute('data-da-spot-color')).toBe('1971c2')
+    expect(written()).toContain('.da-spot[data-da-spot-color="1971c2"]')
+    expect(written()).toContain('rgba(25,113,194,.95)')
+  })
+
+  it('lights the selected mark in the same colour, only harder', () => {
+    const root = rootHolding('<svg><g id="a" /></svg>')
+    const a = defined(root.querySelector('#a'))
+    moveSpotlight([], [spot(a, '#e03131', true)])
+    expect(a.classList.contains(SPOTLIGHT_SELECTED_CLASS)).toBe(true)
+    expect(written()).toContain('.da-spot.da-spot-selected[data-da-spot-color="e03131"]')
+    expect(written()).toContain('rgba(224,49,49,1)')
+  })
+
+  it('adds a colour to the sheet rather than rewriting it', () => {
+    // The pointer moves between marks of different colours all the time; a sheet
+    // rewritten on every move is a rule the browser re-parses and repaints for nothing.
+    const root = rootHolding('<svg><g id="a" /><g id="b" /></svg>')
+    const a = defined(root.querySelector('#a'))
+    const b = defined(root.querySelector('#b'))
+    moveSpotlight([], [spot(a, '#e03131')])
+    moveSpotlight([], [spot(b, '#2f9e44')])
+    expect(document.querySelectorAll('style[data-da-spot]')).toHaveLength(1)
+    expect(written()).toContain('e03131')
+    expect(written()).toContain('2f9e44')
+    const before = written()
+    moveSpotlight([], [spot(b, '#2f9e44')])
+    expect(written()).toBe(before)
+  })
+
+  it('falls back to ink when the colour cannot be read', () => {
+    // A mark written by an older version, or by hand, may carry anything at all in its
+    // colour field. A hue the panel invented would put a colour into the figure that
+    // the reader never chose, so the fallback is a colourless halo.
+    const root = rootHolding('<svg><g id="a" /></svg>')
+    const a = defined(root.querySelector('#a'))
+    moveSpotlight([], [spot(a, 'chartreuse')])
+    expect(a.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
+    expect(a.getAttribute('data-da-spot-color')).toBeNull()
+    expect(written()).toBe(spotRule([]))
+    expect(spotRule(['chartreuse', '#12345'])).toBe(spotRule([]))
   })
 })
 
@@ -105,14 +174,14 @@ describe('teaching a document the light', () => {
     ensureSpotlight(doc)
     const rules = doc.querySelectorAll('style[data-da-spot]')
     expect(rules).toHaveLength(1)
-    expect(rules[0]?.textContent).toBe(SPOT_RULE)
+    expect(rules[0]?.textContent).toBe(spotRule([]))
   })
 
   it('names the class the rest of the module uses', () => {
     // The rule and the class are one thing spelled twice; a drift between them would
     // leave every lit element unlit with nothing to see.
-    expect(SPOT_RULE.startsWith(`.${SPOTLIGHT_CLASS}{`)).toBe(true)
-    expect(SPOT_RULE).toContain('drop-shadow')
+    expect(spotRule([]).startsWith(`.${SPOTLIGHT_CLASS}{`)).toBe(true)
+    expect(spotRule([])).toContain('drop-shadow')
   })
 
   it('still writes the rule into a document with no head', () => {
@@ -130,12 +199,12 @@ describe('lighting a placed mark', () => {
     const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g><g id="b"></g></svg>')
     const a = defined(root.querySelector('#a'))
     const b = defined(root.querySelector('#b'))
-    const lit = moveSpotlight([], [spot(a), spot(b, true)])
+    const lit = moveSpotlight([], [spot(a), spot(b, '#e03131', true)])
     expect(a.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
     expect(a.classList.contains(SPOTLIGHT_SELECTED_CLASS)).toBe(false)
     expect(b.classList.contains(SPOTLIGHT_SELECTED_CLASS)).toBe(true)
     // Selecting something else moves the weight, it does not pile classes up.
-    moveSpotlight(lit, [spot(a, true), spot(b)])
+    moveSpotlight(lit, [spot(a, '#e03131', true), spot(b)])
     expect(a.classList.contains(SPOTLIGHT_SELECTED_CLASS)).toBe(true)
     expect(b.classList.contains(SPOTLIGHT_SELECTED_CLASS)).toBe(false)
   })
@@ -146,9 +215,12 @@ describe('lighting a placed mark', () => {
     const root = rootHolding('<svg><g id="a"></g><g id="b"></g></svg>')
     const a = defined(root.querySelector('#a'))
     const b = defined(root.querySelector('#b'))
-    moveSpotlight([], [spot(a), spot(b)])
+    moveSpotlight([], [spot(a), spot(b, '#1971c2')])
     expect(a.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
     expect(b.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
+    // Each carries its own colour, which is what the rules are keyed on.
+    expect(a.getAttribute('data-da-spot-color')).toBe('e03131')
+    expect(b.getAttribute('data-da-spot-color')).toBe('1971c2')
   })
 })
 
@@ -159,23 +231,65 @@ describe('lighting the element inside the delivered picture', () => {
     + '<g id="line2d_2"><path d="M 10 20 L 110 60" stroke="#333" /></g></svg>'
 
   it('writes the rule and the class into the figure it is handed', () => {
-    const lit = lightMarkup(figure, ['#line2d_2'])
+    const lit = lightMarkup(figure, [{ selector: '#line2d_2', colour: '#e03131' }])
     expect(lit).toContain('class="da-spot"')
     expect(lit).toContain('drop-shadow')
     // Only the element named, not its neighbour: the picture has to point at one thing.
     expect(lit.indexOf('class="da-spot"')).toBeGreaterThan(lit.indexOf('line2d_2'))
   })
 
+  it('writes the mark\'s colour into the picture, not the panel\'s', () => {
+    // The delivered picture is what the agent reads; the glow it sees has to be the one
+    // the reader approved, down to the colour.
+    const lit = lightMarkup(figure, [{ selector: '#line2d_2', colour: '#f08c00' }])
+    expect(lit).toContain('data-da-spot-color="f08c00"')
+    expect(lit).toContain('rgba(240,140,0,.95)')
+  })
+
+  it('lights two elements in their own colours', () => {
+    const lit = lightMarkup(figure, [
+      { selector: '#line2d_1', colour: '#e03131' },
+      { selector: '#line2d_2', colour: '#1971c2' },
+    ])
+    expect(lit).toContain('data-da-spot-color="e03131"')
+    expect(lit).toContain('data-da-spot-color="1971c2"')
+  })
+
+  it('keeps the first colour when two marks name one element', () => {
+    // One element cannot glow in two colours, and the first mark is the one the reader
+    // placed first — the later one is the duplicate.
+    const lit = lightMarkup(figure, [
+      { selector: '#line2d_1', colour: '#e03131' },
+      { selector: '#line2d_1', colour: '#1971c2' },
+    ])
+    expect(lit).toContain('data-da-spot-color="e03131"')
+    expect(lit).not.toContain('1971c2')
+  })
+
+  it('lights an unreadable colour in ink, with no colour of its own', () => {
+    // The picture must not claim a colour the reader never chose; the light is still
+    // there, so the element the review is about is still pointed at.
+    const lit = lightMarkup(figure, [{ selector: '#line2d_1', colour: '' }])
+    expect(lit).toContain('class="da-spot"')
+    expect(lit).not.toContain('data-da-spot-color')
+    expect(lit).toContain('rgba(63,63,70,.9)')
+  })
+
   it('leaves the figure alone when nothing is lit', () => {
     // The export must not change a picture that has no element marks on it — a stray
     // stylesheet in every exported figure would be a diff a reader cannot explain.
     expect(lightMarkup(figure, [])).toBe(figure)
-    expect(lightMarkup(figure, ['#not-here'])).toBe(figure)
-    expect(lightMarkup('not svg at all', ['#a'])).toBe('not svg at all')
+    expect(lightMarkup(figure, [{ selector: '#not-here', colour: '#e03131' }])).toBe(figure)
+    expect(lightMarkup('not svg at all', [{ selector: '#a', colour: '#e03131' }])).toBe('not svg at all')
   })
 
   it('survives a selector that no longer parses', () => {
     // The figure may be a later version of the one the mark was placed on.
-    expect(lightMarkup(figure, ['#line2d_1', 'a>>b'])).toContain('class="da-spot"')
+    const lit = lightMarkup(figure, [
+      { selector: '#line2d_1', colour: '#e03131' },
+      { selector: 'a>>b', colour: '#1971c2' },
+    ])
+    expect(lit).toContain('class="da-spot"')
+    expect(lit).not.toContain('1971c2')
   })
 })

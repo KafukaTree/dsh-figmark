@@ -21,6 +21,9 @@ import { formatUnifiedDiff } from '../../shared/text-diff'
 import { resolveTranslate, type Translate, type TranslateVars } from '../annotator-contract'
 import { deliverEdit, type FileUploadLike, type SessionsLike } from '../session'
 import { ensureStyles } from '../styles'
+import {
+  ToastStack, dropToast, pushToast, type Toast, type ToastTone,
+} from '../annotator/toasts'
 import { DiffView } from './DiffView'
 import {
   NO_NOTES, START_CARET, caretIn, diffOf, editFrom, editedText, lineCount, type Caret, type Edit,
@@ -98,7 +101,23 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
   const [stale, setStale] = useState(false)
   const [view, setView] = useState<'edit' | 'diff'>('edit')
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null)
+  /**
+   * What the last few clicks said, newest first.
+   *
+   * A copy and a send can land before the reader looks at the panel, and one line
+   * under the editor let the second erase the first — including a failure, which the
+   * reader then never saw. Bubbles stack, answer on their own, and a failure waits.
+   */
+  const [toasts, setToasts] = useState<readonly Toast[]>([])
+  /** Handed to each bubble so two of them can never share an identity. */
+  const nextToastId = useRef(0)
+  const setStatus = useCallback((entry: { readonly tone: ToastTone; readonly text: string }): void => {
+    nextToastId.current += 1
+    setToasts(list => pushToast(list, { id: nextToastId.current, ...entry }))
+  }, [])
+  const dismissToast = useCallback((id: number): void => {
+    setToasts(list => dropToast(list, id))
+  }, [])
   const seen = useRef<Seen>({ address, text: loaded })
   const gutter = useRef<HTMLDivElement | null>(null)
 
@@ -123,7 +142,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
       setEdit(null)
       setNotes(NO_NOTES)
       setStale(false)
-      setStatus(null)
+      setToasts([])
       setView('edit')
       return
     }
@@ -145,7 +164,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
     setEdit(null)
     setNotes(NO_NOTES)
     setStale(false)
-    setStatus(null)
+    setToasts([])
     setView('edit')
   }, [])
 
@@ -220,7 +239,7 @@ export function MarkdownBody(props: MarkdownBodyProps): ReactNode {
       </div>
       {!eof ? <div className="da-status" data-tone="info">{t('editEofPending')}</div> : null}
       {stale ? <div className="da-status" data-tone="error">{t('editStale')}</div> : null}
-      {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
+      <ToastStack toasts={toasts} label={t('close')} onDismiss={dismissToast} />
       {view === 'edit' ? (
         <div className="da-md-pane">
           {wrapping ? null : (

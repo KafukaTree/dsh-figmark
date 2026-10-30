@@ -8,8 +8,8 @@ describe('the annotator stylesheet', () => {
     // Both strips are draggable and both can reach the same corner. At equal stacking
     // the later one in the DOM wins, which is the bar — and the palette's only handle
     // is its own grip, so a palette under the bar could never be moved again.
-    expect(STYLES).toContain('.da-palette{position:absolute;z-index:9')
-    expect(STYLES).toContain('.da-bar{position:absolute;z-index:8')
+    expect(STYLES).toContain('.da-palette{position:absolute;z-index:12')
+    expect(STYLES).toContain('.da-bar{position:absolute;z-index:12')
   })
 
   it('paints the note that blocks the panel in a tone of its own', () => {

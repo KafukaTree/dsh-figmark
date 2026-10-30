@@ -75,6 +75,9 @@ import {
 } from './annotator/mark-edits'
 import { MarkList, SummaryRecord } from './annotator/records'
 import { collectLitSpots } from './annotator/spotlights'
+import {
+  ToastStack, dropToast, dropTone, pushToast, type Toast, type ToastTone,
+} from './annotator/toasts'
 import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
 import { WeightRail } from './annotator/weight-rail'
 
@@ -386,7 +389,25 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [panning, setPanning] = useState(false)
   const [fitWidth, setFitWidth] = useState(0)
   const [busy, setBusy] = useState<'sending' | null>(null)
-  const [status, setStatus] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null)
+  /**
+   * The news of the last few clicks, newest first.
+   *
+   * It is a stack rather than one line because two things can happen before the reader
+   * looks at the panel — a save that failed and a handoff that went through — and the
+   * second used to overwrite the first. A failure stays; the rest leave on their own.
+   */
+  const [toasts, setToasts] = useState<readonly Toast[]>([])
+  /** Handed to each bubble so two of them can never share an identity. */
+  const nextToastId = useRef(0)
+  /** Say something over the figure, without moving it. */
+  const setStatus = useCallback((entry: { readonly tone: ToastTone; readonly text: string }): void => {
+    nextToastId.current += 1
+    setToasts(list => pushToast(list, { id: nextToastId.current, ...entry }))
+  }, [])
+  /** Take one bubble away, whether it left on its own or was dismissed. */
+  const dismissToast = useCallback((id: number): void => {
+    setToasts(list => dropToast(list, id))
+  }, [])
   /** Where the figure's context menu was asked for, or null when it is closed. */
   const [menuAt, setMenuAt] = useState<{
     left: number
@@ -1270,7 +1291,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * saying a handoff went through is news of its own and is not this one's to drop.
    */
   const clearSaveError = useCallback((): void => {
-    setStatus(current => (current !== null && current.tone === 'error' ? null : current))
+    setToasts(list => dropTone(list, 'error'))
   }, [])
 
   /**
@@ -1708,9 +1729,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       marks,
       selectedId,
       preview,
+      colour: color,
       findElement,
     }),
-    [findElement, marks, selectedId],
+    [color, findElement, marks, selectedId],
   )
 
   /**
@@ -1901,7 +1923,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         <div className="da-status" data-tone="error">{`${t('annotationUnreadable')}${loaded.unreadable.join(', ')}`}</div>
       )}
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
-      {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
+      <ToastStack toasts={toasts} label={t('close')} onDismiss={dismissToast} />
 
       <FigureRoom
         stageRef={attachStage}

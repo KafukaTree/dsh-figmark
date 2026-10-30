@@ -67,7 +67,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    off whichever corner the reader is working on. Dark rather than light: it sits
    on top of a white figure and a white panel, and a dark chip is what reads as
    "this is a control" instead of as one more piece of the picture. */
-.da-palette{position:absolute;z-index:9;display:flex;flex-direction:column;align-items:center;gap:2px;
+.da-palette{position:absolute;z-index:12;display:flex;flex-direction:column;align-items:center;gap:2px;
   padding:6px 5px;border-radius:16px;background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
   /* The panel clips whatever reaches past it, and the palette is positioned outside
@@ -168,7 +168,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    the reader can drag clear of whatever they are looking at. It carries the records
    and the hand-off; the tools have their own strip so either can be parked alone.
    Centred along the bottom until it is moved, which is where a bar belongs. */
-.da-bar{position:absolute;z-index:8;left:50%;bottom:12px;transform:translateX(-50%);
+.da-bar{position:absolute;z-index:12;left:50%;bottom:12px;transform:translateX(-50%);
   display:flex;align-items:center;gap:2px;flex:0 0 auto;flex-wrap:wrap;
   width:max-content;max-width:calc(100% - 20px);padding:4px 5px;border-radius:16px;
   background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
@@ -248,7 +248,10 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* Anywhere else is "done here": the panel closes on the click that lands outside it
    rather than trapping the reader in a popup with one way out. */
 .da-swatch{width:20px;height:20px;border-radius:50%;corner-shape:round;border:2px solid var(--dsw-alias-bg-base,transparent);box-shadow:0 0 0 1px var(--dsw-alias-border-l4,rgba(127,127,127,.5));cursor:pointer;padding:0}
-.da-swatch[aria-pressed="true"]{box-shadow:0 0 0 2px var(--da-accent,currentColor)}
+/* The chosen colour is marked in the panel's own grey rather than in the accent:
+   the row is the one place colour is the subject, so a blue ring says "blue" where
+   it only meant to say "this one", and it makes the blue swatch look chosen twice. */
+.da-swatch[aria-pressed="true"]{box-shadow:0 0 0 3px var(--dsw-alias-label-tertiary,#a1a1aa)}
 /* --- the figure on its table -------------------------------------------- */
 /* A figure is a sheet on a table, not a picture floating in a void: the white paper
    is what gives the panel a middle, and the gap around it is the margin the eye
@@ -527,9 +530,55 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   text-align:left;cursor:pointer;white-space:nowrap}
 .da-menu-item:hover,.da-menu-item:focus-visible{background:var(--da-accent-soft,rgba(23,109,242,.14));outline:none}
 
+/* A condition, not a flash: the panel could not read the figure, or the file on disk
+   is not the one on screen. These stay in the layout at the top of the panel, because
+   the reader has to know them before they can do anything about them. */
 .da-status{flex:0 0 auto;padding:6px 10px;font-size:12px;color:var(--dsw-alias-label-secondary,inherit)}
 .da-status[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
-.da-status[data-tone="ok"]{color:var(--dsw-alias-state-success-primary,currentColor)}
+
+/* --- the bubbles --------------------------------------------------------- */
+/* What a click just did, said over the figure rather than under it: a reply that
+   arrives and leaves again must not move the picture it is about. The host keeps the
+   bottom slot above the bar and takes no pointer events of its own, so the figure
+   underneath stays reachable while a bubble is up. */
+.da-toasts{position:absolute;z-index:10;left:12px;right:12px;bottom:60px;
+  display:flex;flex-direction:column-reverse;gap:8px;pointer-events:none}
+/* Above the figure and the weight rail, below everything the reader opened. The rail
+   and the bar draw at 12 — not because they sit over a bubble (they do not: the stack
+   starts above the bar) but because the colour fold and the records are children of
+   the bar, and a child cannot climb out of its parent's stacking context. News never
+   makes a control unclickable; a bubble behind an open card is still there when the
+   card closes. */
+/* News never covers a control. The bubble is the only thing here the reader did not
+   open, so everything they did open — the rail, the colour fold, a record — draws
+   over it: a bubble that hid a swatch would make the panel look broken for as long
+   as it lived, while a bubble behind a card is still there when the card closes. */
+/* The bubble carries the old line's class as well, so anything that looked a status
+   line up still finds one; everything the line used to be is overridden here. */
+.da-status.da-toast{display:flex;align-items:center;gap:8px;padding:7px 7px 7px 11px;
+  border-radius:10px;background:var(--dsw-alias-bg-layer-2,#fff);
+  box-shadow:0 6px 20px rgba(20,40,80,.16),0 0 0 1px var(--dsw-alias-border-l2,rgba(20,40,80,.08));
+  color:var(--dsw-alias-label-primary,inherit);pointer-events:auto;
+  animation:da-toast-in 160ms cubic-bezier(.2,.8,.3,1) both}
+/* The tone as a dot, not as the colour of the sentence: a saved annotation should not
+   arrive as green text, and one small mark says how it went without shouting. */
+.da-toast-dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+  background:var(--dsw-alias-label-tertiary,#a1a1aa)}
+.da-toast[data-tone="ok"] .da-toast-dot{background:var(--dsw-alias-state-success-primary,#2f9e44)}
+.da-toast[data-tone="error"] .da-toast-dot{background:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,#e03131))}
+.da-toast-text{flex:1 1 auto;min-width:0;font-size:12px;line-height:1.45}
+.da-toast-close{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  width:18px;height:18px;padding:0;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-tertiary,inherit);font:inherit;font-size:13px;line-height:1;cursor:pointer}
+.da-toast-close:hover{background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.12));color:var(--dsw-alias-label-primary,inherit)}
+.da-toast-close:focus-visible{outline:2px solid var(--da-accent,currentColor);outline-offset:1px}
+/* Rising into place is the whole animation: it says where the bubble came from, and
+   it is short enough not to be something the reader waits for. */
+@keyframes da-toast-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.da-status.da-toast{animation:none}}
+/* The editor has no bar over its bottom edge, so its bubbles sit on the edge itself
+   rather than where the annotator's bar would be. */
+.da-md > .da-toasts{bottom:10px}
 .da-hint{padding:10px 2px;font-size:12px;line-height:1.6;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit))}
 /* The grey above is for "still working". A failure is not quieter than a wait. */
 .da-hint[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
