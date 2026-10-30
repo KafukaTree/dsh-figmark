@@ -3,7 +3,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   SPOTLIGHT_CLASS, SPOTLIGHT_SELECTED_CLASS,
-  SPOTLIGHT_WASH_CLASS, measureBox, washBox,
   elementAt, ensureSpotlight, lightMarkup, moveSpotlight, spotRule, type LitSpot,
 } from '../src/client/spotlight'
 import { defined } from './dom'
@@ -12,17 +11,6 @@ import { defined } from './dom'
 function spot(element: Element | null, colour = '#e03131', selected = false): LitSpot {
   if (element === null) throw new Error('expected an element')
   return { element, colour, selected }
-}
-
-/** An element that reports a box, the way a laid-out one does. */
-function measured(element: Element, box: { x: number; y: number; width: number; height: number }): Element {
-  Object.defineProperty(element, 'getBBox', { value: () => box, configurable: true })
-  return element
-}
-
-/** Give the figure inside a root a box, the way a laid-out one has: the share uses it. */
-function laidOut(root: Element): void {
-  measured(defined(root.querySelector('svg')), { x: 0, y: 0, width: 100, height: 100 })
 }
 
 /** A root holding one element under a name, the way a figure's document does. */
@@ -236,150 +224,22 @@ describe('lighting a placed mark', () => {
   })
 })
 
-describe('the base under a lit element', () => {
-  it('measures an SVG element in its own user units', () => {
-    // The wash is a child of the element, so the element's own units are the right ones
-    // and no transform has to be worked out.
-    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 1.04, y: 2, width: 3.06, height: 4 })
-    expect(measureBox(a)).toEqual({ x: 1.04, y: 2, width: 3.06, height: 4 })
-  })
-
-  it('has nothing to measure on an HTML element', () => {
-    // A rendered document's elements get their base from the rule's `box-shadow`
-    // instead; asking one of them for a box is not a thing that exists.
-    expect(measureBox(document.createElement('div'))).toBeUndefined()
-  })
-
-  it('has nothing to measure when the engine has no box to give', () => {
-    // jsdom has no layout, which is also what a detached figure looks like.
-    const root = rootHolding('<svg><g id="a" /></svg>')
-    expect(measureBox(defined(root.querySelector('#a')))).toBeUndefined()
-  })
-
-  it('has nothing to measure for a box with no area', () => {
-    // An empty group has a box of zero: filling it would draw nothing and say nothing.
-    const root = rootHolding('<svg><g id="a" /><g id="b" /></svg>')
-    expect(measureBox(measured(defined(root.querySelector('#a')), { x: 0, y: 0, width: 0, height: 10 })))
-      .toBeUndefined()
-    expect(measureBox(measured(defined(root.querySelector('#b')), { x: 0, y: 0, width: 10, height: 0 })))
-      .toBeUndefined()
-  })
-
-  it('treats a measurement that throws as nothing to measure', () => {
-    // An engine with no layout throws rather than returning zero. The light still lands.
-    const root = rootHolding('<svg><g id="a" /></svg>')
-    const a = defined(root.querySelector('#a'))
-    Object.defineProperty(a, 'getBBox', {
-      value: () => {
-        throw new Error('no layout')
-      },
-    })
-    expect(measureBox(a)).toBeUndefined()
-  })
-
-  it('fills the area of an element that is a region, over what it paints', () => {
-    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 10, y: 20, width: 60, height: 60 })
-    laidOut(root)
-    moveSpotlight([], [spot(a)])
-    const wash = defined(a.querySelector(`.${SPOTLIGHT_WASH_CLASS}`))
-    expect(wash.tagName.toLowerCase()).toBe('rect')
-    expect(wash.getAttribute('x')).toBe('10')
-    expect(wash.getAttribute('y')).toBe('20')
-    expect(wash.getAttribute('width')).toBe('60')
-    expect(wash.getAttribute('height')).toBe('60')
-    // Last child: a region's own paint is opaque, so a base behind it is a base nobody
-    // sees — the white plot face is exactly the case this was asked for.
-    expect(a.lastElementChild).toBe(wash)
-  })
-
-  it('draws one base per lighting, not one per pointer move', () => {
-    // The light is re-asked for on every move; a `rect` per move would be a new node
-    // per frame for a picture that did not change.
-    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 0, y: 0, width: 60, height: 60 })
-    laidOut(root)
-    const lit = moveSpotlight([], [spot(a)])
-    const first = defined(a.querySelector(`.${SPOTLIGHT_WASH_CLASS}`))
-    moveSpotlight(lit, [spot(a, '#e03131', true)])
-    expect(a.querySelectorAll(`.${SPOTLIGHT_WASH_CLASS}`)).toHaveLength(1)
-    expect(a.querySelector(`.${SPOTLIGHT_WASH_CLASS}`)).toBe(first)
-  })
-
-  it('takes the base away with the light', () => {
-    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 0, y: 0, width: 60, height: 60 })
-    laidOut(root)
-    moveSpotlight(moveSpotlight([], [spot(a)]), [])
-    expect(a.querySelector(`.${SPOTLIGHT_WASH_CLASS}`)).toBeNull()
-    // And the figure's own content is untouched, not merely buried under the tint.
-    expect(a.querySelector('path')).not.toBeNull()
-  })
-
-  it('fills a leaf beside it, where a shape cannot hold anything inside', () => {
-    // A `<path>` that is the whole background is a region too, and a base put inside it
-    // would be thrown away: only a container draws its children. Beside it is the same
-    // stacking one level out, in the same units.
-    const root = rootHolding('<svg><g id="a" /><path id="b" d="M 0 0 L 1 1" /></svg>')
-    const b = measured(defined(root.querySelector('#b')), { x: 0, y: 0, width: 60, height: 60 })
-    laidOut(root)
-    const wash = () => b.nextElementSibling
-    moveSpotlight([], [spot(b)])
-    expect(defined(wash()).getAttribute('class')).toBe(SPOTLIGHT_WASH_CLASS)
-    expect(b.querySelector(`.${SPOTLIGHT_WASH_CLASS}`)).toBeNull()
-    // Re-lit on the next pointer move, and still one base: the sibling is looked for too.
-    moveSpotlight(moveSpotlight([], [spot(b)]), [spot(b, '#e03131', true)])
-    expect(b.parentElement?.querySelectorAll(`.${SPOTLIGHT_WASH_CLASS}`)).toHaveLength(1)
-    moveSpotlight(moveSpotlight([], [spot(b)]), [])
-    expect(wash()).toBeNull()
-  })
-
-  it('leaves a transformed leaf to the glow alone', () => {
-    // The box is in the leaf's own units and the parent's are not. Drawing it anyway
-    // would put the tint somewhere else on the figure, which is worse than no tint.
-    const root = rootHolding('<svg><g id="a" /><path id="b" transform="translate(3)" d="M 0 0 L 1 1" /></svg>')
-    const b = measured(defined(root.querySelector('#b')), { x: 0, y: 0, width: 60, height: 60 })
-    laidOut(root)
-    moveSpotlight([], [spot(b)])
-    expect(b.nextElementSibling).toBeNull()
-    // The light itself is not withheld: it is what says which element is meant.
-    expect(b.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
-  })
-
-  it('has no base for an element that is not a region', () => {
-    // A legend, a single line, a label: a glow says where it is, and a film over a band
-    // with nothing to fill would read as the box the glow was there to replace.
-    const root = rootHolding('<svg><g id="a" /><g id="b" /></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 0, y: 0, width: 30, height: 40 })
-    const b = measured(defined(root.querySelector('#b')), { x: 0, y: 0, width: 50, height: 50 })
-    laidOut(root)
-    expect(washBox(a)).toBeUndefined()
-    // A quarter of the figure is a region; just under it is not.
-    expect(washBox(b)).toEqual({ x: 0, y: 0, width: 50, height: 50 })
-  })
-
-  it('has no base for an element that is not inside a figure', () => {
-    // There is no figure to take a share of, so there is nothing to say a region is one.
-    const loose = measured(document.createElementNS('http://www.w3.org/2000/svg', 'g'), { x: 0, y: 0, width: 5, height: 5 })
-    expect(washBox(loose)).toBeUndefined()
-  })
-
-  it('has no base when the figure itself has no box', () => {
-    // jsdom's root has no layout either; the element's own box alone is not a share of
-    // anything.
-    const root = rootHolding('<svg><g id="a" /></svg>')
-    const a = measured(defined(root.querySelector('#a')), { x: 0, y: 0, width: 60, height: 60 })
-    expect(washBox(a)).toBeUndefined()
-  })
-
-  it('lights an element it cannot measure without a base', () => {
-    // Nothing measured is not nothing lit: the glow is what says which element is meant.
-    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 1 1" /></g></svg>')
+describe('the light leaves no base behind', () => {
+  it('glows without drawing anything into the element or its figure', () => {
+    // The light used to carry a filled base for an element that covered a large share
+    // of the figure, and a base is a rectangle the figure never drew: behind a curve
+    // that spans the plot it read as a square of colour, and over a plot face it read
+    // as the figure's background repainted. The glow follows whatever the element
+    // paints, so it needs no shape to be added — and none is.
+    const root = rootHolding('<svg><g id="a"><path d="M 0 0 L 100 100" /></g></svg>')
     const a = defined(root.querySelector('#a'))
     moveSpotlight([], [spot(a)])
-    expect(a.classList.contains(SPOTLIGHT_CLASS)).toBe(true)
-    expect(a.querySelector(`.${SPOTLIGHT_WASH_CLASS}`)).toBeNull()
+    expect(a.innerHTML).toBe('<path d="M 0 0 L 100 100"></path>')
+    expect(defined(root.querySelector('svg')).childElementCount).toBe(1)
+    // Nothing filled either: a `fill` in the rule would be the base said in CSS.
+    expect(written()).toContain('filter:')
+    expect(written()).not.toContain('box-shadow')
+    expect(written()).not.toContain('fill')
   })
 })
 
@@ -405,21 +265,13 @@ describe('lighting the element inside the delivered picture', () => {
     expect(lit).toContain('rgba(240,140,0,.95)')
   })
 
-  it('writes the base into the picture from the measured box', () => {
-    // The delivered picture is built from markup with no layout, so the box measured
-    // from the laid-out figure is the only way the base can be in it.
-    const lit = lightMarkup(figure, [
-      { selector: '#line2d_2', colour: '#e03131', box: { x: 1, y: 2, width: 30, height: 40 } },
-    ])
-    expect(lit).toContain(`class="${SPOTLIGHT_WASH_CLASS}"`)
-    expect(lit).toContain('x="1"')
-    expect(lit).toContain('height="40"')
-    expect(lit).toContain('rgba(224,49,49,.12)')
-  })
-
-  it('leaves the base out when the box was not measured', () => {
+  it('lights the element in the picture without drawing on it', () => {
+    // The picture is the agent's evidence, so the light in it has to be the light the
+    // reader saw: a glow on the element, and no shape added to the figure.
     const lit = lightMarkup(figure, [{ selector: '#line2d_2', colour: '#e03131' }])
-    expect(lit).not.toContain(`class="${SPOTLIGHT_WASH_CLASS}"`)
+    expect(lit).toContain('filter:drop-shadow')
+    expect(lit).not.toContain('box-shadow')
+    expect(lit).not.toContain('<rect')
   })
 
   it('lights two elements in their own colours', () => {

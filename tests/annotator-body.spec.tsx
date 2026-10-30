@@ -3715,41 +3715,26 @@ describe('the light the picker shines', () => {
     expect(defined(document.querySelector('svg.da-overlay')).querySelectorAll('.da-spot')).toHaveLength(0)
   })
 
-  it('tints an element it can measure, and measures it for the picture it sends', async () => {
-    // An element that IS an area — a plot's face, a band, a panel — has no edges for a
-    // glow to follow, and lighting one changed 754 of 106,000 pixels of the figure this
-    // was reported against. The base is what makes the light arrive at all. Its box is
-    // measured here, where the figure is laid out: the copy the export builds from
-    // markup has no layout to measure.
+  it('sends an element mark lit by the glow alone', async () => {
+    // The light is a filter on the element and nothing more. It used to arrive with a
+    // base measured from the laid-out figure, which meant a `getBBox` here and a filled
+    // rectangle in the agent's picture — a square of colour behind a curve, a repainted
+    // plot face. The send measures nothing now, and the picture carries only the glow.
     const marked: AnnotationDocument = {
       ...saved,
       marks: [{
         id: 'e1', kind: 'element', color: '#e03131', points: [[10, 20], [40, 40]],
-        detail: '红色的底', anchor: { tag: 'g', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
+        detail: '这条线要加粗', anchor: { tag: 'g', selector: 'svg > text:nth-of-type(1)', bbox: [10, 10, 30, 20] },
       }],
     }
-    const original = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'getBBox')
-    Object.defineProperty(SVGElement.prototype, 'getBBox', {
-      configurable: true,
-      value: () => ({ x: 4, y: 6, width: 80, height: 90 }),
-    })
     const { sessions } = stubSessions()
-    try {
-      const result = await svgBody({ annotation: marked }, { sessions })
-      mounted = result
-      const text = defined(document.querySelector('svg.da-figure text'))
-      const wash = defined(document.querySelector('svg.da-figure .da-spot-wash'))
-      expect(wash.getAttribute('x')).toBe('4')
-      expect(wash.getAttribute('height')).toBe('90')
-      // In the element's own parent, in the element's own units: a `<text>` holds no
-      // rendered children, so its base is a sibling rather than a child.
-      expect(wash.parentElement).toBe(text.parentElement)
-      await click(button(document.body, zh.sendToAgent))
-      expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
-    } finally {
-      if (original === undefined) delete (SVGElement.prototype as { getBBox?: unknown }).getBBox
-      else Object.defineProperty(SVGElement.prototype, 'getBBox', original)
-    }
+    const result = await svgBody({ annotation: marked }, { sessions })
+    mounted = result
+    expect(defined(document.querySelector('svg.da-figure text')).classList.contains('da-spot')).toBe(true)
+    expect(defined(document.querySelector('svg.da-figure')).querySelector('.da-spot-wash')).toBeNull()
+    await click(button(document.body, zh.sendToAgent))
+    expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(1)
+    expect(handoff()).toBe(zh.toastSentAgent)
   })
 
   it('lights the selected element mark harder than the others', async () => {

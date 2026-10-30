@@ -21,16 +21,13 @@
  * rule per colour in use, rather than an inline `style` that would overwrite whatever
  * the figure's author wrote.
  *
- * A glow follows an element's edges, and an element that *is* an area has none worth
- * following: lighting the white plot background of a matplotlib figure changes 754 of
- * its 106,000 pixels, which is to say nothing arrives. So a lit element that covers a
- * large share of the figure — a plot face, a background patch, a panel — also carries a
- * wash: its own area covered with the mark's colour, drawn over what it paints
- * ({@link washBox}, {@link paintWash}). Over, because an area's own paint is opaque and
- * a base behind it would be a base nobody sees; and only for areas, because a thin
- * curve's box is a band with nothing to fill, where a film would read as the filled box
- * the glow replaced. A plot face then reads as a tinted face — 红色的底, when that is
- * what the reader asked for — while a legend or a line is still just a glow.
+ * The light is only ever a glow. A filled base was tried for an element that covers a
+ * large share of the figure — the white plot face of a matplotlib figure changes 754 of
+ * its 106,000 pixels under a glow, which is to say the glow arrives alone — and it was
+ * wrong twice over: an element's *box* is a rectangle the figure never drew, so a curve
+ * that spans the plot got a square of colour behind it, and a plot face got repainted
+ * in a colour its author never chose. Whatever the element paints, the glow already
+ * follows it; nothing is filled, nothing is repainted.
  *
  * The same rules are what the *delivered* picture uses: {@link lightMarkup} writes them
  * into the review SVG, so the picture the agent reads is lit exactly the way the
@@ -63,30 +60,8 @@ const STYLE_COLOURS_ATTR = 'data-da-spot-colours'
 /** A colour this module can light with: six hex digits, with or without the hash. */
 const COLOUR = /^#?([0-9a-f]{6})$/i
 
-/** The class the wash under a lit element wears, so it can be found and taken away. */
-const WASH_CLASS = 'da-spot-wash'
-
-/** The SVG namespace, for the wash this module writes into a figure's own document. */
+/** The SVG namespace, for the `style` element this module writes into a figure. */
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
-
-/**
- * How much colour the wash carries.
- *
- * It is a base, not a repaint: the figure's own curves, labels and patches have to stay
- * the colours its author chose, and only the ground under them is tinted. Twelve per
- * cent of a saturated mark colour is unmistakable on white and still leaves black line
- * work at full contrast.
- */
-const WASH_ALPHA = '.12'
-
-/**
- * The share of the figure an element has to cover before it gets a base.
- *
- * A quarter: a plot face covers most of its figure, a legend a tenth of it, a line
- * almost none. The number is what separates "this is a region" from "this is a thing in
- * the picture", and the two are lit differently on purpose.
- */
-const WASH_SHARE = 0.25
 
 /**
  * The pale ring that separates the glow from whatever the element sits on.
@@ -138,30 +113,26 @@ function rgba(key: string, alpha: string): string {
  * The colourless rules come first so they are the fallback, and a coloured rule
  * overrides them by carrying one more attribute in its selector.
  *
- * Each rule carries both halves of the light. The `box-shadow` is the wash for an
- * element that is an HTML box — the panel's own figure is an SVG, but a rendered
- * document's elements are not, and an inset shadow paints its area from behind without
- * taking away any `style` its author wrote. It is inert on an SVG element, where the
- * wash is a `rect` this module inserts instead, so one rule per colour says both.
+ * One declaration per rule: the `filter`. Nothing is filled and nothing is boxed —
+ * a base under the element would be a shape the figure never drew, which is the
+ * bracket this light replaced, drawn heavier.
  *
  * @param colours - the colours to write rules for; unreadable ones are skipped.
  * @returns the stylesheet text.
  */
 export function spotRule(colours: readonly string[]): string {
-  const light = (pale: string, radius: number, colour: string, wash: string): string =>
-    `{filter:${pale} drop-shadow(0 0 ${radius}px ${colour});box-shadow:inset 0 0 0 9999px ${wash}}`
-  const base = `.${SPOT_CLASS}${light(PALE, 3, UNREADABLE, rgba('3f3f46', '.08'))}`
-    + `.${SPOT_CLASS}.${SPOT_SELECTED_CLASS}${light(PALE_SELECTED, 5, UNREADABLE, rgba('3f3f46', '.1'))}`
+  const light = (pale: string, radius: number, colour: string): string =>
+    `{filter:${pale} drop-shadow(0 0 ${radius}px ${colour})}`
+  const base = `.${SPOT_CLASS}${light(PALE, 3, UNREADABLE)}`
+    + `.${SPOT_CLASS}.${SPOT_SELECTED_CLASS}${light(PALE_SELECTED, 5, UNREADABLE)}`
   const keys = colours
     .map(colour => colourKey(colour))
     .filter((key): key is string => key !== undefined)
   const unique = [...new Set(keys)]
   return base
-    + `.${SPOT_CLASS}>.${WASH_CLASS}{fill:${rgba('3f3f46', '.08')};stroke:none;pointer-events:none}`
-    + unique.map(key => `.${SPOT_CLASS}[${COLOUR_ATTR}="${key}"]>.${WASH_CLASS}{fill:${rgba(key, WASH_ALPHA)}}`).join('')
     + unique
-      .map(key => `.${SPOT_CLASS}[${COLOUR_ATTR}="${key}"]${light(PALE, 3, rgba(key, '.95'), rgba(key, WASH_ALPHA))}`
-        + `.${SPOT_CLASS}.${SPOT_SELECTED_CLASS}[${COLOUR_ATTR}="${key}"]${light(PALE_SELECTED, 5, rgba(key, '1'), rgba(key, WASH_ALPHA))}`)
+      .map(key => `.${SPOT_CLASS}[${COLOUR_ATTR}="${key}"]${light(PALE, 3, rgba(key, '.95'))}`
+        + `.${SPOT_CLASS}.${SPOT_SELECTED_CLASS}[${COLOUR_ATTR}="${key}"]${light(PALE_SELECTED, 5, rgba(key, '1'))}`)
       .join('')
 }
 
@@ -177,146 +148,12 @@ export interface LitSpot {
   readonly selected: boolean
 }
 
-/** An element's box, in the coordinate system its own children are drawn in. */
-export interface WashBox {
-  /** The box's left edge, in the element's own user units. */
-  readonly x: number
-  /** The box's top edge, in the element's own user units. */
-  readonly y: number
-  /** The box's width, in the element's own user units. */
-  readonly width: number
-  /** The box's height, in the element's own user units. */
-  readonly height: number
-}
-
-/** An element named the way an anchor names it, the colour to light it in, and its box. */
+/** An element named the way an anchor names it, and the colour to light it in. */
 export interface NamedSpot {
   /** The element's name, as the anchor spells it. */
   readonly selector: string
   /** The mark's colour, as a CSS colour string. */
   readonly colour: string
-  /**
-   * The element's box, measured from the laid-out figure when the caller has one.
-   *
-   * A string of markup has no layout, so the wash can only be written for a spot that
-   * was measured before the figure was handed over. Left out, the spot is still lit —
-   * it just gets the glow without the base.
-   */
-  readonly box?: WashBox
-}
-
-/**
- * Measure an element, so its wash can be drawn.
- *
- * Only an SVG element has a box in this sense: a rendered document's elements are
- * HTML, and their wash is the `box-shadow` in the rule rather than a shape. A detached
- * or hidden element has no layout at all and `getBBox` throws on some engines, which is
- * not a failure to light anything else — hence the guard rather than a throw.
- *
- * The box is in the element's own user units, which is exactly the coordinate system a
- * child of that element is drawn in, so the wash needs no transform of its own.
- *
- * @param element - the element to measure.
- * @returns the box, or `undefined` when nothing can be measured.
- */
-export function measureBox(element: Element): WashBox | undefined {
-  if (element.namespaceURI !== SVG_NAMESPACE) return undefined
-  const drawable = element as SVGGraphicsElement
-  if (typeof drawable.getBBox !== 'function') return undefined
-  let box: DOMRect | undefined
-  try {
-    box = drawable.getBBox()
-  } catch {
-    // No layout to measure: the light still lands, it just has nothing to fill.
-    return undefined
-  }
-  if (!(box.width > 0) || !(box.height > 0)) return undefined
-  return { x: box.x, y: box.y, width: box.width, height: box.height }
-}
-
-/**
- * The base a lit element deserves, if it deserves one.
- *
- * Only an element that covers a good share of the figure is a region, and only a region
- * can be tinted without the tint turning into a box drawn around something else. A
- * legend, a line, a single label: a glow says where it is and a film would say
- * something much louder and less true. The figure is measured in the same user units as
- * the element, so the share is a plain ratio of two boxes.
- *
- * @param element - the element wearing the light.
- * @returns its box when it is a region worth tinting, otherwise `undefined`.
- */
-export function washBox(element: Element): WashBox | undefined {
-  const box = measureBox(element)
-  if (box === undefined) return undefined
-  /* v8 ignore next 2 -- an element inside an SVG always has the root; a lit element is inside one. */
-  const figure = (element as SVGElement).ownerSVGElement
-  if (figure === null) return undefined
-  const whole = measureBox(figure)
-  /* v8 ignore next -- the root of a laid-out SVG always has a box. */
-  if (whole === undefined) return undefined
-  const share = (box.width * box.height) / (whole.width * whole.height)
-  return share >= WASH_SHARE ? box : undefined
-}
-
-/**
- * The wash a lit element already carries, if it carries one.
- *
- * Inside the element for a container, right after it for a leaf — see
- * {@link paintWash} — so both places have to be looked in, or a leaf would collect a
- * new shape on every pointer move.
- * @param element - the element wearing the light.
- * @returns its wash, or `null` when it has none.
- */
-function washIn(element: Element): Element | null {
-  for (const child of element.children) {
-    if (child.classList.contains(WASH_CLASS)) return child
-  }
-  const next = element.nextElementSibling
-  return next !== null && next.classList.contains(WASH_CLASS) ? next : null
-}
-
-/** A measurement as an attribute value: a tenth of a user unit is far below a pixel. */
-function tenth(value: number): string {
-  return (Math.round(value * 10) / 10).toString()
-}
-
-/**
- * Draw the base across a lit element, over what it paints.
- *
- * Over, because a region's own paint is opaque: a base behind a white plot face is a
- * base nobody sees. Inside the element as its last child, which is also what makes the
- * box usable as it stands — a child is drawn in its parent's own user units, and those
- * are the units the box was measured in.
- *
- * A leaf — a bare `<path>`, a `<rect>` that is the whole background — has no children to
- * put anything in, and a shape that is not a container does not render them. Its base
- * goes into the parent instead, straight after it: the same stacking, one level out. A
- * leaf that carries a transform of its own is left alone, because its box is in its own
- * units and the parent's are not, so there is nothing to draw the shape in without
- * working the transform out — and the glow still lands.
- *
- * The caller has already established that there is no base here — the light is asked
- * for on every pointer move, and a second `rect` per move would pile up — and that the
- * box is one worth filling.
- *
- * @param element - the element wearing the light.
- * @param box - its box; nothing is drawn without one.
- */
-function paintWash(element: Element, box: WashBox | undefined): void {
-  if (box === undefined) return
-  const wash = element.ownerDocument.createElementNS(SVG_NAMESPACE, 'rect')
-  wash.setAttribute('class', WASH_CLASS)
-  wash.setAttribute('x', tenth(box.x))
-  wash.setAttribute('y', tenth(box.y))
-  wash.setAttribute('width', tenth(box.width))
-  wash.setAttribute('height', tenth(box.height))
-  if (element.children.length > 0) {
-    element.append(wash)
-    return
-  }
-  if (element.hasAttribute('transform')) return
-  element.after(wash)
 }
 
 /**
@@ -374,7 +211,6 @@ export function moveSpotlight(previous: readonly LitSpot[], next: readonly LitSp
     if (keeps.has(spot.element)) continue
     spot.element.classList.remove(SPOT_CLASS, SPOT_SELECTED_CLASS)
     spot.element.removeAttribute(COLOUR_ATTR)
-    washIn(spot.element)?.remove()
   }
   for (const spot of next) {
     const key = colourKey(spot.colour)
@@ -382,13 +218,8 @@ export function moveSpotlight(previous: readonly LitSpot[], next: readonly LitSp
     spot.element.classList.toggle(SPOT_SELECTED_CLASS, spot.selected)
     if (key === undefined) spot.element.removeAttribute(COLOUR_ATTR)
     else spot.element.setAttribute(COLOUR_ATTR, key)
-    // Measured once, on arrival: an element's box in its own user units does not change
-    // while the pointer moves over it, and asking for it on every move would be a
-    // layout on every frame.
-    if (washIn(spot.element) === null) paintWash(spot.element, washBox(spot.element))
   }
   return next
-
 }
 
 /**
@@ -456,9 +287,6 @@ export function lightMarkup(markup: string, spots: readonly NamedSpot[]): string
     element.classList.add(SPOT_CLASS)
     if (key === undefined) element.removeAttribute(COLOUR_ATTR)
     else element.setAttribute(COLOUR_ATTR, key)
-    // The wash is written from the box the caller measured on the laid-out figure:
-    // parse-time markup has no layout, so there is nothing here to measure.
-    paintWash(element, spot.box)
     lit.push(element)
     colours.push(spot.colour)
   }
@@ -474,6 +302,3 @@ export const SPOTLIGHT_CLASS = SPOT_CLASS
 
 /** The class a lit element wears while it is the selected mark. */
 export const SPOTLIGHT_SELECTED_CLASS = SPOT_SELECTED_CLASS
-
-/** The class of the base a lit element carries underneath what it paints. */
-export const SPOTLIGHT_WASH_CLASS = WASH_CLASS

@@ -259,9 +259,11 @@ describe('review image', () => {
     expect(svg).not.toContain('stroke="#1971c2"')
   })
 
-  it('draws an element mark\'s base from the box it was handed', () => {
-    // The composer works on markup, which has no layout: a box measured from the
-    // laid-out figure is the only way the tint can reach the picture.
+  it('lights an element mark with the glow the panel drew, and nothing else', () => {
+    // The picture is built from markup, which has no layout — and needs none: the light
+    // is a filter on the element, so there is no box to measure and no shape to add.
+    // A base here would be a rectangle the figure never drew, which is what the reader
+    // rejected twice: a square behind a curve, a plot face repainted.
     const layer = {
       kind: 'svg' as const,
       markup: '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">'
@@ -277,14 +279,11 @@ describe('review image', () => {
       points: [[10, 10], [60, 60]],
       anchor: { tag: 'g', selector: '#axes_1', bbox: [10, 10, 60, 60] },
     }
-    const measured = composeReviewSvg(layer, [mark], undefined, new Map([['#axes_1', { x: 4, y: 6, width: 80, height: 90 }]]))
-    expect(measured).toContain('class="da-spot-wash"')
-    expect(measured).toContain('width="80"')
-    // An unmeasured element is still lit — the glow says which one it is — it just has
-    // no base under it.
-    const unmeasured = composeReviewSvg(layer, [mark])
-    expect(unmeasured).toContain('class="da-spot"')
-    expect(unmeasured).not.toContain('class="da-spot-wash"')
+    const svg = composeReviewSvg(layer, [mark])
+    expect(svg).toContain('class="da-spot"')
+    expect(svg).toContain('filter:drop-shadow')
+    expect(svg).not.toContain('da-spot-wash')
+    expect(svg).not.toContain('<rect class')
   })
 
   it('lights nothing when the figure has no element mark on it', () => {

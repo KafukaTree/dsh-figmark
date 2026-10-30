@@ -41,7 +41,7 @@ import {
 } from './host-actions'
 import { AnnotatorHostError, deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
 import { NAMESPACE } from './locales'
-import { elementAt, ensureSpotlight, moveSpotlight, washBox, type LitSpot, type WashBox } from './spotlight'
+import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
 import { PINCH_SETTLE_DELAY_MS, anchoredScroll, clampZoom, wheelZoomFactor } from './zoom'
@@ -129,15 +129,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const surfaceRef = useRef<HTMLDivElement | null>(null)
   const paperRef = useRef<HTMLDivElement | null>(null)
   const figureRef = useRef<HTMLDivElement | null>(null)
-  /**
-   * The element lookup, for the export to measure with.
-   *
-   * `findElement` is declared below the export callback, because it needs the figure's
-   * refs and the export does not; reading it directly there would be a temporal dead
-   * zone in the dependency list. A ref carries it across: the export only ever runs
-   * after a render, by which time the lookup exists.
-   */
-  const findElementRef = useRef<(selector: string) => Element | undefined>(() => undefined)
   /**
    * The elements this body is currently lighting, if any.
    *
@@ -1270,19 +1261,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   ): Promise<Blob> => {
     // The picture carries the numbers as the reader sized them: the agent reads the
     // same number the reader did, at the same place on the same shape.
-    // An element mark's base is drawn from the element's box, and only the laid-out
-    // figure has one: it is measured here, where the figure is still on screen, and
-    // handed to the composer, whose copy of the markup has no layout of its own. Which
-    // elements get one is the same decision the screen makes, from the same boxes.
-    const boxes = new Map<string, WashBox>()
-    for (const mark of sending) {
-      const selector = mark.kind === 'element' ? mark.anchor?.selector : undefined
-      if (selector === undefined) continue
-      const element = findElementRef.current(selector)
-      const box = element === undefined ? undefined : washBox(element)
-      if (box !== undefined) boxes.set(selector, box)
-    }
-    const svg = composeReviewSvg(target, sending, numbering, boxes)
+    const svg = composeReviewSvg(target, sending, numbering)
     const paper = reviewSize(target, sending)
     const exportScale = Math.min(2, Math.max(1, 2400 / Math.max(paper.width, paper.height)))
     return await rasterizePng(svg, paper.width, paper.height, exportScale)
@@ -1769,7 +1748,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     return host === null ? undefined : elementAt({ root: host, selector })
     /* v8 ignore stop */
   }, [isHtml])
-  findElementRef.current = findElement
 
   /**
    * Every element the figure should be lit on right now.
