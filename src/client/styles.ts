@@ -726,23 +726,57 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
   overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
 .da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
-/* The parked card above the composer. The dock stacks entries in a column, so the
-   sheet and its actions are one block; the sheet itself is the transcript's card,
-   stretched to the dock's width instead of to a bubble's. */
-.da-pending{display:flex;flex-direction:column;gap:6px;box-sizing:border-box;width:100%;margin:0 0 8px}
-.da-pending .da-card{width:100%;max-width:none;margin:0}
-.da-pending-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;justify-content:flex-end}
-.da-pending-actions button{appearance:none;font:inherit;font-size:12px;line-height:1;padding:5px 10px;
-  border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35));border-radius:7px;
-  background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));color:inherit;cursor:pointer}
-.da-pending-actions button:hover{background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.16))}
-.da-pending-actions button:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
-/* One class is not enough next to the button base above, whose element selector wins
-   over any single class: the two that are meant to read differently name their parent. */
-.da-pending-actions .da-pending-send{color:var(--da-accent,#176df2);border-color:var(--da-accent,#176df2)}
-.da-pending-actions .da-pending-send[disabled]{opacity:.6;cursor:default}
-.da-pending-actions .da-pending-drop{color:var(--dsw-alias-label-tertiary,inherit)}
-.da-pending-trouble{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-error,#c0392b)}
+/* The parked annotation above the composer, drawn as an attachment chip. The dock
+   stacks its entries full width, so the chip aligns itself left and keeps a chip's
+   width: it is one attachment among the reader's own, not a banner. Nothing about a
+   figure's size or a mark's coordinates appears on the face — those live in the block
+   the model reads and in the hover titles, because a card is for scanning, not for
+   measuring. Every line is one line, truncated: a card that grows to fit a long note
+   is the wall of text this whole view exists to replace. */
+.da-staged{display:flex;flex-direction:column;align-items:flex-start;box-sizing:border-box;width:100%;margin:0 0 8px}
+.da-staged-card{position:relative;box-sizing:border-box;width:min(280px,100%);padding:9px 10px;border-radius:12px;
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
+  background:var(--dsw-alias-bg-layer-2,#f7f7f9);box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.da-staged-open{appearance:none;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:100%;
+  padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.da-staged-open:hover .da-staged-title{color:var(--da-accent,#176df2)}
+.da-staged-open[disabled]{opacity:.65;cursor:default}
+.da-staged-open:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:2px;border-radius:8px}
+.da-staged-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;
+  width:48px;height:48px;overflow:hidden;border-radius:10px;
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
+  background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-tertiary,inherit)}
+.da-staged-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.da-staged-glyph{width:20px;height:20px}
+/* min-width 0 on the column and on the sentence is what makes the ellipsis possible:
+   a flex item refuses to shrink below its content unless it is told it may. */
+.da-staged-text{display:flex;flex-direction:column;gap:2px;min-width:0;padding-right:18px}
+.da-staged-head{display:flex;align-items:center;gap:5px;min-width:0}
+.da-staged-title{font-size:12.5px;font-weight:650;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-staged-count{flex:0 0 auto;padding:0 4px;border-radius:5px;font-size:9px;line-height:14px;
+  background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.06));color:var(--da-accent,#176df2);
+  font-variant-numeric:tabular-nums}
+.da-staged-file{font-size:10px;line-height:1.3;color:var(--dsw-alias-label-tertiary,inherit);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-staged-line{display:flex;align-items:center;gap:4px;min-width:0;font-size:10.5px;line-height:1.35;
+  color:var(--dsw-alias-label-tertiary,inherit)}
+.da-staged-mark-icon{flex:0 0 auto;width:10px;height:10px;color:var(--da-accent,#176df2)}
+.da-staged-shape{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-secondary,inherit)}
+.da-staged-note{flex:0 0 auto;padding:0 3px;border-radius:3px;font-size:8.5px;
+  background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.05))}
+.da-staged-said{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary,inherit)}
+/* The remove control rides in the corner the text is padded away from, so it never
+   covers a word; it is quiet until the card is under the pointer. */
+.da-staged-x{position:absolute;top:6px;right:6px;display:flex;align-items:center;justify-content:center;
+  width:20px;height:20px;padding:0;border:0;border-radius:50%;background:none;
+  font:inherit;font-size:14px;line-height:1;color:var(--dsw-alias-label-tertiary,inherit);
+  opacity:.55;cursor:pointer}
+.da-staged-x:hover{opacity:1;background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.08))}
+.da-staged-x:focus-visible{opacity:1;outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
+.da-staged-x[disabled]{opacity:.3;cursor:default}
+.da-staged-trouble{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-error,#c0392b)}
 /* One figure, one picture. The message that carries an annotation also attaches the
    review picture, and the shell draws that attachment full width above the bubble —
    so the same figure appeared twice, once huge and once as the card's 38px copy. The

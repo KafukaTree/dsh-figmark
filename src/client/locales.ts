@@ -135,9 +135,10 @@ export const zh = {
   cardMore: '还有 {n} 处',
   cardGoal: '目标',
   cardPage: '第 {n} 页',
-  pendingSend: '发送给智能体',
-  pendingReveal: '改成文本',
-  pendingDrop: '不要了',
+  pendingCount: '{n} 处',
+  pendingNote: '批注',
+  pendingRemove: '移除附图标注',
+  pendingSendHint: '点击发送到对话（内容与直接发送一致）',
   pendingFailed: '没能发送：',
 } as const
 
@@ -268,9 +269,10 @@ export const en: Record<keyof typeof zh, string> = {
   cardMore: 'and {n} more',
   cardGoal: 'Goal',
   cardPage: 'page {n}',
-  pendingSend: 'Send to the agent',
-  pendingReveal: 'Turn into text',
-  pendingDrop: 'Discard',
+  pendingCount: '{n} marks',
+  pendingNote: 'Note',
+  pendingRemove: 'Remove the annotation',
+  pendingSendHint: 'Click to send it to the chat (the same message as the direct send)',
   pendingFailed: 'Could not send: ',
 }
 

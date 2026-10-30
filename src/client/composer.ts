@@ -12,9 +12,10 @@
  * thing the reader then had to reconcile by hand. Parked, the picture and the message
  * are one card, and nothing has to be deleted from the draft before typing into it.
  *
- * Writing into the editor is still available — a reader who wants to edit the message
- * itself gets it verbatim — through the same action face, because writing the DOM
- * directly would desynchronise the editor's revision counter.
+ * Nothing writes into the editor on the reader's behalf now: the card carries the
+ * delivery, so the box stays the reader's own. `insertIntoDraft` is kept as the one
+ * safe way to put the block there — through the shell, never the DOM — for a route
+ * that wants the text in the box; no face calls it today.
  * @module dsh-figmark/client/composer
  */
 import type { AnnotationDocument, SummaryLocale } from '../shared/annotation'

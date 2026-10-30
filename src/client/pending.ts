@@ -28,7 +28,7 @@ export interface ParkedAnnotation {
   readonly data: FigmarkAnnotation
   /** The message exactly as the model will read it once the card is sent. */
   readonly raw: string
-  /** The composer to fall back into, when this composition has one. */
+  /** The composer the card was parked for; the dock needs no write into it. */
   readonly conversation: ComposerLike | undefined
   /**
    * Hand the message to the session, the way the direct button does.

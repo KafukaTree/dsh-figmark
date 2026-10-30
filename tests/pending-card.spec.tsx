@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-/** The card the reader sees above the composer, and its three ways out of the way. */
+/**
+ * The attachment card the reader sees above the composer: what it shows, what it
+ * keeps to the hover, and the two things it can do — send, or be taken off.
+ */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AnnotationCard } from '../src/client/annotation-card'
+import { clearThumbs, rememberThumb } from '../src/client/annotation-thumb'
 import { zh } from '../src/client/locales'
 import { clearParked, parkAnnotation, parkedAnnotation, type ParkedAnnotation } from '../src/client/pending'
-import { PendingCard } from '../src/client/pending-card'
+import { PendingCard, shortLabel } from '../src/client/pending-card'
 import { defined, installDom } from './dom'
 
 /** The message the parked card stands for, exactly as it will be delivered. */
@@ -22,23 +25,14 @@ const DATA = {
   marks: [{ label: '箭头1 (10,20) → (30,40)', comment: '往右上拉一点', missing: false, page: undefined }],
 }
 
-/** A composer draft the reveal path can write into. */
-function draftBox(): { readonly conversation: { input: { shell: () => { snapshot: { draft: string }; setDraft: (text: string) => void } } }; readonly written: string[] } {
-  const written: string[] = []
-  const shell = {
-    snapshot: { draft: '先看这张图' },
-    setDraft: (text: string) => { written.push(text) },
-  }
-  return { written, conversation: { input: { shell: () => shell } } }
-}
-
-describe('the card above the composer', () => {
+describe('the attachment card above the composer', () => {
   let root: Root
   let host: HTMLElement
 
   beforeEach(() => {
     installDom()
     clearParked()
+    clearThumbs()
     host = document.createElement('div')
     document.body.appendChild(host)
     root = createRoot(host)
@@ -48,6 +42,7 @@ describe('the card above the composer', () => {
     act(() => { root.unmount() })
     host.remove()
     clearParked()
+    clearThumbs()
   })
 
   /**
@@ -78,9 +73,14 @@ describe('the card above the composer', () => {
     return entry
   }
 
-  /** The button carrying one action, by its class. */
-  function action(name: 'send' | 'reveal' | 'drop'): HTMLButtonElement {
-    return defined(host.querySelector(`.da-pending-${name}`)) as HTMLButtonElement
+  /** The card's one action. */
+  function open(): HTMLButtonElement {
+    return defined(host.querySelector('.da-staged-open')) as HTMLButtonElement
+  }
+
+  /** The remove control. */
+  function remove(): HTMLButtonElement {
+    return defined(host.querySelector('.da-staged-x')) as HTMLButtonElement
   }
 
   /** Wait for one press to settle. */
@@ -90,130 +90,172 @@ describe('the card above the composer', () => {
 
   it('draws nothing until something is parked', () => {
     mount()
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(host.querySelector('.da-staged')).toBeNull()
   })
 
   it('draws nothing for a session that has no id', () => {
     park()
     mount({})
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(host.querySelector('.da-staged')).toBeNull()
   })
 
-  it('draws the sheet, without a second renderer', () => {
+  it('draws an attachment chip: figure, count, file, and the first mark', () => {
     park()
     mount()
-    // The sheet is the transcript's own card, drawn static: the figure, its scope,
-    // and nothing to click, because sending is the actions' job.
-    expect(host.querySelector('.da-card[data-static]')).not.toBeNull()
-    expect(host.querySelector('button.da-card')).toBeNull()
-    expect(host.querySelector('.da-card-scope')?.textContent).toBe('fig.svg · 图面 1440×800，标注 1 处')
-    // Static is only about the click: the lines still show, because this is the last
-    // look the reader gets at the message before it goes.
-    expect(host.querySelectorAll('.da-card-row')).toHaveLength(1)
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe(zh['title'])
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1 处')
+    expect(host.querySelector('.da-staged-file')?.textContent).toBe('fig.svg')
+    expect(host.querySelector('.da-staged-shape')?.textContent).toBe('箭头 1')
+    expect(host.querySelector('.da-staged-said')?.textContent).toBe('往右上拉一点')
   })
 
-  it('offers the three ways out of the way', () => {
-    park({ conversation: draftBox().conversation })
-    mount()
-    expect([action('send').textContent, action('reveal').textContent, action('drop').textContent])
-      .toEqual([zh['pendingSend'], zh['pendingReveal'], zh['pendingDrop']])
-  })
-
-  it('offers no way into the draft when there is no composer to write into', () => {
-    // The dock is drawn for a session whose composer the plugin cannot reach — a
-    // figure opened without the conversation service. Turning the card into text is
-    // then a button that cannot work, so it is not drawn at all.
+  it('keeps the size and the coordinates off the face, in the hover titles', () => {
     park()
     mount()
-    expect(host.querySelector('.da-pending-reveal')).toBeNull()
+    // Neither the scope nor a coordinate pair is on any line the card shows...
+    expect(host.textContent).not.toContain('1440×800')
+    expect(host.textContent).not.toContain('(10,20)')
+    // ...they are one hover away, on the two elements that own them.
+    expect(host.querySelector('.da-staged-card')?.getAttribute('title')).toBe('/w/fig.svg · 图面 1440×800，标注 1 处')
+    expect(host.querySelector('.da-staged-line')?.getAttribute('title'))
+      .toBe('箭头1 (10,20) → (30,40) · 批注：往右上拉一点')
   })
 
-  it('speaks the shell locale when no translator is bound', () => {
+  it('names the send on the card itself, not with a button row', () => {
     park()
-    mount({ sessionId: 's1', localeId: 'en' })
-    expect(action('send').textContent).toBe('Send to the agent')
+    mount()
+    expect(open().getAttribute('title')).toBe(zh['pendingSendHint'])
+    expect(remove().getAttribute('aria-label')).toBe(zh['pendingRemove'])
+  })
+
+  it('counts every mark and shows only the first', () => {
+    park({
+      data: {
+        ...DATA,
+        marks: [
+          { label: '矩形1 (1,2)-(3,4)', comment: '再高一点', missing: false, page: undefined },
+          { label: '椭圆1 (5,6)-(7,8)', comment: '同理', missing: false, page: undefined },
+          { label: '手绘1', comment: '这里要合并', missing: false, page: undefined },
+        ],
+      },
+    })
+    mount()
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('3 处')
+    expect(host.querySelectorAll('.da-staged-line')).toHaveLength(1)
+    expect(host.querySelector('.da-staged-shape')?.textContent).toBe('矩形 1')
+    expect(host.querySelector('.da-staged-said')?.textContent).toBe('再高一点')
+  })
+
+  it('says a mark came without a note rather than showing an empty line', () => {
+    park({
+      data: { ...DATA, marks: [{ label: '矩形1 (1,2)-(3,4)', comment: '', missing: true, page: undefined }] },
+    })
+    mount()
+    expect(host.querySelector('.da-staged-said')?.textContent).toBe(zh['emptyDetail'])
+  })
+
+  it('draws the head of a block that has no marks left', () => {
+    park({ data: { ...DATA, marks: [] } })
+    mount()
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('0 处')
+    expect(host.querySelector('.da-staged-line')).toBeNull()
+  })
+
+  it('names the file alone when the block wrote no scope', () => {
+    park({ data: { ...DATA, scope: '' } })
+    mount()
+    expect(host.querySelector('.da-staged-card')?.getAttribute('title')).toBe('/w/fig.svg')
+  })
+
+  it('shows the figure itself when it has its picture', () => {
+    rememberThumb(RAW, 'data:image/png;base64,AAAA')
+    park()
+    mount()
+    expect(defined(host.querySelector('.da-staged-shot img'))).toBeDefined()
+  })
+
+  it('falls back to the glyph when the picture fails to load', () => {
+    rememberThumb(RAW, 'data:image/png;base64,AAAA')
+    park()
+    mount()
+    const img = defined(host.querySelector('.da-staged-shot img')) as HTMLImageElement
+    act(() => { img.dispatchEvent(new Event('error')) })
+    expect(host.querySelector('.da-staged-shot img')).toBeNull()
+    expect(host.querySelector('.da-staged-glyph')).not.toBeNull()
   })
 
   it('sends the parked delivery once, and the card is spent', async () => {
     const send = vi.fn(async () => {})
     park({ send })
     mount()
-    await press(action('send'))
+    await press(open())
     expect(send).toHaveBeenCalledTimes(1)
     expect(parkedAnnotation('s1')).toBeUndefined()
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(host.querySelector('.da-staged')).toBeNull()
   })
 
-  it('holds the button while the message is on its way', async () => {
+  it('holds the card while the message is on its way', async () => {
     let release: (() => void) | undefined
-    const send = (): Promise<void> => new Promise<void>((resolve) => { release = resolve })
+    const send = vi.fn((): Promise<void> => new Promise<void>((resolve) => { release = resolve }))
     park({ send })
     mount()
-    await act(async () => { action('send').click() })
-    expect(action('send').disabled).toBe(true)
+    // Two presses in one tick, before the disabled state has been rendered.
+    await act(async () => { open().click(); open().click() })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(open().disabled).toBe(true)
+    expect(remove().disabled).toBe(true)
     await act(async () => { defined(release)() })
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(host.querySelector('.da-staged')).toBeNull()
   })
 
   it('says why a send failed, and keeps the card', async () => {
     park({ send: async () => { throw new Error('the sessions service is unavailable') } })
     mount()
-    await press(action('send'))
-    expect(host.querySelector('.da-pending-trouble')?.textContent)
+    await press(open())
+    expect(host.querySelector('.da-staged-trouble')?.textContent)
       .toBe(`${zh['pendingFailed']}the sessions service is unavailable`)
     // The annotation is not lost to a failed send: the reader can try again.
     expect(parkedAnnotation('s1')).toBeDefined()
-    expect(action('send').disabled).toBe(false)
+    expect(open().disabled).toBe(false)
   })
 
   it('shows whatever a thrown value says, without pretending it was an error', async () => {
     park({ send: () => Promise.reject('boom') })
     mount()
-    await press(action('send'))
-    expect(host.querySelector('.da-pending-trouble')?.textContent).toBe(`${zh['pendingFailed']}boom`)
+    await press(open())
+    expect(host.querySelector('.da-staged-trouble')?.textContent).toBe(`${zh['pendingFailed']}boom`)
   })
 
-  it('turns the card into editable text in the draft', async () => {
-    const draft = draftBox()
-    park({ conversation: draft.conversation })
-    mount()
-    await press(action('reveal'))
-    expect(draft.written).toEqual([`先看这张图\n\n${RAW}`])
-    expect(host.querySelector('.da-pending')).toBeNull()
-  })
-
-  it('says why the draft refused the text, and keeps the card', async () => {
-    const conversation = {
-      input: { shell: () => { throw new Error('conversation.input: session "s1" resolved no binding') } },
-    }
-    park({ conversation })
-    mount()
-    await press(action('reveal'))
-    expect(host.querySelector('.da-pending-trouble')?.textContent).toBe('the session has no composer to write into')
-    expect(parkedAnnotation('s1')).toBeDefined()
-  })
-
-  it('drops the card without sending anything', async () => {
+  it('takes the card off without sending anything', async () => {
     const send = vi.fn(async () => {})
     park({ send })
     mount()
-    await press(action('drop'))
+    await press(remove())
     expect(send).not.toHaveBeenCalled()
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(parkedAnnotation('s1')).toBeUndefined()
+    expect(host.querySelector('.da-staged')).toBeNull()
+  })
+
+  it('speaks the shell locale when no translator is bound', () => {
+    park()
+    mount({ sessionId: 's1', localeId: 'en' })
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe('Figure annotations')
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1 marks')
+    expect(remove().getAttribute('aria-label')).toBe('Remove the annotation')
   })
 
   it('draws a card parked while the dock is already open', () => {
     mount()
-    expect(host.querySelector('.da-pending')).toBeNull()
+    expect(host.querySelector('.da-staged')).toBeNull()
     act(() => { park() })
-    expect(host.querySelector('.da-pending')).not.toBeNull()
+    expect(host.querySelector('.da-staged')).not.toBeNull()
   })
 
   it('replaces a card that was parked over', () => {
     park()
     mount()
     act(() => { park({ data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') }) })
-    expect(host.querySelector('.da-card-scope')?.textContent).toContain('second.svg')
+    expect(host.querySelector('.da-staged-file')?.textContent).toBe('second.svg')
   })
 
   it('injects its stylesheet into the document it draws in', () => {
@@ -221,13 +263,20 @@ describe('the card above the composer', () => {
     mount()
     expect(document.head.querySelector('style[data-dsh-figmark]')).not.toBeNull()
   })
+})
 
-  it('is the same sheet the transcript draws', () => {
-    // Not a copy of the card's markup, and not a renderer that merely looks alike.
-    park()
-    act(() => {
-      root.render(<AnnotationCard node={{ data: DATA }} raw={RAW} interactive={false} />)
-    })
-    expect(host.querySelectorAll('.da-card')).toHaveLength(1)
+describe('the short name of a mark', () => {
+  it('keeps the kind and the number, and drops the coordinates', () => {
+    expect(shortLabel('箭头1 (10,20) → (30,40)')).toBe('箭头 1')
+    expect(shortLabel('矩形1 (1,2)-(3,4)')).toBe('矩形 1')
+    expect(shortLabel('box 1 (1,2)-(3,4)')).toBe('box 1')
+  })
+
+  it('drops the words a point mark puts before its coordinates', () => {
+    expect(shortLabel('单点1 位于 (5,6)')).toBe('单点 1')
+  })
+
+  it('leaves a name with no coordinates and no number alone', () => {
+    expect(shortLabel('手绘')).toBe('手绘')
   })
 })
