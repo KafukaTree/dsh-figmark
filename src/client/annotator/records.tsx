@@ -10,7 +10,7 @@
  * @module dsh-figmark/client/annotator/records
  */
 import type { ReactNode } from 'react'
-import { MAX_SUMMARY_CHARS, markOrdinals, type AnnotationMark } from '../../shared/annotation'
+import { MAX_SUMMARY_CHARS, markRows, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
 import { BoxIcon, GoalIcon, ListIcon, ToolIcon } from './icons'
 import { anchorWords } from '../../shared/mark-summary'
@@ -123,10 +123,13 @@ export interface MarkListProps {
  */
 export function MarkList(props: MarkListProps): ReactNode {
   const { t } = props
-  // The row's number is the number the picture draws on that mark: the mark's ordinal
-  // among marks of its kind, not its position in this list. A list that counted rows
-  // was the third reader numbering the same marks a third way.
-  const numbering = markOrdinals(props.marks)
+  // The row's number is the mark's number in its own kind, never its position in this
+  // list: the message names marks that way (椭圆2), so a list counting rows would be a
+  // third reader numbering the same marks a third way. Rows are gathered by kind for
+  // that reason — the count restarts once per run, not once per change of hand — and a
+  // kind that has a single mark carries no number, because a number with nothing to
+  // tell apart is a number the reader has to skip.
+  const rows = markRows(props.marks)
   return (
     <div className="da-float da-float-record da-float-list" role="group" aria-label={t('marks')}
       style={recordStyle(props.at)}>
@@ -152,7 +155,7 @@ export function MarkList(props: MarkListProps): ReactNode {
             <div className="da-empty-title">{t('noMarks')}</div>
             <div className="da-empty-hint">{t('noMarksHint')}</div>
           </div>
-        ) : props.marks.map(mark => (
+        ) : rows.map(({ mark, ordinal }) => (
           <div className="da-mark" key={mark.id} data-selected={mark.id === props.selectedId}
             onClick={() => { props.onReveal(mark) }}>
             {/* Two light strokes, one colour: the number and the shape are
@@ -161,13 +164,11 @@ export function MarkList(props: MarkListProps): ReactNode {
                 of fill. The list is a list; a block of colour on every row is
                 a wall of colour that competes with the figure the reader came
                 here to look at. */}
-            {/* The number is not a legend: the row already says which mark
-                it is by being the nth row, and a differently coloured numeral
-                per row turns an index into something the reader has to
-                decode. It is neutral; the shape beside it keeps the mark's
-                colour, which is the one thing colour is actually carrying
-                here — which of the four tools drew this. */}
-            <span className="da-mark-n">{numbering.get(mark.id)}</span>
+            {/* The number is not a legend: the shape beside it says which tool drew
+                this, and a colour per numeral turned an index into something the
+                reader had to decode. It is neutral, and it keeps its column even
+                when the row has no number, so the six shapes stay in one line. */}
+            <span className="da-mark-n">{ordinal}</span>
             <span className="da-mark-glyph" style={{ color: mark.color }}
               title={t('markKindLabel', { kind: t(TOOL_COPY[mark.kind]) })}>
               {ToolIcon(mark.kind)}

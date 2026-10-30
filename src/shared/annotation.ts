@@ -284,6 +284,58 @@ export function markOrdinals(marks: readonly AnnotationMark[]): ReadonlyMap<stri
 }
 
 /**
+ * The kinds in the order the rail hands them out, which is the order the list reads
+ * in.
+ *
+ * The list is gathered by kind rather than left in the order the marks were drawn,
+ * because its numbers are per kind: drawn in an evening of circling and dropping
+ * pins, a list of six read 1, 2, 1, 1, 2, 3 — the count kept starting over wherever
+ * the hand happened to change tool. Gathered, the same six read 1, 2, 3, 1, 1, 2,
+ * and each run of numbers belongs to one shape.
+ */
+export const MARK_KIND_ORDER: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'point', 'element']
+
+/** One row of the mark list: a mark, and the number its row prints for it. */
+export interface MarkRow {
+  /** The mark this row stands for. */
+  readonly mark: AnnotationMark
+  /**
+   * The mark's ordinal among its kind, or `undefined` when it is the only mark of
+   * that kind.
+   *
+   * A number exists to tell two things apart. On a row with no twin it told the
+   * reader nothing, and a run of rows reads as a run only when a lone kind's row
+   * carries no number at all to interrupt it.
+   */
+  readonly ordinal: number | undefined
+}
+
+/**
+ * The list's rows: every mark, gathered by kind, carrying the number its row prints.
+ *
+ * @param marks - the marks in the order the document reads them.
+ * @returns the rows in the order the list shows them.
+ */
+export function markRows(marks: readonly AnnotationMark[]): readonly MarkRow[] {
+  const numbering = markOrdinals(marks)
+  const groups = new Map<MarkKind, AnnotationMark[]>()
+  for (const mark of marks) {
+    const group = groups.get(mark.kind)
+    if (group === undefined) groups.set(mark.kind, [mark])
+    else group.push(mark)
+  }
+  const rows: MarkRow[] = []
+  for (const kind of MARK_KIND_ORDER) {
+    const group = groups.get(kind)
+    if (group === undefined) continue
+    for (const mark of group) {
+      rows.push({ mark, ordinal: group.length > 1 ? numbering.get(mark.id) : undefined })
+    }
+  }
+  return rows
+}
+
+/**
  * How much of the surface an element has to cover to be the paper rather than a thing
  * on it.
  *

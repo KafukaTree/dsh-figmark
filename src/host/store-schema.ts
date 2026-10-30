@@ -16,6 +16,7 @@
 import { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS } from './store-limits'
 import {
   ANNOTATION_VERSION,
+  MARK_KIND_ORDER,
   type AnnotationDocument,
   type AnnotationMark,
   type FigureBox,
@@ -49,9 +50,6 @@ function readNote(value: unknown, what: string, max: number): string | undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
 }
-
-/** Kinds a mark may declare. */
-const MARK_KINDS: readonly MarkKind[] = ['arrow', 'rect', 'ellipse', 'pen', 'point', 'element']
 
 /**
  * Whether a value is a finite figure coordinate pair.
@@ -180,7 +178,7 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
   if (typeof value !== 'object' || value === null) throw new Error(`annotation mark ${index} must be an object`)
   const raw = value as Record<string, unknown>
   const kind = raw['kind']
-  if (typeof kind !== 'string' || !(MARK_KINDS as readonly string[]).includes(kind)) {
+  if (typeof kind !== 'string' || !(MARK_KIND_ORDER as readonly string[]).includes(kind)) {
     throw new Error(`annotation mark ${index} has unknown kind ${JSON.stringify(kind)}`)
   }
   if (typeof raw['id'] !== 'string' || raw['id'] === '') throw new Error(`annotation mark ${index} needs an id`)

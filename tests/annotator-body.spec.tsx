@@ -926,9 +926,10 @@ describe('editing marks', () => {
     })
     await openList(document.body)
     // Both drawn as light strokes in the mark's colour: the number says which, the
-    // glyph says what shape, and neither is a block of fill on the row.
+    // glyph says what shape, and neither is a block of fill on the row. A lone pen
+    // has no twin to be told from, so its row prints no number.
     const row = defined(document.querySelector('.da-mark'))
-    expect(defined(row.querySelector('.da-mark-n')).textContent).toBe('1')
+    expect(defined(row.querySelector('.da-mark-n')).textContent).toBe('')
     const glyph = defined(document.querySelector('.da-mark-glyph'))
     expect(glyph.getAttribute('title')).toContain(zh.toolPen)
     expect(glyph.querySelector('svg')).not.toBeNull()
@@ -3589,7 +3590,13 @@ describe('a row of the list as the way to the mark', () => {
   it('keeps the number, the shape and the delete on one row', async () => {
     // The row is a card, and everything on it is about one mark. Deleting from a row
     // that no longer had this mark's number on it would be two marks in one line.
-    mounted = await svgBody({ annotation: saved })
+    // Two arrows, because a number only appears where there is something to be second.
+    mounted = await svgBody({
+      annotation: {
+        ...saved,
+        marks: [...saved.marks, { id: 'm2', kind: 'arrow', color: '#1971c2', points: [[20, 20], [60, 40]] }],
+      },
+    })
     await openList(document.body)
     const row = defined(document.querySelector('.da-mark'))
     expect(row.querySelector('.da-mark-n')?.textContent).toBe('1')

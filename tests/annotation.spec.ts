@@ -14,6 +14,7 @@ import {
   annotatedPages,
   clampWeight,
   markOrdinals,
+  markRows,
   isWeight,
   pageFileSuffix,
 } from '../src/shared/annotation'
@@ -665,6 +666,28 @@ describe('model-facing summary', () => {
       .map(line => line.slice(0, line.indexOf(' ')))
     expect(heads).toEqual(['箭头1', '矩形1', '箭头2', '单点1', '矩形2'])
     expect([...markOrdinals(numbered).values()]).toEqual([1, 1, 2, 1, 2])
+  })
+
+  it('gathers the list by kind, and numbers a row only when it has a twin', () => {
+    // Drawn by hand, the same six marks read 1, 2, 1, 1, 2, 3 down the list: the count
+    // restarted wherever the hand changed tool, and the reader met a "1" in the middle
+    // of the list with nothing there to be first of. Gathered, each run of numbers
+    // belongs to one shape — and a shape that appears once needs no number at all.
+    const scattered: AnnotationMark[] = [
+      { id: 'e1', kind: 'ellipse', color: '#000', points: [[1, 1], [2, 2]] },
+      { id: 'e2', kind: 'ellipse', color: '#000', points: [[3, 3], [4, 4]] },
+      { id: 'n1', kind: 'pen', color: '#000', points: [[5, 5], [6, 6]] },
+      { id: 'p1', kind: 'point', color: '#000', points: [[7, 7]] },
+      { id: 'p2', kind: 'point', color: '#000', points: [[8, 8]] },
+      { id: 'e3', kind: 'ellipse', color: '#000', points: [[9, 9], [10, 10]] },
+    ]
+    const rows = markRows(scattered)
+    expect(rows.map(row => row.mark.id)).toEqual(['e1', 'e2', 'e3', 'n1', 'p1', 'p2'])
+    expect(rows.map(row => row.ordinal)).toEqual([1, 2, 3, undefined, 1, 2])
+    // A file with nothing in it is a list with nothing to gather.
+    expect(markRows([])).toEqual([])
+    // A kind that was never drawn is simply not a run in the list.
+    expect(markRows([defined(scattered[2])]).map(row => row.mark.id)).toEqual(['n1'])
   })
 
   it('writes a box by its corners, whichever way it was dragged', () => {
