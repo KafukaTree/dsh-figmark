@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS, type AnnotationDocument, type AnnotationMark, type FigurePoint, type MarkKind } from '../src/shared/annotation'
+import { MAX_DETAIL_CHARS, MAX_SUMMARY_CHARS, type AnnotationDocument, type AnnotationMark, type FigurePoint, type MarkKind, type SummaryLocale } from '../src/shared/annotation'
 import {
   ANNOTATION_VERSION,
   ANNOTATION_VERSION_V2,
@@ -807,22 +807,26 @@ describe('model-facing summary', () => {
       detail: '这条线要加粗',
       anchor: { tag: 'path', bbox: [10, 20, 50, 70], id: 'line2d_10' },
     }
-    // The box locates the element on the picture; the anchor would say which one it is,
-    // and an id minted by the exporter is not a name the source reader can use — so
-    // only its words travel, and this anchor has none.
+    // The box locates the element on the picture and the anchor names it. That name is
+    // the element's own opening tag: the id is the only string this mark shares with the
+    // source, so a reader who is asked "which line?" has something to search for.
     expect(describeMark(mark, 1, 'zh'))
-      .toBe('元素1 (10,20)-(60,90)，批注：这条线要加粗')
+      .toBe('元素1 (10,20)-(60,90)（<path id="line2d_10">），批注：这条线要加粗')
     expect(describeMark(mark, 1, 'en')).toContain('element 1 (10,20)-(60,90)')
+    expect(describeMark(mark, 1, 'en')).toContain('(<path id="line2d_10">)')
     // What the anchor does keep is a human name: a title or the element's own words.
     const named: AnnotationMark = {
       ...mark,
       anchor: { tag: 'path', bbox: [10, 20, 50, 70], id: 'line2d_10', text: 'tau=1.0' },
     }
-    expect(describeMark(named, 1, 'zh')).toContain('（元素文字「tau=1.0」）')
-    // A half-recorded selection still says what it is, and says no box rather than
-    // inventing one from the single corner it has.
+    // The words and the tag travel together: the words say what the element is, the
+    // tag says where to find it.
+    expect(describeMark(named, 1, 'zh'))
+      .toContain('（元素文字「tau=1.0」，<path id="line2d_10">）')
+    // A half-recorded selection still says what it is — the tag, which needs no box —
+    // and says no box rather than inventing one from the single corner it has.
     const one: AnnotationMark = { ...mark, points: [[10, 20]] }
-    expect(describeMark(one, 1, 'zh')).toBe('元素1，批注：这条线要加粗')
+    expect(describeMark(one, 1, 'zh')).toBe('元素1（<path id="line2d_10">），批注：这条线要加粗')
   })
 
   it('keeps an anchor to the names that still say something', () => {
@@ -912,6 +916,34 @@ describe('model-facing summary', () => {
     // And a tag on its own is not a name either.
     expect(withAnchor({ tag: 'g', bbox: [0, 0, 1, 1] })).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
     expect(withAnchor(undefined)).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
+  })
+
+  it('names an element mark by the tag the source shows, id and all', () => {
+    const element = (anchor: AnnotationMark['anchor'], locale: SummaryLocale = 'zh'): string => describeMark(
+      {
+        id: 'a', kind: 'element', color: '#000', points: [[0, 0], [1, 1]], detail: '这条线要加粗',
+        ...(anchor === undefined ? {} : { anchor }),
+      },
+      1,
+      locale,
+    )
+    // An element mark *is* the element, so an id-only selector is its name rather than a
+    // word only the exporter knows: the opening tag is what the source shows.
+    expect(element({ tag: 'g', id: 'patch_2', bbox: [0, 0, 1, 1], selector: '#patch_2' }))
+      .toBe('元素1 (0,0)-(1,1)（<g id="patch_2">），批注：这条线要加粗')
+    // An anchor read from markup carries no selector; the tag names it just the same.
+    expect(element({ tag: 'g', id: 'patch_2', bbox: [0, 0, 1, 1] })).toContain('（<g id="patch_2">）')
+    // An element that declares no id still gets its tag, so no line is ever bare.
+    expect(element({ tag: 'text', bbox: [0, 0, 1, 1] })).toContain('（<text>）')
+    // The words come first, then the locator, as on a shape's line.
+    expect(element({ tag: 'g', id: 'axes_1', title: '102', bbox: [0, 0, 1, 1], selector: '#axes_1' }))
+      .toContain('（元素标题「102」，<g id="axes_1">）')
+    // A real path locates better, so the tag steps aside for it.
+    expect(element({ tag: 'g', id: 'patch_2', bbox: [0, 0, 1, 1], selector: 'svg > g:nth-of-type(2)' }))
+      .toContain('（选择器 svg > g:nth-of-type(2)）')
+    // English keeps the markup verbatim — it is code, not prose.
+    expect(element({ tag: 'g', id: 'patch_2', bbox: [0, 0, 1, 1], selector: '#patch_2' }, 'en'))
+      .toContain('(<g id="patch_2">)')
   })
 })
 

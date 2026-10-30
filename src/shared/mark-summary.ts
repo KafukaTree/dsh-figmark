@@ -282,12 +282,29 @@ function namesOnlyItsId(selector: string): boolean {
 }
 
 /**
+ * The element's own opening tag, which is the one string the source shares with the mark.
+ *
+ * An id on its own is an exporter's private word, which is why a shape never prints one.
+ * An `element` mark is the exception: there the element is the target, and on a figure
+ * whose elements carry nothing else — matplotlib names every group and nothing else —
+ * the id is all the source has to offer. Spelled as the tag it opens, `<g id="patch_2">`,
+ * so the tag arrives with the id and neither has to be read off the other.
+ * @param anchor - the element the mark landed on.
+ * @returns the opening tag, carrying the id when the element declares one.
+ */
+function openingTag(anchor: MarkAnchor): string {
+  const id = anchor.id === undefined || anchor.id === '' ? '' : ` id="${anchor.id}"`
+  return `<${anchor.tag}${id}>`
+}
+
+/**
  * Describe what a mark points at, when the figure exposed an element.
  *
  * Only the names that still say something are kept: a title, a short element text, or a
- * selector that locates the element in the source. Ids are never printed, element text
- * long enough to be a paragraph is not a name, and an anchor that can offer nothing but
- * a tag name is dropped whole — `（<g>）` located nothing.
+ * locator into the source. Element text long enough to be a paragraph is not a name, and
+ * a shape whose anchor offers nothing but a tag name is dropped whole — `（<g>）` located
+ * nothing. An `element` mark keeps its locator either way, because there the anchor is
+ * the mark: a path when the anchor carries one, otherwise the element's opening tag.
  * @param mark - the mark whose anchor is described.
  * @param locale - language of the surrounding message.
  * @param figure - the figure's size, when the document knows it.
@@ -304,6 +321,7 @@ function describeAnchor(mark: AnnotationMark, locale: SummaryLocale, figure?: An
   const text = anchor.text ?? ''
   if (text !== '' && text.length <= NAMEABLE_TEXT) parts.push(zh ? `元素文字「${text}」` : `element text "${text}"`)
   if (selector !== '' && !namesOnlyItsId(selector)) parts.push(zh ? `选择器 ${selector}` : `selector ${selector}`)
+  else if (mark.kind === 'element') parts.push(openingTag(anchor))
   if (parts.length === 0) return ''
   // The parentheses follow the message's own language: an English message dotted with
   // full-width brackets reads like a translation that lost its last pass.
