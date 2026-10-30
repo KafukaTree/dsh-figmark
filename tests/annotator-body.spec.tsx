@@ -853,10 +853,9 @@ describe('editing marks', () => {
     // A row is numbered in the mark's own colour, so the list and the picture
     // are matched by one glance.
     // The number is neutral — an index is not a legend — and the shape carries the
-    // mark's colour instead.
-    const numbers = [...document.querySelectorAll('.da-mark-n')]
-    expect(numbers).toHaveLength(2)
-    expect((defined(numbers[1]) as HTMLElement).style.color).toBe('')
+    // mark's colour instead. One box and one pin are each the only one of their
+    // kind, so neither row prints a number at all.
+    expect(document.querySelectorAll('.da-mark-num')).toHaveLength(0)
     const glyphs = [...document.querySelectorAll('.da-mark-glyph')]
     expect((defined(glyphs[1]) as HTMLElement).style.color).toBe('rgb(224, 49, 49)')
   })
@@ -929,7 +928,7 @@ describe('editing marks', () => {
     // glyph says what shape, and neither is a block of fill on the row. A lone pen
     // has no twin to be told from, so its row prints no number.
     const row = defined(document.querySelector('.da-mark'))
-    expect(defined(row.querySelector('.da-mark-n')).textContent).toBe('')
+    expect(row.querySelector('.da-mark-num')).toBeNull()
     const glyph = defined(document.querySelector('.da-mark-glyph'))
     expect(glyph.getAttribute('title')).toContain(zh.toolPen)
     expect(glyph.querySelector('svg')).not.toBeNull()
@@ -3599,8 +3598,11 @@ describe('a row of the list as the way to the mark', () => {
     })
     await openList(document.body)
     const row = defined(document.querySelector('.da-mark'))
-    expect(row.querySelector('.da-mark-n')?.textContent).toBe('1')
-    expect(row.querySelector('.da-mark-glyph svg')).not.toBeNull()
+    // The number rides the shape's bottom-right corner rather than leading the row:
+    // the shape is what the reader recognizes, so it is what comes first.
+    const glyph = defined(row.querySelector('.da-mark-glyph'))
+    expect(defined(glyph.querySelector('.da-mark-num')).textContent).toBe('1')
+    expect(glyph.querySelector('svg')).not.toBeNull()
     // A plain figure has no pages, so a row of its list carries no page at all —
     // the page belongs to the document, not to the mark.
     expect(row.querySelector('.da-mark-page')).toBeNull()

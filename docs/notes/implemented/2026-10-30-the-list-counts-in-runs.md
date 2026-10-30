@@ -30,8 +30,21 @@ change of hand, and each run belongs to one glyph.
 
 The suppression is the half that makes the runs legible: a lone pen is not "the first
 pen", it is the only one, and a `1` there interrupted a run of numbers to say nothing.
-The number's column stays reserved so the six glyphs remain in one line; an empty cell
-is quieter than a ragged column.
+
+**The shape leads the row and the number rides its corner.** With the run numbering in
+place the reader looked at the list again and said:
+
+> 这种其实可以把那个图标放在前面的，然后数字放在图标的右下角，变小一点，这样会好看很多吧，然后图标靠左对齐
+
+A 14px column of right-aligned 11px digits in front of every row was still reading as a
+line number — the eye takes a digit at the start of a line as an index, before it reads
+the sentence. So the glyph moved to the row's left edge, the digit became an 8px
+footnote pinned to the glyph's bottom-right corner (`right:-5px`, `bottom:-3px`,
+`position:absolute` over a `position:relative` glyph), and it is grey against the mark's
+colour — the shape says what, the number only says which. The digit sits just outside
+the glyph's ink rather than on top of it, so it needs no halo to be read over a circle,
+a pin or a pen stroke. The rows' gutter went from 7px to 9px to hold a two-digit number
+before it would touch the sentence.
 
 Rows are gathered for display only — the document keeps the drawn order, which is what
 the message and the picture's own numbering walk. `markRows` therefore returns `{ mark,
@@ -50,3 +63,11 @@ ordinal }` pairs rather than reordering the document.
 - **Keep the drawn order and print the kind's name beside each number (「椭圆1」).** The
   number stops being a bare digit, but the row grows a word that repeats the glyph, and
   the sequence still bounces 1, 2, 1, 1, 2, 3 down the column.
+- **Keep a numbered column to the left of the glyph.** This is what the first build did,
+  and it is what the reader marked up: a digit in front of a line is an index by
+  convention, and reserving its column made every row start with a number that half the
+  rows did not have.
+- **Put the number inside the glyph's centre or above it as a superscript.** The glyphs
+  are 12px of stroke; a digit inside the circle or the pin's head lands on ink and needs
+  a halo punched out of it. The corner is the one part of the box the drawings leave
+  empty.

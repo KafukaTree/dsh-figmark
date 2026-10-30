@@ -164,14 +164,16 @@ export function MarkList(props: MarkListProps): ReactNode {
                 of fill. The list is a list; a block of colour on every row is
                 a wall of colour that competes with the figure the reader came
                 here to look at. */}
-            {/* The number is not a legend: the shape beside it says which tool drew
-                this, and a colour per numeral turned an index into something the
-                reader had to decode. It is neutral, and it keeps its column even
-                when the row has no number, so the six shapes stay in one line. */}
-            <span className="da-mark-n">{ordinal}</span>
+            {/* The shape leads the row and the number rides its corner: the shape is
+                what the reader recognizes, and a column of digits in front of it read
+                as row numbers before it read as the marks' own names. The digit is
+                neutral — a coloured numeral per row turns an index into something the
+                reader has to decode — and it is small because the shape is the fact
+                and the number only says which one of them. */}
             <span className="da-mark-glyph" style={{ color: mark.color }}
               title={t('markKindLabel', { kind: t(TOOL_COPY[mark.kind]) })}>
               {ToolIcon(mark.kind)}
+              {ordinal === undefined ? null : <span className="da-mark-num">{ordinal}</span>}
             </span>
             <button type="button" className="da-mark-text"
               onClick={(event) => { event.stopPropagation(); props.onReveal(mark) }}>
