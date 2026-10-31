@@ -3223,10 +3223,12 @@ describe('a rendered document', () => {
     expect(overlay.style.transform).toBe('')
   })
 
-  it('lights an element mark inside the frame, with a rule the document can see', async () => {
-    // A rendered document is its own document: the panel's stylesheet cannot reach into
-    // it, so the rule has to be written there. The mark's light is the only sign the
-    // mark exists, since an element mark draws nothing on the overlay.
+  it('draws the box on an element mark and leaves the page itself alone', async () => {
+    // A rendered document keeps the panel's stylesheet out, and nothing is written into
+    // it: an element there is a block of the page — on a slide, a whole paragraph — and
+    // a light on it reads as a haze over the reader's own type rather than as a mark.
+    // The box on the overlay says where the mark is, and it is the only thing that says
+    // it, so it has to be there.
     const elementMarked: AnnotationDocument = {
       ...savedHtml,
       marks: [{
@@ -3238,11 +3240,9 @@ describe('a rendered document', () => {
     mounted = result
     await reportLayout(WINDOW.width, 1843)
     const frameDocument = defined(frame().contentDocument)
-    expect(defined(frameDocument.querySelector('#lead')).classList.contains('da-spot')).toBe(true)
-    // One rule, written once, in the document the elements are in.
-    const rules = [...frameDocument.querySelectorAll('style[data-da-spot]')]
-    expect(rules).toHaveLength(1)
-    expect(rules[0]?.textContent).toContain('drop-shadow')
+    expect(defined(frameDocument.querySelector('#lead')).classList.contains('da-spot')).toBe(false)
+    // Not even the rule: a document with nothing to light has no reason to carry one.
+    expect(frameDocument.querySelector('style[data-da-spot]')).toBeNull()
     // The overlay carries the box on every mark, and the name of the mark the reader
     // picked out: a rendered document's rectangle is the element's own place on the
     // page, not a claim about the picture, so it can stay while the name waits.
@@ -3507,6 +3507,21 @@ describe('a rendered document', () => {
       expect(result.calls.filter(call => call.init?.method === 'POST' && !call.url.endsWith('/live'))).toHaveLength(0)
       expect(parts[0]?.text).toContain('http://localhost:5173/')
       expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
+    })
+
+    it('picks the mark already on the element the page named', async () => {
+      // The page reports every click on the element it is armed for, and the reader
+      // pressing a heading four times means "that one", not "four comments here". The
+      // three presses after the first land on the mark that is already there.
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await report({ kind: 'pick', ...PICKED })
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
     })
 
     it('records the element the page reported, and not its class', async () => {

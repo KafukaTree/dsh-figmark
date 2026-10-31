@@ -592,6 +592,32 @@ describe('picking an element', () => {
     expect(onSelect).toHaveBeenCalledWith(defined(added[0]).id)
   })
 
+  it('picks out the mark already on the element instead of marking it again', () => {
+    // The element tool has no "not this one": pressing the same heading twice used to
+    // leave two identical marks on it, the second saying nothing the first did not.
+    const existing: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor,
+    }
+    const onAdd = vi.fn()
+    const onDrawn = vi.fn()
+    const onSelect = vi.fn()
+    const surface = mount({
+      tool: 'element',
+      anchoring: true,
+      marks: [existing],
+      anchorAtFigurePoint: () => anchor,
+      onAdd,
+      onDrawn,
+      onSelect,
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(onAdd).not.toHaveBeenCalled()
+    // Nothing was drawn, so there is no new note box to open and nothing to focus.
+    expect(onDrawn).not.toHaveBeenCalled()
+    expect(onSelect).toHaveBeenCalledWith('e1')
+  })
+
   it('commits nothing when the pointer names no element', () => {
     const surface = picking({ anchor: undefined })
     mounted = surface

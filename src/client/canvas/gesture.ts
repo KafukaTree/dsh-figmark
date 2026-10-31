@@ -20,6 +20,7 @@ import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annot
 import { WEIGHT_DEFAULT, describesARegion } from '../../shared/annotation'
 import { endAt, gripAt, type HandleId } from '../handles'
 import { controlSizes, type ControlSizes } from './controls'
+import { elementMarkOn } from '../annotator/mark-edits'
 import { controlBox, elementNamedBy, sameAnchor } from './hit'
 import {
   appendPenSample, draftAnchorPoint, draftMark, draftWorthCommitting, elementMark, pointMark, stretchDraft,
@@ -276,6 +277,15 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       const picked = anchorFor(event, point)
       if (picked === undefined) return
       const mark = elementMark(picked, color)
+      // An element that already carries a mark is picked, not marked again: the press
+      // lands on the mark that is there, which is the one the reader wanted to comment
+      // on, and nothing new appears for a fourth or fifth time.
+      const already = elementMarkOn(props.marks, mark)
+      if (already !== undefined) {
+        props.onSelect(already.id)
+        settled.current = true
+        return
+      }
       props.onAdd(mark)
       props.onSelect(mark.id)
       props.onDrawn?.(mark.id)

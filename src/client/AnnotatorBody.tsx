@@ -82,7 +82,8 @@ import {
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
-  appendedMarks, detailedMarks, loadedMarks, movedMarks, patchedMarks, patchChangesNothing, removedMarks,
+  appendedMarks, detailedMarks, elementMarkOn, loadedMarks, movedMarks, patchedMarks,
+  patchChangesNothing, removedMarks,
 } from './annotator/mark-edits'
 import { MarkList, SummaryRecord } from './annotator/records'
 import { collectLitSpots } from './annotator/spotlights'
@@ -1232,7 +1233,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   const { commit, reset: resetMarks } = history
 
-  const addMark = useCallback((mark: AnnotationMark): void => { commit(appendedMarks(marks, mark)) }, [commit, marks])
+  /**
+   * Add a mark to this surface's list, unless it names an element already marked.
+   *
+   * Both ways of naming an element end here: the picker in a proxied page reports a
+   * click through a message, and a drawn one is handed over straight from the surface.
+   * Either can land on the same element again and again, and each press used to leave
+   * another mark on it — identical, silent, and invisible as anything but a box drawn
+   * on the same rectangle. An element is named once; the press picks out the mark that
+   * is already there, which is the one the reader meant to write in.
+   */
+  const addMark = useCallback((mark: AnnotationMark): void => {
+    const already = elementMarkOn(marks, mark)
+    if (already !== undefined) {
+      setSelectedId(already.id)
+      return
+    }
+    commit(appendedMarks(marks, mark))
+  }, [commit, marks, setSelectedId])
 
   // --- a page through the proxy ---------------------------------------------
 
@@ -2064,41 +2082,27 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   )
 
   /**
-   * Light the element a click would take, in the figure's own shapes.
-   *
-   * The picker says which element by name — the selector the anchor already carries —
-   * and this turns that name back into the element, in whichever document the figure's
-   * elements live. An inline SVG's are in this panel's document, rooted at the host
-   * the markup was injected into; a rendered document's are inside its frame, where
-   * the rule for the light has to be written into the figure's own stylesheet first,
-   * because that document's policy keeps the panel's stylesheet out.
-   *
-   * `undefined` puts the light out, which is what leaving the figure and putting the
-   * picker away both mean.
-   */
-  /**
    * The element a selector names, in whichever document the figure's elements live.
    *
    * An inline SVG's elements are in this panel's document, rooted at the host the
-   * markup was injected into; a rendered document's are inside its frame, where the
-   * rule for the light has to be written into the figure's own stylesheet first,
-   * because that document's policy keeps the panel's stylesheet out.
+   * markup was injected into; a rendered document's are inside its frame, where
+   * nothing of the panel's reaches — the frame is read, not styled, so a name is all
+   * this side ever needs from it.
    *
    * @param selector - the element's name, as an anchor spells it.
    * @returns the element, or undefined when the figure no longer has one by that name.
    */
   const findElement = useCallback((selector: string): Element | undefined => {
     // Whichever document the figure's elements are in. A ref that is still empty means
-    // nothing has mounted yet, which is not an error: there is no element to light, and
+    // nothing has mounted yet, which is not an error: there is no element to find, and
     // the effect that runs once the figure arrives asks again.
     /* v8 ignore start -- a body only asks once its figure has mounted, so neither ref is empty here. */
     if (isHtml) {
       const doc = frameRef.current?.contentDocument ?? null
       // A frame with no document at all, or with one that has not been parsed yet,
       // has no elements to find. A box across an origin is one of those: the panel
-      // reads nothing out of it, and its marks are lit by the boxes they carry.
+      // reads nothing out of it, and its marks are drawn by the boxes they carry.
       if (doc === null || doc.documentElement === null) return undefined
-      ensureSpotlight(doc)
       return elementAt({ root: doc, selector })
     }
     const host = figureHostRef.current
@@ -2109,10 +2113,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /**
    * Every element the figure should be lit on right now.
    *
-   * Two things are lit, and they are different kinds of statement: an element *mark*
-   * keeps its light for as long as the mark exists — that is how a placed element is
-   * drawn at all, since it has no path of its own — and the picker's preview lights
-   * whatever a click would take, on top of those. The selected mark is lit harder.
+   * On a drawing the light *is* the mark: an element mark has no path of its own, so a
+   * curve named by one is shown by lighting the curve, and the selected mark is lit
+   * harder than the rest.
+   *
+   * A rendered document is the other way round. There the mark draws the element's box,
+   * and the light would be a second, softer copy of the same statement — on a slide the
+   * element is a whole block of type, so the glow came out as a haze spread over the
+   * page rather than as a way of pointing at something. So only the picker's preview is
+   * lit there: it says what a click would take, and it leaves with the pointer.
    *
    * Built fresh rather than accumulated: the marks change, the figure is reloaded, and
    * a list patched in place would keep lighting elements that are no longer there.
@@ -2122,13 +2131,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const litSpots = useCallback(
     (preview: MarkAnchor | undefined): readonly LitSpot[] => collectLitSpots({
-      marks,
+      marks: isHtml ? [] : marks,
       selectedId,
       preview,
       colour: color,
       findElement,
     }),
-    [color, findElement, marks, selectedId],
+    [color, findElement, isHtml, marks, selectedId],
   )
 
   /**
@@ -2460,9 +2469,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         )}
         chip={chip === null ? null : (
           <>
-            {liveHover === null ? null : (
-              <span className="da-live-hit" style={hoverBoxAt(liveHover.anchor.bbox, [htmlScroll.x, htmlScroll.y])} />
-            )}
+            {/* The element a click would take, shown as a box rather than as a light on
+                the element: a rendered document's element is a block of the page, and a
+                glow across it is a haze over the reader's own type. The box is the same
+                statement the placed mark makes, so pointing and having pointed at speak
+                one language — and it is here for both ways of reading the document, the
+                frame this side can read and the page it only hears from. */}
+            <span className="da-live-hit" style={hoverBoxAt(chip.anchor.bbox, [htmlScroll.x, htmlScroll.y])} />
             <span className="da-name" style={{ left: chip.left, top: chip.top }}>
               {elementName(chip.anchor, findElement, chip.name)}
             </span>

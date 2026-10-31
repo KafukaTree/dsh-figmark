@@ -123,6 +123,30 @@ export function appendedMarks(
 }
 
 /**
+ * The mark that already names the element a new one would name.
+ *
+ * The element tool has no way to say "not this one": every press on an element placed
+ * a mark, so pressing the same heading four times left four marks on it, identical and
+ * all silent. Naming an element twice is not a second comment — a second comment is a
+ * sentence in the mark that is already there — so the press picks that mark out
+ * instead of adding a fifth.
+ *
+ * The selector is the identity, because it is what the mark is: two elements cannot
+ * share one, and a mark whose element has since moved still names the same element.
+ * @param marks - every mark the surface holds.
+ * @param mark - the mark being placed.
+ * @returns the mark already on that element, or undefined when the element is free.
+ */
+export function elementMarkOn(
+  marks: readonly AnnotationMark[],
+  mark: AnnotationMark,
+): AnnotationMark | undefined {
+  const selector = mark.kind === 'element' ? mark.anchor?.selector : undefined
+  if (selector === undefined) return undefined
+  return marks.find(other => other.kind === 'element' && other.anchor?.selector === selector)
+}
+
+/**
  * Drop one mark from the list.
  * @param marks - every mark the surface holds.
  * @param id - the mark to drop.

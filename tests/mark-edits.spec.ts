@@ -7,7 +7,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  appendedMarks, detailedMarks, loadedMarks, movedMarks, patchChangesNothing, patchedMarks, removedMarks,
+  appendedMarks, detailedMarks, elementMarkOn, loadedMarks, movedMarks, patchChangesNothing, patchedMarks,
+  removedMarks,
 } from '../src/client/annotator/mark-edits'
 import type { AnnotationMark } from '../src/shared/annotation'
 
@@ -106,6 +107,37 @@ describe('the list helpers', () => {
   it('hands back the moved list when the drag went somewhere', () => {
     expect(movedMarks([rect, other], 'a', [[2, 2], [12, 12]], undefined)?.[0]?.points)
       .toEqual([[2, 2], [12, 12]])
+  })
+})
+
+describe('a second mark on an element that already has one', () => {
+  const heading: AnnotationMark = {
+    id: 'e1', kind: 'element', color: '#1971c2', points: [[0, 0], [10, 10]],
+    anchor: { tag: 'h1', selector: '#s1 > h1', bbox: [0, 0, 10, 10] },
+  }
+  const again: AnnotationMark = { ...heading, id: 'e2' }
+
+  it('finds the mark that is already on the element', () => {
+    expect(elementMarkOn([rect, heading], again)).toBe(heading)
+  })
+
+  it('answers nothing when the element is free', () => {
+    // A mark on another element is a different element, however close its box is.
+    const elsewhere: AnnotationMark = {
+      ...again, anchor: { tag: 'p', selector: '#s1 > p', bbox: [0, 0, 10, 10] },
+    }
+    expect(elementMarkOn([heading], elsewhere)).toBeUndefined()
+    expect(elementMarkOn([], again)).toBeUndefined()
+  })
+
+  it('answers nothing for a mark that does not name an element', () => {
+    // A rectangle drawn over the same place is not a mark on the element: it says
+    // "this region", and a region can be pointed at as often as the reader likes.
+    expect(elementMarkOn([heading], rect)).toBeUndefined()
+    // Nor does an element mark with no selector claim every other nameless one: it
+    // names nothing, so it is nobody's duplicate.
+    const nameless: AnnotationMark = { id: 'e3', kind: 'element', color: '#1971c2', points: [[0, 0], [1, 1]] }
+    expect(elementMarkOn([nameless], { ...nameless, id: 'e4' })).toBeUndefined()
   })
 })
 
