@@ -147,11 +147,10 @@ export const zh = {
   cardGoal: '目标',
   cardPage: '第 {n} 页',
   cardCount: '{n} 处标注',
-  pendingCount: '{n} 处',
-  pendingNote: '批注',
+  pendingCount: '{n}',
   pendingRemove: '移除附图标注',
-  pendingSendHint: '点右下角发送时，这张标注会跟你的文字一起发出（点这里也可以）',
-  pendingSendNow: '点击发送到对话（内容与直接发送一致）',
+  pendingSendHint: '发送当前对话框中的全部标注',
+  pendingSendNow: '发送全部标注',
   pendingFailed: '没能发送：',
 } as const
 
@@ -294,11 +293,10 @@ export const en: Record<keyof typeof zh, string> = {
   cardGoal: 'Goal',
   cardPage: 'page {n}',
   cardCount: '{n} annotations',
-  pendingCount: '{n} marks',
-  pendingNote: 'Note',
+  pendingCount: '{n}',
   pendingRemove: 'Remove the annotation',
-  pendingSendHint: 'Press Send at the bottom right and this annotation goes out with your text (clicking here does the same)',
-  pendingSendNow: 'Click to send it to the chat (the same message as the direct send)',
+  pendingSendHint: 'Send every annotation in this composer',
+  pendingSendNow: 'Send every annotation',
   pendingFailed: 'Could not send: ',
 }
 

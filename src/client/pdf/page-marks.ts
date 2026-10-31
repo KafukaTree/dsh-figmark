@@ -109,6 +109,30 @@ export function withoutMark(marks: MarksByPage, id: string): MarksByPage {
 }
 
 /**
+ * Drop several marks from wherever in the document they were drawn.
+ *
+ * A hand-off removes exactly the marks it carried. Doing that by repeatedly dropping
+ * one mark would visit every page once per delivered mark, which matters on a large
+ * document; this keeps it to one visit per page.
+ *
+ * @param marks - every page's marks.
+ * @param ids - the marks that were delivered.
+ * @returns the new map, or the same one when no page carried any of them.
+ */
+export function withoutMarks(marks: MarksByPage, ids: ReadonlySet<string>): MarksByPage {
+  let changed = false
+  const next = new Map(marks)
+  for (const [page, pageMarks] of marks) {
+    const kept = pageMarks.filter(mark => !ids.has(mark.id))
+    if (kept.length !== pageMarks.length) {
+      changed = true
+      next.set(page, kept)
+    }
+  }
+  return changed ? next : marks
+}
+
+/**
  * Keep one page's unsaved edits while another page is on screen.
  *
  * The same array is the same edits: storing it again would rebuild the map, re-render

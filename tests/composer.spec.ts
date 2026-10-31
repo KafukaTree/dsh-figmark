@@ -272,10 +272,11 @@ describe('parking an annotation above the composer', () => {
     })
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('【附图标注】')
-    // The sidecars are deleted once the figure is handed off, so the message
-    // describes the picture it carries rather than naming a file that is gone.
+    // The sidecars are deleted once the figure is handed off, so the message never
+    // names a path that is about to vanish. No file is armed in this case, so it also
+    // makes no promise that an attachment travelled.
     expect(parked.raw).not.toContain('.annot.json')
-    expect(parked.raw).toContain('标注图已作为本条消息的附件发送')
+    expect(parked.raw).not.toContain('标注图已作为本条消息的附件发送')
     expect(parked.raw).toContain('指错了')
     expect(parked.data.file).toBe('/w/fig.svg')
     expect(parked.data.scope).toContain('200×100')

@@ -119,6 +119,8 @@ export interface ParkInput {
   readonly thumb: string | undefined
   /** The review picture itself, sent beside the message when the host takes it. */
   readonly file: File | undefined
+  /** Marked pages that travel as image parts when there is no whole-file upload. */
+  readonly pageImages?: number | undefined
   /** Message language. */
   readonly locale: SummaryLocale
   /** Hand the message to the session directly, for when nothing could be armed. */
@@ -471,7 +473,7 @@ export function disarmReview(armed: ArmedReview, conversation: ComposerLike | un
  */
 export function parkInComposer(input: ParkInput): void {
   const { document: document_, locale, paths, sessionId } = input
-  const message = buildAnnotationMessage(document_, paths, locale)
+  const message = buildAnnotationMessage(document_, paths, locale, input.file !== undefined, input.pageImages ?? 0)
   // The bubble this message will land in cannot reach the message's attachments, so
   // the card there looks its picture up by the message text. Filing it now means the
   // picture is already there when the send puts the bubble on screen.

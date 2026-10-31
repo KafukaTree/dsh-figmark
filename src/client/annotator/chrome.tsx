@@ -39,7 +39,9 @@ export interface StripHandle {
   /** Let go. */
   readonly onUp: (event: ReactPointerEvent<HTMLDivElement>) => void
   /** The browser took the pointer away. */
-  readonly onCancel: () => void
+  readonly onCancel: (event: ReactPointerEvent<HTMLDivElement>) => void
+  /** Pointer capture ended for a reason other than our own release. */
+  readonly onLost: (event: ReactPointerEvent<HTMLDivElement>) => void
 }
 
 /** Where one tool tile stands in the row. */
@@ -62,6 +64,8 @@ export interface ToolPaletteProps {
   readonly tools: readonly ToolEntry[]
   /** The tool currently armed. */
   readonly tool: Tool
+  /** A compact status line shown inside the tool strip while element mode is armed. */
+  readonly elementGuide: { readonly label: string; readonly depth?: string | undefined } | undefined
   /** Arm one tool. */
   readonly onChoose: (tool: Tool) => void
   /** The translator seat. */
@@ -77,7 +81,7 @@ export interface ToolPaletteProps {
  * @returns the palette strip.
  */
 export function ToolPalette(props: ToolPaletteProps): ReactNode {
-  const { handle, t, tools } = props
+  const { elementGuide, handle, t, tools } = props
   return (
     <div className="da-palette" ref={props.stripRef}
       data-dragging={handle.dragging ? 'true' : undefined}
@@ -87,7 +91,9 @@ export function ToolPalette(props: ToolPaletteProps): ReactNode {
         onPointerDown={handle.onDown}
         onPointerMove={handle.onMove}
         onPointerUp={handle.onUp}
-        onPointerCancel={handle.onCancel}>
+        onPointerCancel={handle.onCancel}
+        onLostPointerCapture={handle.onLost}
+        aria-grabbed={handle.dragging}>
         <GripDots wide />
       </div>
       {tools.map(entry => (
@@ -101,6 +107,15 @@ export function ToolPalette(props: ToolPaletteProps): ReactNode {
           </span>
         </button>
       ))}
+      {elementGuide === undefined ? null : (
+        <div className="da-palette-hint" role="status" aria-live="polite" aria-label={elementGuide.label}>
+          <span className="da-palette-hint-mode">{t('toolElementMode')}</span>
+          {elementGuide.depth === undefined ? null : (
+            <span className="da-palette-hint-depth">{elementGuide.depth}</span>
+          )}
+          <span className="da-palette-hint-keys">{t('toolElementKeys')}</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -190,7 +205,9 @@ export function FigureBar(props: FigureBarProps): ReactNode {
         onPointerDown={handle.onDown}
         onPointerMove={handle.onMove}
         onPointerUp={handle.onUp}
-        onPointerCancel={handle.onCancel}>
+        onPointerCancel={handle.onCancel}
+        onLostPointerCapture={handle.onLost}
+        aria-grabbed={handle.dragging}>
         <GripDots wide={false} />
       </div>
       {/* Where the document is, and how to move through it, before the pen: paging
@@ -223,14 +240,18 @@ export function FigureBar(props: FigureBarProps): ReactNode {
         <GoalIcon />
         {props.summary.trim() === '' ? null : <span className="da-dock-dot" aria-hidden />}
       </button>
-      <button type="button" className="da-dock-btn" aria-pressed={props.listOpen}
+      <button type="button"
+        className={props.listedMarks.length === 0 ? 'da-dock-btn' : 'da-dock-btn da-dock-list'}
+        aria-pressed={props.listOpen}
         aria-label={t('marks')} title={t('marks')}
         onClick={props.onToggleList}>
         <ListIcon />
         {/* The badge counts the document, not this sheet: the column moves the
             chrome from page to page, and a count that changed as the reader
             scrolled would be describing a different document every second. */}
-        {props.listedMarks.length === 0 ? null : <span className="da-dock-count">{props.listedMarks.length}</span>}
+        {props.listedMarks.length === 0 ? null : (
+          <span className="da-dock-count" aria-hidden>{props.listedMarks.length}</span>
+        )}
       </button>
       <span className="da-dock-sep" aria-hidden />
       {/* The keyboard reaches undo and redo whatever the buttons show, so the

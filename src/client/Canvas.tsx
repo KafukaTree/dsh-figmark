@@ -14,13 +14,14 @@
  * @module dsh-figmark/client/Canvas
  */
 import type { ReactNode } from 'react'
+import { useLayoutEffect } from 'react'
 import { markOrdinals } from '../shared/annotation'
 import { figureUnit } from './scale'
 import { useCanvasGesture } from './canvas/gesture'
 import { MarkLayer } from './canvas/overlay'
 import type { CanvasProps } from './canvas/types'
 
-export type { CanvasProps, MarkPatch, Tool } from './canvas/types'
+export type { CanvasInput, CanvasProps, MarkPatch, Tool } from './canvas/types'
 export { nextMarkId } from './canvas/ids'
 
 /**
@@ -68,6 +69,15 @@ export function Canvas(props: CanvasProps): ReactNode {
   const unit = figureUnit(drawnWidth, drawnHeight)
   const gesture = useCanvasGesture(props, { width, height, originX, originY })
   const { handlers } = gesture
+  useLayoutEffect(() => {
+    const inputRef = props.inputRef
+    if (inputRef === undefined) return
+    const input = { cancel: () => gesture.cancel(), isActive: gesture.isActive }
+    inputRef.current = input
+    return () => {
+      if (inputRef.current === input) inputRef.current = null
+    }
+  }, [gesture.cancel, gesture.isActive, props.inputRef])
   return (
     <svg
       className="da-overlay"
@@ -80,11 +90,13 @@ export function Canvas(props: CanvasProps): ReactNode {
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       data-tool={tool}
+      data-pick={gesture.hover === null ? undefined : 'true'}
       onPointerDownCapture={handlers.onPointerDownCapture}
       onPointerDown={handlers.onPointerDown}
       onPointerMove={handlers.onPointerMove}
       onPointerUp={handlers.onPointerUp}
       onPointerCancel={handlers.onPointerCancel}
+      onLostPointerCapture={handlers.onLostPointerCapture}
       // Leaving the surface is the one move that is not a move: the picker has no
       // element under it any more, so the highlight goes rather than staying lit on
       // whatever the pointer last crossed.
@@ -96,7 +108,7 @@ export function Canvas(props: CanvasProps): ReactNode {
         marks={marks}
         draft={gesture.draft}
         press={gesture.press}
-        selectedId={props.selectedId}
+        selectedId={tool === 'select' ? props.selectedId : null}
         numbers={numbers}
         unit={unit}
         sizes={gesture.sizes}

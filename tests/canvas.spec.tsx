@@ -33,6 +33,8 @@ interface MountOptions {
   readonly onPan?: (dx: number, dy: number) => void
   readonly onPanStart?: () => void
   readonly onPanEnd?: () => void
+  readonly pannable?: boolean
+  readonly onZoomAt?: (factor: number, clientX: number, clientY: number) => void
   readonly scale?: number
   readonly origin?: FigurePoint
   readonly width?: number
@@ -85,6 +87,8 @@ function mount(options: MountOptions): {
         {...(options.onPan === undefined ? {} : { onPan: options.onPan })}
         {...(options.onPanStart === undefined ? {} : { onPanStart: options.onPanStart })}
         {...(options.onPanEnd === undefined ? {} : { onPanEnd: options.onPanEnd })}
+        {...(options.pannable === undefined ? {} : { pannable: options.pannable })}
+        {...(options.onZoomAt === undefined ? {} : { onZoomAt: options.onZoomAt })}
         {...(options.scale === undefined ? {} : { scale: options.scale })}
       />,
     )
@@ -117,18 +121,49 @@ function pointerWithId(target: Element, type: string, clientX: number, clientY: 
   })
 }
 
+/** Dispatch a pointer event with the ownership fields a real device reports. */
+function pointerWith(
+  target: Element,
+  type: string,
+  clientX: number,
+  clientY: number,
+  fields: {
+    readonly pointerId: number
+    readonly isPrimary?: boolean
+    readonly button?: number
+    readonly pointerType?: string
+  },
+): void {
+  act(() => {
+    const event = new MouseEvent(type, {
+      bubbles: true, clientX, clientY, button: fields.button ?? 0,
+    })
+    Object.defineProperty(event, 'pointerId', { value: fields.pointerId })
+    Object.defineProperty(event, 'isPrimary', { value: fields.isPrimary ?? true })
+    Object.defineProperty(event, 'pointerType', { value: fields.pointerType ?? 'mouse' })
+    target.dispatchEvent(event)
+  })
+}
+
 /** Dispatch one double click. */
 function doubleClick(target: Element): void {
   act(() => { target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })
 }
 
 /** Give the surface the pointer-capture methods jsdom does not implement. */
-function stubPointerCapture(svg: SVGSVGElement, captured: boolean): { readonly released: number[] } {
+function stubPointerCapture(
+  svg: SVGSVGElement,
+  captured: boolean,
+): { readonly captured: number[]; readonly released: number[] } {
+  const capturedIds: number[] = []
   const released: number[] = []
-  Object.defineProperty(svg, 'setPointerCapture', { configurable: true, value: () => {} })
+  Object.defineProperty(svg, 'setPointerCapture', {
+    configurable: true,
+    value: (id: number) => { capturedIds.push(id) },
+  })
   Object.defineProperty(svg, 'hasPointerCapture', { configurable: true, value: () => captured })
   Object.defineProperty(svg, 'releasePointerCapture', { configurable: true, value: (id: number) => { released.push(id) } })
-  return { released }
+  return { captured: capturedIds, released }
 }
 
 describe('drawing surface', () => {
@@ -186,6 +221,7 @@ describe('drawing surface', () => {
     const onSelect = vi.fn()
     mounted = mount({ tool: 'point', onAdd, onSelect })
     pointer(mounted.svg, 'pointerdown', 200, 150)
+    pointer(mounted.svg, 'pointerup', 200, 150)
     expect(onAdd).toHaveBeenCalledTimes(1)
     const added = defined(onAdd.mock.calls[0]?.[0] as AnnotationMark | undefined)
     expect(added.kind).toBe('point')
@@ -222,11 +258,28 @@ describe('drawing surface', () => {
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
+  it('ignores a second pointer that lands on the mark already being dragged', () => {
+    const onMove = vi.fn()
+    mounted = mount({
+      tool: 'select',
+      marks: [{ id: 'm1', kind: 'rect', color: '#1971c2', points: [[10, 10], [100, 80]] }],
+      onMove,
+    })
+    const hit = defined(mounted.svg.querySelector('path[stroke="transparent"]'))
+    pointerWith(hit, 'pointerdown', 20, 20, { pointerId: 1 })
+    pointerWith(hit, 'pointerdown', 60, 50, { pointerId: 2 })
+    pointerWith(hit, 'pointerup', 60, 50, { pointerId: 2 })
+    pointerWith(mounted.svg, 'pointermove', 80, 70, { pointerId: 1 })
+    pointerWith(mounted.svg, 'pointerup', 80, 70, { pointerId: 1 })
+    expect(onMove).toHaveBeenCalledTimes(1)
+  })
+
   it('announces a placed point as drawn, so the tool can disarm itself', () => {
     const onDrawn = vi.fn()
     const onAdd = vi.fn()
     mounted = mount({ tool: 'point', onAdd, onDrawn })
     pointer(mounted.svg, 'pointerdown', 40, 60)
+    pointer(mounted.svg, 'pointerup', 40, 60)
     expect(onAdd).toHaveBeenCalledTimes(1)
     expect(onDrawn).toHaveBeenCalledWith((onAdd.mock.calls[0] as [AnnotationMark])[0].id)
   })
@@ -329,6 +382,16 @@ describe('drawing surface', () => {
     expect(onAdd).toHaveBeenCalledTimes(1)
   })
 
+  it('captures a point pick until the pointerup that commits it', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'point', onAdd })
+    const capture = stubPointerCapture(mounted.svg, true)
+    pointerWithId(mounted.svg, 'pointerdown', 20, 20, 7)
+    expect(capture.captured).toEqual([7])
+    pointerWithId(mounted.svg, 'pointerup', 20, 20, 7)
+    expect(onAdd).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves an uncaptured pointer alone', () => {
     const onAdd = vi.fn()
     mounted = mount({ tool: 'rect', onAdd })
@@ -340,13 +403,174 @@ describe('drawing surface', () => {
     expect(onAdd).toHaveBeenCalledTimes(1)
   })
 
-  it('finishes on a cancelled pointer too', () => {
+  it('abandons a drawing when the pointer is cancelled', () => {
     const onAdd = vi.fn()
     mounted = mount({ tool: 'rect', onAdd })
     pointer(mounted.svg, 'pointerdown', 10, 10)
     pointer(mounted.svg, 'pointermove', 90, 90)
     pointer(mounted.svg, 'pointercancel', 90, 90)
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('keeps one pointer in charge when a second finger lands', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'rect', onAdd })
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 1 })
+    pointerWith(mounted.svg, 'pointerdown', 100, 100, { pointerId: 2 })
+    pointerWith(mounted.svg, 'pointermove', 300, 200, { pointerId: 2 })
+    pointerWith(mounted.svg, 'pointerup', 300, 200, { pointerId: 2 })
+    pointerWith(mounted.svg, 'pointermove', 90, 80, { pointerId: 1 })
+    pointerWith(mounted.svg, 'pointerup', 90, 80, { pointerId: 1 })
     expect(onAdd).toHaveBeenCalledTimes(1)
+    expect((onAdd.mock.calls[0] as [AnnotationMark])[0].points).toEqual([[10, 10], [90, 80]])
+  })
+
+  it('turns a second touch into a pinch and abandons the half-drawn mark', () => {
+    const onAdd = vi.fn()
+    const zooms: { factor: number; x: number; y: number }[] = []
+    const pans: [number, number][] = []
+    mounted = mount({
+      tool: 'rect',
+      onAdd,
+      onZoomAt: (factor, x, y) => { zooms.push({ factor, x, y }) },
+      onPan: (dx, dy) => { pans.push([dx, dy]) },
+    })
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointermove', 40, 40, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerdown', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointermove', 190, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    expect(zooms[0]?.factor).toBeCloseTo(Math.hypot(150, 60) / Math.hypot(60, 60))
+    expect(zooms[0]?.x).toBeCloseTo(115)
+    expect(zooms[0]?.y).toBeCloseTo(70)
+    expect(pans[0]?.[0]).toBeCloseTo(45)
+    expect(pans[0]?.[1]).toBeCloseTo(0)
+    // A third finger and a repeated frame do not become new owners or a second zoom.
+    pointerWith(mounted.svg, 'pointermove', 250, 160, {
+      pointerId: 3, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointermove', 190, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    expect(zooms).toHaveLength(1)
+    expect(pans).toHaveLength(1)
+    // A browser may take the pinch away instead of lifting it. The pair still owns
+    // the interaction until this cancellation, and neither finger may finish the
+    // rectangle that the second touch already abandoned.
+    pointerWith(mounted.svg, 'pointercancel', 190, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointerup', 10, 10, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerup', 250, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    expect(onAdd).not.toHaveBeenCalled()
+    expect(zooms).toHaveLength(1)
+  })
+
+  it('ends a one-finger pan when the pinch takes over', () => {
+    let starts = 0
+    let ends = 0
+    mounted = mount({
+      tool: 'select',
+      onPan: () => {},
+      onPanStart: () => { starts += 1 },
+      onPanEnd: () => { ends += 1 },
+      onZoomAt: () => {},
+    })
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointermove', 40, 40, { pointerId: 1, pointerType: 'touch' })
+    expect(starts).toBe(1)
+    pointerWith(mounted.svg, 'pointerdown', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    expect(ends).toBe(1)
+  })
+
+  it('ends a pinch on a normal lift without turning it into a mark', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'rect', onAdd, onZoomAt: () => {} })
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerdown', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointerup', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('drains the remaining finger instead of letting it start another gesture', () => {
+    const onAdd = vi.fn()
+    const zooms: number[] = []
+    mounted = mount({
+      tool: 'rect',
+      onAdd,
+      onZoomAt: (factor) => { zooms.push(factor) },
+    })
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerdown', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointerup', 100, 100, {
+      pointerId: 2, isPrimary: false, pointerType: 'touch',
+    })
+    // The first finger is still down, but its meaning ended with the pinch. Moving it
+    // must neither draw nor start a fresh pair; a third touch is part of the tail too.
+    pointerWith(mounted.svg, 'pointerdown', 80, 70, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointermove', 80, 70, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerdown', 200, 200, {
+      pointerId: 3, isPrimary: false, pointerType: 'touch',
+    })
+    pointerWith(mounted.svg, 'pointermove', 240, 220, { pointerId: 3, pointerType: 'touch' })
+    expect(zooms).toHaveLength(0)
+    pointerWith(mounted.svg, 'pointerup', 80, 70, { pointerId: 1, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerup', 240, 220, { pointerId: 3, pointerType: 'touch' })
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('keeps a single touch able to draw', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'rect', onAdd })
+    pointerWith(mounted.svg, 'pointerdown', 20, 20, { pointerId: 9, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointermove', 120, 100, { pointerId: 9, pointerType: 'touch' })
+    pointerWith(mounted.svg, 'pointerup', 120, 100, { pointerId: 9, pointerType: 'touch' })
+    expect(onAdd).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start for a right press or a non-primary touch', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'point', onAdd })
+    pointerWith(mounted.svg, 'pointerdown', 20, 20, { pointerId: 1, button: 2 })
+    pointerWith(mounted.svg, 'pointerup', 20, 20, { pointerId: 1, button: 2 })
+    pointerWith(mounted.svg, 'pointerdown', 30, 30, { pointerId: 2, isPrimary: false })
+    pointerWith(mounted.svg, 'pointerup', 30, 30, { pointerId: 2, isPrimary: false })
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('abandons a drawing when capture is lost, and ignores the later release', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'rect', onAdd })
+    const capture = stubPointerCapture(mounted.svg, true)
+    pointerWith(mounted.svg, 'pointerdown', 10, 10, { pointerId: 7 })
+    pointerWith(mounted.svg, 'pointermove', 90, 80, { pointerId: 7 })
+    pointerWith(mounted.svg, 'lostpointercapture', 90, 80, { pointerId: 7 })
+    pointerWith(mounted.svg, 'pointercancel', 90, 80, { pointerId: 7 })
+    pointerWith(mounted.svg, 'pointerup', 90, 80, { pointerId: 7 })
+    expect(capture.released).toEqual([7])
+    expect(onAdd).not.toHaveBeenCalled()
+  })
+
+  it('drops a point when the pointer travels instead of tapping', () => {
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'point', onAdd })
+    pointer(mounted.svg, 'pointerdown', 20, 20)
+    pointer(mounted.svg, 'pointermove', 30, 30)
+    pointer(mounted.svg, 'pointerup', 30, 30)
+    expect(onAdd).not.toHaveBeenCalled()
   })
 
   it('reports no anchor when the figure is not inlined SVG', () => {
@@ -393,6 +617,7 @@ describe('drawing surface', () => {
     stubRect(mounted.figure, { left: 0, top: 0, width: 400, height: 300 })
     stubRect(node, { left: 10, top: 10, width: 40, height: 20 })
     pointer(mounted.svg, 'pointerdown', 20, 15)
+    pointer(mounted.svg, 'pointerup', 20, 15)
     expect(defined(onAdd.mock.calls[0]?.[0] as AnnotationMark | undefined).anchor)
       .toMatchObject({ tag: 'g', id: 'node7' })
   })
@@ -470,11 +695,63 @@ describe('moving the whole view by hand', () => {
 
   it('reports nothing at all when the pointer never left the spot it went down on', () => {
     const moved: [number, number][] = []
-    const { svg } = mount({ tool: 'select', onPan: (dx, dy) => { moved.push([dx, dy]) } })
+    let ends = 0
+    const { svg } = mount({
+      tool: 'select',
+      onPan: (dx, dy) => { moved.push([dx, dy]) },
+      onPanEnd: () => { ends += 1 },
+    })
     pointer(svg, 'pointerdown', 10, 10)
     pointer(svg, 'pointermove', 10, 10)
     pointer(svg, 'pointerup', 10, 10)
     expect(moved).toEqual([])
+    expect(ends).toBe(0)
+  })
+
+  it('waits for the drag threshold before panning', () => {
+    const moved: [number, number][] = []
+    const { svg } = mount({ tool: 'select', onPan: (dx, dy) => { moved.push([dx, dy]) } })
+    pointer(svg, 'pointerdown', 10, 10)
+    pointer(svg, 'pointermove', 12, 12)
+    pointer(svg, 'pointerup', 12, 12)
+    expect(moved).toEqual([])
+  })
+
+  it('ends an active pan when the pointer is cancelled', () => {
+    let starts = 0
+    let ends = 0
+    const { svg } = mount({
+      tool: 'select',
+      onPan: () => {},
+      onPanStart: () => { starts += 1 },
+      onPanEnd: () => { ends += 1 },
+    })
+    pointer(svg, 'pointerdown', 10, 10)
+    pointer(svg, 'pointermove', 30, 25)
+    pointer(svg, 'pointercancel', 30, 25)
+    expect(starts).toBe(1)
+    expect(ends).toBe(1)
+  })
+
+  it('abandons a drawing on window blur or a hidden tab', () => {
+    const onAdd = vi.fn()
+    const surface = mount({ tool: 'rect', onAdd })
+    pointer(surface.svg, 'pointerdown', 10, 10)
+    pointer(surface.svg, 'pointermove', 90, 80)
+    act(() => { window.dispatchEvent(new Event('blur')) })
+    pointer(surface.svg, 'pointerup', 90, 80)
+    expect(onAdd).not.toHaveBeenCalled()
+
+    pointer(surface.svg, 'pointerdown', 10, 10)
+    pointer(surface.svg, 'pointermove', 90, 80)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    pointer(surface.svg, 'pointerup', 90, 80)
+    expect(onAdd).not.toHaveBeenCalled()
+    surface.root.unmount()
   })
 
   it('leaves the surface alone when nobody asked for drags', () => {
@@ -486,6 +763,22 @@ describe('moving the whole view by hand', () => {
     pointer(svg, 'pointermove', 40, 40)
     pointer(svg, 'pointerup', 40, 40)
     expect(added).toEqual([])
+  })
+
+  it('does not start a pan when the fitted surface has nowhere to move', () => {
+    const moved: [number, number][] = []
+    let starts = 0
+    const { svg } = mount({
+      tool: 'select',
+      pannable: false,
+      onPan: (dx, dy) => { moved.push([dx, dy]) },
+      onPanStart: () => { starts += 1 },
+    })
+    pointer(svg, 'pointerdown', 10, 10)
+    pointer(svg, 'pointermove', 80, 70)
+    pointer(svg, 'pointerup', 80, 70)
+    expect(moved).toEqual([])
+    expect(starts).toBe(0)
   })
 })
 
@@ -519,6 +812,37 @@ describe('clicking the surface', () => {
       svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(selected).toEqual([null])
+  })
+
+  it('lets go of the previous comment on a miss while the element picker stays armed', () => {
+    // A miss is useful information inside the picker, so the tool does not vanish.
+    // It is still a press on blank paper, however, and must not leave the previous
+    // element's comment open as though that element were still chosen.
+    const selected: (string | null)[] = []
+    const { svg } = mount({
+      tool: 'element',
+      selectedId: 'old',
+      marks: [{ id: 'old', kind: 'rect', color: '#e03131', points: [[10, 10], [40, 30]] }],
+      onSelect: (id) => { selected.push(id) },
+    })
+    act(() => {
+      svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(selected).toEqual([null])
+  })
+
+  it('leaves the selection alone for a drawing tool, whose press is the mark', () => {
+    const selected: (string | null)[] = []
+    const { svg } = mount({
+      tool: 'rect',
+      selectedId: 'old',
+      marks: [{ id: 'old', kind: 'rect', color: '#e03131', points: [[10, 10], [40, 30]] }],
+      onSelect: (id) => { selected.push(id) },
+    })
+    act(() => {
+      svg.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(selected).toEqual([])
   })
 })
 
@@ -586,6 +910,7 @@ describe('picking an element', () => {
     const surface = picking()
     mounted = surface
     pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
     expect(surface.added).toHaveLength(1)
     const mark = defined(surface.added[0])
     expect(mark.kind).toBe('element')
@@ -612,6 +937,7 @@ describe('picking an element', () => {
     })
     mounted = surface
     pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
     expect(onSelect).toHaveBeenCalledWith(defined(added[0]).id)
   })
 
@@ -635,9 +961,10 @@ describe('picking an element', () => {
     })
     mounted = surface
     pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
     expect(onAdd).not.toHaveBeenCalled()
-    // Nothing was drawn, so there is no new note box to open and nothing to focus.
-    expect(onDrawn).not.toHaveBeenCalled()
+    // Nothing new was drawn, but the existing mark's note should still open.
+    expect(onDrawn).toHaveBeenCalledWith('e1')
     expect(onSelect).toHaveBeenCalledWith('e1')
   })
 
@@ -653,6 +980,7 @@ describe('picking an element', () => {
     const surface = picking()
     mounted = surface
     pointer(surface.svg, 'pointermove', 60, 50)
+    expect(surface.svg.getAttribute('data-pick')).toBe('true')
     // Which element, not where to draw a box around it: the light belongs on the
     // element itself, and only the body knows which document that element lives in.
     expect(lastHovered(surface.hovered)).toEqual(anchor)
@@ -836,6 +1164,7 @@ describe('picking an element', () => {
     pointer(surface.svg, 'pointermove', 60, 50)
     key('ArrowUp')
     pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
     expect(defined(added[0]).anchor?.selector).toBe('#axes_1')
   })
 
@@ -929,6 +1258,7 @@ describe('picking an element', () => {
     })
     mounted = surface
     pointer(surface.svg, 'pointerdown', 60, 50)
+    pointer(surface.svg, 'pointerup', 60, 50)
     expect(onPickMiss).toHaveBeenCalledTimes(1)
   })
 
@@ -1249,7 +1579,7 @@ describe('moving a mark', () => {
     expect(onMove).not.toHaveBeenCalled()
   })
 
-  it('selects but does not drag a mark under a drawing tool', () => {
+  it('draws over a stored mark instead of selecting it under a drawing tool', () => {
     const onAdd = vi.fn()
     const onMove = vi.fn()
     const onSelect = vi.fn()
@@ -1259,9 +1589,8 @@ describe('moving a mark', () => {
     pointer(mounted.svg, 'pointermove', 50, 45)
     pointer(mounted.svg, 'pointerup', 50, 45)
     expect(onMove).not.toHaveBeenCalled()
-    expect(onSelect).toHaveBeenCalledWith('m1')
-    // The mark owns its hit area, so the press never reaches the drawing tool.
-    expect(onAdd).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalledWith('m1')
+    expect(onAdd).toHaveBeenCalledTimes(1)
   })
 
   it('re-anchors a dragged mark to what its own tip is over, not to the hand', () => {
@@ -1533,41 +1862,53 @@ describe('the control frame around a selected mark', () => {
     expect(onMove).toHaveBeenCalledTimes(1)
   })
 
-  it('resizes the mark under a drawing tool too, because a handle is a control', () => {
-    // The frame is drawn only around the selected mark and shows a resize cursor,
-    // so a press on a handle can only mean "resize this". Leaving it inert under a
-    // drawing tool made the frame look broken.
+  it('lets Shift begin a handle edit before the pointer changes the geometry', () => {
+    const onUpdate = vi.fn()
+    mounted = mount({ tool: 'select', marks: [box], selectedId: 'm1', onUpdate })
+    const grip = handle('rotate')
+    const from: readonly [number, number] = [
+      Number(grip.getAttribute('x')) + 3.5,
+      Number(grip.getAttribute('y')) + 3.5,
+    ]
+    pointer(grip, 'pointerdown', from[0], from[1])
+    act(() => {
+      mounted?.svg.dispatchEvent(new MouseEvent('pointermove', {
+        bubbles: true, clientX: from[0], clientY: from[1], shiftKey: true,
+      }))
+    })
+    act(() => {
+      mounted?.svg.dispatchEvent(new MouseEvent('pointermove', {
+        bubbles: true, clientX: from[0], clientY: from[1],
+      }))
+    })
+    pointer(mounted.svg, 'pointerup', from[0], from[1])
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('puts the selected mark controls away under a drawing tool', () => {
     for (const tool of ['arrow', 'rect', 'ellipse', 'pen', 'point'] as const) {
       const onUpdate = vi.fn()
       mounted = mount({ tool, marks: [box], selectedId: 'm1', onUpdate })
-      dragHandle('e', 60, 0)
-      expect(onUpdate).toHaveBeenCalledTimes(1)
-      expect(defined(onUpdate.mock.calls[0] as [string, MarkPatch] | undefined)[1].points?.[1]?.[0])
-        .toBeCloseTo(260, 6)
+      expect(mounted.svg.querySelectorAll('rect[data-da-handle]')).toHaveLength(0)
+      expect(onUpdate).not.toHaveBeenCalled()
       mounted.root.unmount()
       mounted = undefined
       document.body.innerHTML = ''
     }
   })
 
-  it('turns the mark under a drawing tool too', () => {
-    const onUpdate = vi.fn()
-    mounted = mount({ tool: 'arrow', marks: [box], selectedId: 'm1', onUpdate })
-    dragHandle('rotate', 40, 62)
-    expect(defined(onUpdate.mock.calls[0] as [string, MarkPatch] | undefined)[1].rotation)
-      .toBeCloseTo(90, 6)
-  })
-
-  it('still leaves the mark itself to the drawing tool, so a stroke can start on it', () => {
-    // A press on the shape (not on a control) under a drawing tool belongs to that
-    // tool: it selects, and draws nothing underneath the mark.
+  it('lets a drawing start on top of a stored mark', () => {
+    // The visible stroke is not a target under a drawing tool. The press falls
+    // through to the paper and produces the mark the reader asked for.
     const onMove = vi.fn()
     const onUpdate = vi.fn()
-    mounted = mount({ tool: 'arrow', marks: [box], selectedId: 'm1', onMove, onUpdate })
+    const onAdd = vi.fn()
+    mounted = mount({ tool: 'arrow', marks: [box], selectedId: 'm1', onAdd, onMove, onUpdate })
     const hit = defined(mounted.svg.querySelector('path[stroke="transparent"]'))
     pointer(hit, 'pointerdown', 150, 140)
     pointer(mounted.svg, 'pointermove', 160, 150)
     pointer(mounted.svg, 'pointerup', 160, 150)
+    expect(onAdd).toHaveBeenCalledTimes(1)
     expect(onMove).not.toHaveBeenCalled()
     expect(onUpdate).not.toHaveBeenCalled()
   })

@@ -46,6 +46,8 @@ export interface DocumentAutosaveOptions {
 export interface DocumentAutosave {
   /** Drop a pending wait without writing. */
   readonly cancel: () => void
+  /** Wait until a write already under way has finished. */
+  readonly drained: () => Promise<void>
   /**
    * Record what this save wrote, so the same state is not written twice.
    * @param input - the annotation the save persisted.
@@ -137,6 +139,7 @@ export function useDocumentAutosave(options: DocumentAutosaveOptions): DocumentA
 
   return {
     cancel: useCallback(() => { autosave.cancel() }, [autosave]),
+    drained: useCallback(async () => { await autosave.drained() }, [autosave]),
     markWritten: useCallback((input: PagedAnnotationInput) => { writtenSignature.current = signature(input) }, [signature]),
     forget: useCallback(() => { writtenSignature.current = null }, []),
   }

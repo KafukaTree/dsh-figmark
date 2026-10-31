@@ -16,7 +16,7 @@ import type { RecordPlacement } from '../popover'
 export interface StripPress {
   /** The pointer whose press this is. */
   readonly pointerId: number
-  /** The strip's spot when the press began, as fractions of the panel. */
+  /** The strip's top-left spot when the press began, as fractions of the panel. */
   readonly origin: PaletteSpot
   /** Where on screen the press began. */
   readonly box: { readonly left: number; readonly top: number }
@@ -60,14 +60,10 @@ export function boxesOverlap(a: ScreenBox, b: ScreenBox, gap = 0): boolean {
  * measured against the panel rather than the strip, because moving the strip must
  * not move the frame the next position is measured in.
  *
- * The clamp is the part that makes a fraction mean what it looks like — and it has to
- * follow the side the strip hangs from. Before the middle the strip hangs down and to
- * the right of its point, so the usable range is what is left of the pane once its own
- * body is taken out of it. Past the middle it hangs up and to the left instead, so its
- * body is behind the point and the only thing left to keep it off is the far edge.
- * Clamping both halves by the body's own size was what stopped a strip parked on the
- * right a whole strip-width short of it — "this is as far as it goes", at 40px from an
- * edge it looked like it should touch.
+ * The clamp keeps the strip's top-left and its whole body inside the same gutter at
+ * every position. An earlier model flipped the strip's anchor at the panel midpoint;
+ * the stored fraction stayed continuous there, but the control itself jumped by its
+ * own width or height.
  * @param press - the press being followed.
  * @param pointer - where the pointer is now, in client coordinates.
  * @param panel - the box the fractions are of, in client coordinates.
@@ -84,15 +80,208 @@ export function draggedSpot(
   const height = Math.max(1, panel.height)
   const x = press.origin.x + (pointer.clientX - press.box.left) / width
   const y = press.origin.y + (pointer.clientY - press.box.top) / height
-  // Across the middle the strip hangs from its far corner, so it only has to stop
-  // short of that edge; before it, its whole body has to fit inside the pane.
-  const roomX = Math.max(0, panel.width - strip.width) / width
-  const roomY = Math.max(0, panel.height - strip.height) / height
-  const farX = Math.max(0, 1 - STRIP_EDGE / width)
-  const farY = Math.max(0, 1 - STRIP_EDGE / height)
+  // The strip follows the hand one-for-one until a real boundary gets in the way.
+  // An earlier version also applied a magnetic field on every move; the control
+  // accelerated under the pointer and then peeled off, which read as "running away".
+  // Edge gravity belongs to release (`settledSpot`), not to direct manipulation.
+  //
+  // Collision with the other strip is resolved only after release. Sliding around it
+  // during the drag made the grabbed object leave the hand, and "strictly follows the
+  // pointer" and "never crosses the other strip" cannot both hold for a swept path.
+  // The invariant is therefore about rest states: the strip may pass over its sibling
+  // while held, but `settledSpot` guarantees they are separate when the hand lets go.
+  return clampedSpot({ x, y }, panel, strip)
+}
+
+/**
+ * Finish a drag with a short, predictable magnetic dock.
+ *
+ * The drag itself stays under the pointer: snapping every move makes a control feel
+ * as if it is fighting the hand. On release, however, a strip within one thumb-width
+ * of an edge settles into the same eight-pixel gutter used by clamping. Corners are
+ * allowed because both axes are considered, which is what makes parking a control
+ * feel like it belongs to the panel rather than merely being unable to leave it.
+ * @param spot - the strip's top-left when the pointer was released.
+ * @param panel - the panel the fraction is of.
+ * @param strip - the strip's measured size.
+ * @param obstacle - the other floating strip, when there is one.
+ * @returns the spot to persist after the pointer is gone.
+ */
+export function settledSpot(
+  spot: PaletteSpot,
+  panel: ScreenBox,
+  strip: { readonly width: number; readonly height: number },
+  obstacle?: ScreenBox,
+): PaletteSpot {
+  const desired = clampedSpot(spot, panel, strip)
+  const own = boxAt(desired, panel, strip)
+  const width = Math.max(1, panel.width)
+  const height = Math.max(1, panel.height)
+  const minX = Math.min(STRIP_EDGE, panel.width / 2) / width
+  const minY = Math.min(STRIP_EDGE, panel.height / 2) / height
+  const roomX = Math.max(minX, (panel.width - strip.width - STRIP_EDGE) / width)
+  const roomY = Math.max(minY, (panel.height - strip.height - STRIP_EDGE) / height)
+  const left = own.left - panel.left
+  const right = panel.left + panel.width - own.left - own.width
+  const top = own.top - panel.top
+  const bottom = panel.top + panel.height - own.top - own.height
+
+  let settled = desired
+  const nearestX = left <= right
+    ? { distance: left, spot: { ...settled, x: minX } }
+    : { distance: right, spot: { ...settled, x: roomX } }
+  if (nearestX.distance <= STRIP_MAGNET && !overlapsObstacle(
+    boxAt(nearestX.spot, panel, strip),
+    obstacle,
+  )) settled = nearestX.spot
+
+  const nearestY = top <= bottom
+    ? { distance: top, spot: { ...settled, y: minY } }
+    : { distance: bottom, spot: { ...settled, y: roomY } }
+  if (nearestY.distance <= STRIP_MAGNET && !overlapsObstacle(
+    boxAt(nearestY.spot, panel, strip),
+    obstacle,
+  )) settled = nearestY.spot
+
+  return avoidObstacle(settled, panel, strip, obstacle)
+}
+
+/**
+ * Keep a parked strip in the pane without covering another strip.
+ *
+ * Resize repair is not a gesture: the reader is not asking the strip to move, so it
+ * must keep its chosen fraction unless the new panel or the other strip makes that
+ * impossible. In the latter case the nearest collision-free side wins. `undefined`
+ * means the panel is too small to separate them, and the caller may fall back to its
+ * canonical safe position.
+ * @param spot - the fraction the reader chose.
+ * @param panel - the panel the fraction is of.
+ * @param strip - the strip's measured size.
+ * @param obstacle - the other floating strip.
+ * @returns the nearest usable spot, or undefined when they cannot be separated.
+ */
+export function separatedSpot(
+  spot: PaletteSpot,
+  panel: ScreenBox,
+  strip: { readonly width: number; readonly height: number },
+  obstacle: ScreenBox,
+): PaletteSpot | undefined {
+  // A resize is not a swept gesture. Passing the old spot as `previous` made a
+  // layout change look like a pointer crossing the other strip and could send the
+  // bar to a far edge, or declare a solvable overlap unsolvable. Repair the body
+  // clamp first, then resolve only the overlap that actually exists now.
+  const fitted = avoidObstacle(clampedSpot(spot, panel, strip), panel, strip, obstacle)
+  return overlapsObstacle(boxAt(fitted, panel, strip), obstacle) ? undefined : fitted
+}
+
+/** Whether a measured box is within the strip-to-strip breathing room. */
+function overlapsObstacle(box: ScreenBox, obstacle: ScreenBox | undefined): boolean {
+  return obstacle !== undefined && boxesOverlap(box, obstacle, STRIP_EDGE)
+}
+
+/**
+ * Resolve a collision by the shortest edge slide that leaves the required gap.
+ *
+ * At rest, the moving control does not pass underneath the parked one. Four escape
+ * directions are tried and the nearest one that remains inside the panel wins. This
+ * is deliberately applied only after release: resolving it during a drag would pull
+ * the strip away from the pointer.
+ */
+function avoidObstacle(
+  desired: PaletteSpot,
+  panel: ScreenBox,
+  strip: { readonly width: number; readonly height: number },
+  obstacle: ScreenBox | undefined,
+): PaletteSpot {
+  if (obstacle === undefined) return desired
+  const desiredBox = boxAt(desired, panel, strip)
+  if (!overlapsObstacle(desiredBox, obstacle)) return desired
+  const width = Math.max(1, panel.width)
+  const height = Math.max(1, panel.height)
+  const minX = Math.min(STRIP_EDGE, panel.width / 2) / width
+  const minY = Math.min(STRIP_EDGE, panel.height / 2) / height
+  const roomX = Math.max(minX, (panel.width - strip.width - STRIP_EDGE) / width)
+  const roomY = Math.max(minY, (panel.height - strip.height - STRIP_EDGE) / height)
+  const side = collisionSide(desiredBox, obstacle)
+  const candidate = {
+    x: side === 'left'
+      ? (obstacle.left - strip.width - STRIP_EDGE - panel.left) / width
+      : side === 'right'
+        ? (obstacle.left + obstacle.width + STRIP_EDGE - panel.left) / width
+        : desired.x,
+    y: side === 'top'
+      ? (obstacle.top - strip.height - STRIP_EDGE - panel.top) / height
+      : side === 'bottom'
+        ? (obstacle.top + obstacle.height + STRIP_EDGE - panel.top) / height
+        : desired.y,
+  }
+  const fitted = {
+    x: Math.min(Math.max(minX, candidate.x), Math.max(minX, roomX)),
+    y: Math.min(Math.max(minY, candidate.y), Math.max(minY, roomY)),
+  }
+  // In a panel too small to separate both strips there is no collision-free answer.
+  // Keep following the hand rather than freezing a control the reader cannot recover.
+  return overlapsObstacle(boxAt(fitted, panel, strip), obstacle)
+    ? clampedSpot(desired, panel, strip)
+    : fitted
+}
+
+/**
+ * Which face of the obstacle is the shortest way out.
+ */
+function collisionSide(
+  desired: ScreenBox,
+  obstacle: ScreenBox,
+): 'left' | 'right' | 'top' | 'bottom' {
+  const escapes = {
+    left: desired.left + desired.width + STRIP_EDGE - obstacle.left,
+    right: obstacle.left + obstacle.width + STRIP_EDGE - desired.left,
+    top: desired.top + desired.height + STRIP_EDGE - obstacle.top,
+    bottom: obstacle.top + obstacle.height + STRIP_EDGE - desired.top,
+  } as const
+  return (['left', 'right', 'top', 'bottom'] as const)
+    .reduce((best, side) => escapes[side] < escapes[best] ? side : best, 'left')
+}
+
+/**
+ * Keep a strip's top-left, plus its whole body, inside the panel.
+ *
+ * Both a drag and a resize come through here. A fraction alone cannot promise that
+ * the right or bottom of a wide strip is visible, so this is also the repair for a
+ * spot remembered against a larger pane.
+ * @param spot - the desired top-left fraction.
+ * @param panel - the panel the fraction is of.
+ * @param strip - the strip's measured size.
+ * @returns a top-left fraction whose box keeps the edge gutter.
+ */
+export function clampedSpot(
+  spot: PaletteSpot,
+  panel: ScreenBox,
+  strip: { readonly width: number; readonly height: number },
+): PaletteSpot {
+  const width = Math.max(1, panel.width)
+  const height = Math.max(1, panel.height)
+  const minX = Math.min(STRIP_EDGE, panel.width / 2) / width
+  const minY = Math.min(STRIP_EDGE, panel.height / 2) / height
+  const roomX = Math.max(minX, (panel.width - strip.width - STRIP_EDGE) / width)
+  const roomY = Math.max(minY, (panel.height - strip.height - STRIP_EDGE) / height)
   return {
-    x: Math.min(x >= 0.5 ? farX : roomX, Math.max(0, x)),
-    y: Math.min(y >= 0.5 ? farY : roomY, Math.max(0, y)),
+    x: Math.min(roomX, Math.max(minX, spot.x)),
+    y: Math.min(roomY, Math.max(minY, spot.y)),
+  }
+}
+
+/** A candidate spot as the screen box collision checks need. */
+function boxAt(
+  spot: PaletteSpot,
+  panel: ScreenBox,
+  strip: { readonly width: number; readonly height: number },
+): ScreenBox {
+  return {
+    left: panel.left + spot.x * panel.width,
+    top: panel.top + spot.y * panel.height,
+    width: strip.width,
+    height: strip.height,
   }
 }
 
@@ -105,10 +294,9 @@ export function draggedSpot(
  * continues from where the reader sees the strip, instead of from whichever corner
  * the default belonged to.
  *
- * The corner returned is the one the strip hangs from, and it follows the same rule
- * `placementStyle` uses: past the middle in either direction, the strip is pinned by
- * its far corner, so the far corner is the point a drag has to start from. Before
- * the middle, it hangs from its own top left.
+ * The spot is always the strip's top-left corner. An anchor that changed sides at
+ * the panel's midlines made one pointer step jump the strip by its own width or
+ * height: the position was continuous in the stored number but not on screen.
  * @param box - the strip's current box, in client coordinates.
  * @param panel - the box its fractions are of, in client coordinates.
  * @returns the spot its near or far corner sits at.
@@ -116,11 +304,9 @@ export function draggedSpot(
 export function spotOfBox(box: ScreenBox, panel: ScreenBox): PaletteSpot {
   const width = Math.max(1, panel.width)
   const height = Math.max(1, panel.height)
-  const farX = box.left - panel.left + box.width / 2 > panel.width / 2
-  const farY = box.top - panel.top + box.height / 2 > panel.height / 2
   return {
-    x: (box.left - panel.left + (farX ? box.width : 0)) / width,
-    y: (box.top - panel.top + (farY ? box.height : 0)) / height,
+    x: (box.left - panel.left) / width,
+    y: (box.top - panel.top) / height,
   }
 }
 
@@ -150,6 +336,15 @@ export const DEFAULT_PALETTE: PaletteSpot = { x: 0.02, y: 0.04 }
 const STRIP_EDGE = 8
 
 /**
+ * How close a released strip has to be before it settles into an edge gutter.
+ *
+ * Twenty-four CSS pixels is roughly one comfortable touch target. It is measured
+ * from the visible body, not from the stored fraction, so a very wide bar behaves
+ * the same as the narrow vertical palette.
+ */
+const STRIP_MAGNET = 24
+
+/**
  * A strip's box, in percentages of the panel.
  *
  * Percentages rather than pixels so the parking spot survives a resize: a reader
@@ -167,13 +362,12 @@ const STRIP_EDGE = 8
  * @returns the inline style that puts it there.
  */
 export function placementStyle(spot: PaletteSpot): CSSProperties {
-  const flipped = spot.y >= 0.5
-  const room = flipped ? spot.y : 1 - spot.y
+  const room = 1 - spot.y
   return {
     left: `${spot.x * 100}%`,
     top: `${spot.y * 100}%`,
-    maxHeight: `calc(${room * 100}% - ${STRIP_EDGE}px)`,
-    transform: `translate(${spot.x >= 0.5 ? '-100%' : '0'}, ${flipped ? '-100%' : '0'})`,
+    maxHeight: `max(0px, calc(${room * 100}% - ${STRIP_EDGE}px))`,
+    transform: 'none',
   }
 }
 

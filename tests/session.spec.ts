@@ -147,12 +147,10 @@ function stubSessions(subagent = false): {
 function delivery(overrides: Partial<Parameters<typeof deliverAnnotation>[0]> = {}): Parameters<typeof deliverAnnotation>[0] {
   return {
     sessions: stubSessions().sessions,
-    fileUpload: undefined,
     sessionId: 's1',
     document: document_,
     paths,
     pageImages: [{ page: 1, image: blobOf() }],
-    annotatedPdf: undefined,
     thumb: undefined,
     locale: 'zh',
     ...overrides,
@@ -229,26 +227,22 @@ describe('delivering an annotation', () => {
 })
 
 describe('a document that has pages', () => {
-  it('attaches the annotated PDF and one image per annotated page', async () => {
-    const upload = stubUpload()
+  it('sends one image per annotated page and leaves the whole PDF local', async () => {
     const stub = stubSessions()
     const warnings = await deliverAnnotation({
       ...delivery(),
       sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
       document: pagedDocument,
       paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1, 2, 3, 4]),
       pageImages: [{ page: 1, image: blobOf() }, { page: 3, image: blobOf() }],
     })
     expect(warnings).toEqual([])
-    expect(upload.uploads).toEqual([{ sessionId: 's1', bytes: 4, name: 'report.pdf.annotated.pdf' }])
     const parts = stub.prompts[0] ?? []
-    expect(parts[0]).toMatchObject({ type: 'file', attachment: { attachmentId: 'a'.repeat(64) } })
-    expect(parts[1]).toMatchObject({ type: 'image', name: 'report.pdf.p1.annotated.png' })
-    expect(parts[2]).toMatchObject({ type: 'image', name: 'report.pdf.p3.annotated.png' })
-    expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
-    expect(parts[3]?.text).not.toContain('.annotated.pdf')
+    expect(parts.map(part => part.type)).toEqual(['image', 'image', 'text'])
+    expect(parts[0]).toMatchObject({ type: 'image', name: 'report.pdf.p1.annotated.png' })
+    expect(parts[1]).toMatchObject({ type: 'image', name: 'report.pdf.p3.annotated.png' })
+    expect(parts[2]?.text).toContain('对应标注页已作为图片随消息发送；原 PDF 未上传')
+    expect(parts[2]?.text).not.toContain('.annotated.pdf')
   })
 
   it('caps the page images and says how many were left out', async () => {
@@ -256,62 +250,24 @@ describe('a document that has pages', () => {
     const pages = Array.from({ length: MAX_PAGE_IMAGES + 2 }, (_value, index) => ({ page: index + 1, image: blobOf() }))
     const warnings = await deliverAnnotation({ ...delivery(), sessions: stub.sessions, document: pagedDocument, paths: pagedPaths, pageImages: pages })
     expect(stub.prompts[0]?.filter(part => part.type === 'image')).toHaveLength(MAX_PAGE_IMAGES)
-    expect(warnings).toEqual(['另有 2 页标注未附图，请看带批注 PDF。'])
+    expect(warnings).toEqual(['另有 2 页标注未附图；原 PDF 不上传，请按上方路径和位置说明处理这些页。'])
   })
 
-  it('names the PDF after the figure when the Host wrote no review path', async () => {
-    // The save decides where the artifact goes, and a save that reported no review path
-    // still produced bytes: the attachment has to be named from the figure rather than
-    // reading a path that is not there.
-    const upload = stubUpload()
-    const stub = stubSessions()
-    await deliverAnnotation({
-      ...delivery(),
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      document: pagedDocument,
-      paths: { annotationPath: '/w/report.pdf.annot.json', reviewPath: null },
-      annotatedPdf: new Uint8Array([1, 2]),
-      pageImages: [],
-    })
-    expect(upload.uploads[0]?.name).toBe('report.pdf.annotated.pdf')
-  })
-
-  it('warns instead of failing when the composition has no upload service', async () => {
+  it('sends text alone when no page could be rendered', async () => {
     const stub = stubSessions()
     const warnings = await deliverAnnotation({
       ...delivery(),
       sessions: stub.sessions,
       document: pagedDocument,
       paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
       pageImages: [],
     })
     expect(stub.prompts[0]?.map(part => part.type)).toEqual(['text'])
-    expect(warnings[0]).toContain('没有附件服务')
+    expect(warnings).toEqual([])
+    expect(stub.prompts[0]?.[0]?.text).not.toContain('原 PDF 未上传')
   })
 
-  it('says the same warnings in English when the panel runs in English', async () => {
-    const noUpload = await deliverAnnotation({
-      ...delivery(),
-      locale: 'en',
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(noUpload[0]).toContain('no upload service')
-    const subagent = await deliverAnnotation({
-      ...delivery(),
-      sessions: stubSessions(true).sessions,
-      locale: 'en',
-      fileUpload: stubUpload().fileUpload,
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(subagent[0]).toContain('subagent continuation')
+  it('says the same warning in English when the panel runs in English', async () => {
     const capped = await deliverAnnotation({
       ...delivery(),
       locale: 'en',
@@ -320,108 +276,7 @@ describe('a document that has pages', () => {
       pageImages: Array.from({ length: MAX_PAGE_IMAGES + 1 }, (_value, index) => ({ page: index + 1, image: blobOf() })),
     })
     expect(capped[0]).toContain('1 more annotated pages')
-  })
-
-  it('does not point at a PDF it could not attach', async () => {
-    // Finding 42's mistake in a second place: the advice is written where the page
-    // count is known, and the attachment is decided where the upload is known. On a
-    // twelve-page document with no upload service the agent got eight images, no file
-    // part, and two warnings that contradicted each other — the second naming the
-    // answer as though it were in the message.
-    const warnings = await deliverAnnotation({
-      ...delivery(),
-      locale: 'zh',
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: Array.from({ length: MAX_PAGE_IMAGES + 4 }, (_value, index) => ({ page: index + 1, image: blobOf() })),
-    })
-    const capped = warnings.filter(line => line.includes('页标注未附图'))
-    expect(capped).toHaveLength(1)
-    expect(defined(capped[0])).not.toContain('请看带批注 PDF')
-    expect(defined(capped[0])).toContain('带批注 PDF 也未能随消息发送')
-    // Both halves of the message agree about the PDF: neither says it is there.
-    expect(warnings.some(line => line.includes('未随消息发送'))).toBe(true)
-  })
-
-  it('says so in English too, when the pages and the PDF are both missing', async () => {
-    const warnings = await deliverAnnotation({
-      ...delivery(),
-      locale: 'en',
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: Array.from({ length: MAX_PAGE_IMAGES + 2 }, (_value, index) => ({ page: index + 1, image: blobOf() })),
-    })
-    const capped = defined(warnings.find(line => line.includes('more annotated pages')))
-    expect(capped).not.toContain('see the annotated PDF')
-    expect(capped).toContain('neither is the annotated PDF')
-  })
-
-  it('reports an upload failure that is not an Error as its own text', async () => {
-    const upload = { upload: async () => { throw 'the socket died' } } as unknown as FileUploadLike
-    const warnings = await deliverAnnotation({
-      ...delivery(),
-      locale: 'en',
-      fileUpload: upload,
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(warnings[0]).toBe('The annotated PDF was not attached: the socket died')
-  })
-
-  it('warns when the upload service refuses, and when it throws', async () => {
-    const refused = stubUpload('refused')
-    const first = await deliverAnnotation({
-      ...delivery(),
-      fileUpload: refused.fileUpload,
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(first[0]).toContain('未能随消息发送')
-    const thrown = stubUpload('throws')
-    const second = await deliverAnnotation({
-      ...delivery(),
-      fileUpload: thrown.fileUpload,
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(second[0]).toContain('upload transport failed')
-  })
-
-  it('does not attach a file to a subagent continuation, which refuses one', async () => {
-    const upload = stubUpload()
-    const stub = stubSessions(true)
-    const warnings = await deliverAnnotation({
-      ...delivery(),
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      document: pagedDocument,
-      paths: pagedPaths,
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(upload.uploads).toEqual([])
-    expect(warnings[0]).toContain('子会话')
-  })
-
-  it('names the attachment after the saved document when the save wrote no path', async () => {
-    const upload = stubUpload()
-    await deliverAnnotation({
-      ...delivery(),
-      fileUpload: upload.fileUpload,
-      document: pagedDocument,
-      paths: { annotationPath: '/w/report.pdf.annot.json', reviewPath: null },
-      annotatedPdf: new Uint8Array([1]),
-      pageImages: [],
-    })
-    expect(upload.uploads[0]?.name).toBe('report.pdf.annotated.pdf')
+    expect(capped[0]).toContain('the PDF itself is not uploaded')
   })
 })
 
@@ -472,15 +327,17 @@ describe('a message that carries no picture', () => {
 
 describe('the message the agent reads', () => {
   it('names the pages a document has, and where its annotated copy is', () => {
-    const zh = buildAnnotationMessage(pagedDocument, pagedPaths, 'zh')
+    const zh = buildAnnotationMessage(pagedDocument, pagedPaths, 'zh', false, 2)
     expect(zh).toContain('（共 12 页，其中 2 页有标注，标注 3 处')
     expect(zh).toContain('第 1 页 箭头1 (1,1) → (2,2)，批注：第一页')
     expect(zh).toContain('第 3 页 矩形1 (3,3)-(4,4)')
     expect(zh).toContain('目标：标号要往左')
-    const en = buildAnnotationMessage(pagedDocument, pagedPaths, 'en')
+    expect(zh).toContain('对应标注页已作为图片随消息发送；原 PDF 未上传')
+    const en = buildAnnotationMessage(pagedDocument, pagedPaths, 'en', false, 2)
     expect(en).toContain('(12 pages, 2 pages marked, 3 marks')
     expect(en).toContain('page 3 box')
-    expect(en).toContain('The annotated PDF is attached to this message')
+    expect(en).toContain('The marked pages travel as images with this message')
+    expect(en).not.toContain('annotated PDF is attached')
   })
 
   it('measures a single-surface figure instead of counting pages', () => {
@@ -672,9 +529,9 @@ describe('delivering an edit proposal', () => {
   })
 
   it('warns instead of failing when the composition has no upload service', async () => {
-    const stub = stubSessions()
+    const english = stubSessions()
     const warnings = await deliverEdit({
-      sessions: stub.sessions,
+      sessions: english.sessions,
       fileUpload: undefined,
       sessionId: 's1',
       documentPath: '/w/docs/report.md',
@@ -685,7 +542,20 @@ describe('delivering an edit proposal', () => {
       locale: 'en',
     })
     expect(warnings[0]).toBe('This composition has no upload service, so the edited copy was not attached.')
-    expect(stub.prompts[0]?.[0]?.type).toBe('text')
+    expect(english.prompts[0]?.[0]?.type).toBe('text')
+    const chinese = stubSessions()
+    const localized = await deliverEdit({
+      sessions: chinese.sessions,
+      fileUpload: undefined,
+      sessionId: 's1',
+      documentPath: '/w/docs/report.md',
+      diff: wideDiff(),
+      editedText: 'a\nB\nc\n',
+      notes: {},
+      stale: false,
+      locale: 'zh',
+    })
+    expect(localized[0]).toBe('本次组合没有附件服务，编辑后的副本未随消息发送。')
   })
 
   it('does not attach a file to a subagent continuation, which refuses one', async () => {
@@ -704,6 +574,53 @@ describe('delivering an edit proposal', () => {
     })
     expect(upload.uploads).toEqual([])
     expect(warnings[0]).toContain('子会话')
+    const english = stubSessions(true)
+    const localized = await deliverEdit({
+      sessions: english.sessions,
+      fileUpload: stubUpload().fileUpload,
+      sessionId: 's1',
+      documentPath: '/w/docs/report.md',
+      diff: wideDiff(),
+      editedText: 'a\nB\nc\n',
+      notes: {},
+      stale: false,
+      locale: 'en',
+    })
+    expect(localized[0]).toContain('subagent continuation')
+  })
+
+  it('keeps the edit when the upload service refuses or throws', async () => {
+    const refused = stubUpload('refused')
+    const firstStub = stubSessions()
+    const first = await deliverEdit({
+      sessions: firstStub.sessions,
+      fileUpload: refused.fileUpload,
+      sessionId: 's1',
+      documentPath: '/w/docs/report.md',
+      diff: wideDiff(),
+      editedText: 'a\nB\nc\n',
+      notes: {},
+      stale: false,
+      locale: 'zh',
+    })
+    expect(first[0]).toContain('编辑后的副本未能随消息发送：the upload was refused')
+    expect(defined(firstStub.prompts[0]).some(part => (part as Part).type === 'text')).toBe(true)
+
+    const thrown = { upload: async () => { throw 'the socket died' } }
+    const secondStub = stubSessions()
+    const second = await deliverEdit({
+      sessions: secondStub.sessions,
+      fileUpload: thrown,
+      sessionId: 's1',
+      documentPath: '/w/docs/report.md',
+      diff: wideDiff(),
+      editedText: 'a\nB\nc\n',
+      notes: {},
+      stale: false,
+      locale: 'en',
+    })
+    expect(second[0]).toBe('The edited copy was not attached: the socket died')
+    expect(defined(secondStub.prompts[0]).some(part => (part as Part).type === 'text')).toBe(true)
   })
 
   it('opens the session through the service when no live binding exists', async () => {

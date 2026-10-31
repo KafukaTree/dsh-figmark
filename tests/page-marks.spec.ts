@@ -7,7 +7,7 @@
  * on no page at all, which is what a stale list row produces.
  */
 import { describe, expect, it } from 'vitest'
-import { withoutMark, type MarksByPage } from '../src/client/pdf/page-marks'
+import { withoutMark, withoutMarks, type MarksByPage } from '../src/client/pdf/page-marks'
 
 const mark = (id: string): { id: string; kind: 'arrow'; color: string; points: [] } => ({
   id,
@@ -50,5 +50,18 @@ describe('dropping one mark from the whole document', () => {
   it('leaves an empty document empty', () => {
     const before: MarksByPage = new Map()
     expect(withoutMark(before, 'a')).toBe(before)
+  })
+})
+
+describe('dropping one delivered snapshot from the whole document', () => {
+  it('removes all named marks across pages and leaves every other mark alone', () => {
+    const next = withoutMarks(pages(), new Set(['a', 'c']))
+    expect(next.get(1)?.map(m => m.id)).toEqual(['b'])
+    expect(next.get(2)).toEqual([])
+  })
+
+  it('hands back the same map when none of the ids is present', () => {
+    const before = pages()
+    expect(withoutMarks(before, new Set(['nowhere']))).toBe(before)
   })
 })

@@ -60,6 +60,14 @@ export function DetailPill(props: DetailPillProps): ReactNode {
         rows={1}
         maxLength={MAX_DETAIL_CHARS}
         onChange={(event) => { props.onWrite(event.target.value) }}
+        onKeyDown={(event) => {
+          // Escape belongs to the field first: leaving it must not also clear the
+          // mark or reach the host in the same keystroke.
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          event.currentTarget.blur()
+        }}
       />
       {hasDetail(mark) ? (
         <div className="da-comment-send">

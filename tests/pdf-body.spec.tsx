@@ -4,6 +4,8 @@ import { act, useEffect, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationDocument, AnnotationMark } from '../src/shared/annotation'
+import { ToastStack, useToasts } from '../src/client/annotator/toasts'
+import type { ToastStackProps } from '../src/client/annotator/toasts'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave } from '../src/client/autosave'
 import { figureUnit } from '../src/client/scale'
 import { markOrdinals } from '../src/shared/annotation'
@@ -73,6 +75,7 @@ const seatState = vi.hoisted(() => ({
   saveFails: null as unknown,
   draftFails: null as unknown,
   sendFails: null as unknown,
+  sendGate: null as null | { readonly wait: Promise<void>; readonly release: () => void },
   composeFails: null as unknown,
   discardFails: null as unknown,
   warnings: [] as readonly string[],
@@ -84,7 +87,6 @@ const seatState = vi.hoisted(() => ({
   sends: [] as {
     readonly input: PagedAnnotationInput
     readonly images: readonly PageImage[]
-    readonly bytes: Uint8Array
   }[],
   composes: [] as { readonly input: PagedAnnotationInput; readonly images: readonly PageImage[] }[],
 }))
@@ -106,9 +108,11 @@ function stubSeat(): DocumentSeat {
       if (seatState.draftFails !== null) throw seatState.draftFails
       seatState.drafts.push({ address, input })
     },
-    send: async (input, saved, images, bytes) => {
+    send: async (input, saved, images) => {
+      const gate = seatState.sendGate
+      if (gate !== null) await gate.wait
       if (seatState.sendFails !== null) throw seatState.sendFails
-      seatState.sends.push({ input, images, bytes })
+      seatState.sends.push({ input, images })
       return [...seatState.warnings, ...(saved.reviewPath === null ? [] : [])]
     },
     compose: async (input, _saved, images) => {
@@ -207,20 +211,37 @@ function bodyProps(props: Partial<PdfBodyProps> = {}): PdfBodyProps {
   } as PdfBodyProps
 }
 
+/** A body with the entry bundle's real feedback stack resolved above the lazy seam. */
+function TestPdfBody({ overrides }: { readonly overrides: Partial<PdfBodyProps> }): ReactNode {
+  const toasts = useToasts(copy)
+  return <PdfBody {...bodyProps({ ...overrides, toasts, ToastStack: ReducedToastStack })} />
+}
+
+/** The real stack without its timers, so assertions see the settled card at once. */
+function ReducedToastStack(props: ToastStackProps): ReactNode {
+  return <ToastStack {...props} reduced />
+}
+
 /** Mount one PDF body and let its chain of effects settle. */
 async function mount(props: Partial<PdfBodyProps> = {}): Promise<{ readonly host: HTMLElement; readonly root: Root }> {
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
   roots.push(root)
-  await act(async () => { root.render(<PdfBody {...bodyProps(props)} />) })
+  await act(async () => {
+    root.render(<TestPdfBody overrides={props} />)
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  })
   await settle()
   return { host, root }
 }
 
 /** Render one more prop set into a body that is already mounted. */
 async function rerender(root: Root, props: Partial<PdfBodyProps>): Promise<void> {
-  await act(async () => { root.render(<PdfBody {...bodyProps(props)} />) })
+  await act(async () => {
+    root.render(<TestPdfBody overrides={props} />)
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  })
   await settle()
 }
 
@@ -243,6 +264,16 @@ function button(host: HTMLElement, label: string): HTMLButtonElement {
     element.getAttribute('aria-label') === label || element.textContent === label)
   if (found === undefined) throw new Error(`no button labelled ${label}`)
   return found as HTMLButtonElement
+}
+
+/** The full sentence of one toast, before or while its typewriter is running. */
+function toastText(kind: 'note' | 'send'): string | null {
+  return document.querySelector<HTMLElement>(`.da-toast[data-kind="${kind}"]`)?.getAttribute('data-text') ?? null
+}
+
+/** The phase one toast is in, as the card paints it. */
+function toastState(kind: 'note' | 'send'): string | null {
+  return document.querySelector<HTMLElement>(`.da-toast[data-kind="${kind}"]`)?.getAttribute('data-state') ?? null
 }
 
 /** Type into a field the way a reader would, so React's own onChange sees it. */
@@ -317,6 +348,7 @@ beforeEach(() => {
   seatState.loadFails = null
   seatState.saveFails = null
   seatState.sendFails = null
+  seatState.sendGate = null
   seatState.composeFails = null
   seatState.discardFails = null
   seatState.composes = []
@@ -342,7 +374,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  for (const root of roots) root.unmount()
+  for (const root of roots) {
+    act(() => { root.unmount() })
+  }
   roots = []
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
@@ -518,7 +552,10 @@ describe('paging', () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     expect(currentProps().mode).toBe('view')
-    currentProps().onModeChange?.('annotate')
+    await act(async () => {
+      currentProps().onModeChange?.('annotate')
+      await Promise.resolve()
+    })
     await settle()
     expect(currentProps().mode).toBe('annotate')
     await click(button(host, zh.nextPage))
@@ -661,7 +698,7 @@ describe('paging', () => {
     // which reads as a broken button rather than as an empty document.
     const { host } = await mount()
     await click(button(host, zh.sendToAgent))
-    expect(host.textContent).toContain(zh.sendNothingToSend)
+    expect(toastText('note')).toBe(zh.toastNone)
     expect(seatState.saves).toEqual([])
   })
 
@@ -734,7 +771,10 @@ describe('the shell around the document', () => {
     const { host, root } = await mount()
     await click(button(host, zh.nextPage))
     await edit([mark('m2', 2)])
-    currentProps().onSummaryChange?.('两份附图一起改')
+    await act(async () => {
+      currentProps().onSummaryChange?.('两份附图一起改')
+      await Promise.resolve()
+    })
     await settle()
     // Both pages' marks survive, counted across the document rather than on the
     // page in view: the numbering map is the document's own count.
@@ -763,6 +803,11 @@ describe('saving the document', () => {
     await edit([mark('m1', 1)])
     await click(button(host, zh.nextPage))
     await edit([mark('m3', 2)])
+    await act(async () => {
+      currentProps().onSummaryChange?.('整份文档一起改')
+      await Promise.resolve()
+    })
+    await settle()
     await click(button(host, zh.sendToAgent))
     const saved = defined(seatState.saves[0])
     expect(saved.address).toBe('dsh-resource://file/session/s1/report.pdf')
@@ -776,13 +821,14 @@ describe('saving the document', () => {
     // The page stamp is the document's own: each surface holds its marks without
     // one, and the document is what knows which page they belong to.
     expect(saved.input.marks.map(entry => [entry.page, entry.id])).toEqual([[1, 'm1'], [2, 'm3']])
+    expect(saved.input.summary).toBe('整份文档一起改')
     expect(defined(saved.input.marks[0]).points).toEqual(defined(mark('m1', 1)).points)
     // The writer is asked for just the pages that carry marks, each with the
     // transform that carries its page units back into the document.
     expect(defined(writer.calls[0]).map(entry => [entry.page, entry.transform, entry.marks.length]))
       .toEqual([[1, [1, 0, 0, -1, 0, 1], 1], [2, [1, 0, 0, -1, 0, 2], 1]])
     expect(new TextDecoder().decode(saved.bytes)).toBe('%PDF-1.7 annotated')
-    expect(host.textContent).toContain(zh.sent)
+    expect(toastText('send')).toBe(zh.toastSentAgent)
     // Delivered means done: the sidecars are removed so a reload cannot revive them.
     expect(seatState.discards).toContain('dsh-resource://file/session/s1/report.pdf')
   })
@@ -792,10 +838,10 @@ describe('saving the document', () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     await click(button(host, zh.sendToAgent))
-    expect(host.textContent).toContain(zh.sent)
+    expect(toastText('send')).toBe(zh.toastSentAgent)
   })
 
-  it('sends the document, its annotated copy and a picture of every marked page', async () => {
+  it('sends a picture of every marked page without uploading the whole PDF', async () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     await click(button(host, zh.nextPage))
@@ -807,11 +853,14 @@ describe('saving the document', () => {
     expect(sent.images.map(entry => [entry.page, entry.width, entry.height]))
       .toEqual([[1, 600, 800], [3, 600, 800]])
     expect(sent.images[0]?.dataUrl).toBe('data:image/png;base64,page1')
-    expect(new TextDecoder().decode(sent.bytes)).toBe('%PDF-1.7 annotated')
+    // The annotated copy is written locally by the save above, but it is not part of
+    // delivery: only the pages the reader marked travel to the agent.
+    expect(seatState.saves).toHaveLength(1)
+    expect(new TextDecoder().decode(defined(seatState.saves[0]).bytes)).toBe('%PDF-1.7 annotated')
     // A page rendered for the session is rendered at twice the page's own size:
     // the export draws the marks onto it at that factor.
-    expect(defined(runtime.rendered[runtime.rendered.length - 1]).scale).toBe(2)
-    expect(host.textContent).toContain(zh.sent)
+    expect(runtime.rendered.some(entry => entry.scale === 2)).toBe(true)
+    expect(toastText('send')).toBe(zh.toastSentAgent)
   })
 
   it('says what the delivery could not do', async () => {
@@ -827,12 +876,14 @@ describe('saving the document', () => {
     const first = await mount()
     await edit([mark('m1', 1)])
     await click(button(first.host, zh.sendToAgent))
-    expect(first.host.textContent).toContain(`${zh.saveError}the disk is full`)
+    expect(toastText('send')).toBe(zh.toastFailed)
+    expect(toastState('send')).toBe('fail')
     seatState.saveFails = 'the socket died'
     const second = await mount()
     await edit([mark('m1', 1)])
     await click(button(second.host, zh.sendToAgent))
-    expect(second.host.textContent).toContain(`${zh.saveError}the socket died`)
+    expect(toastText('send')).toBe(zh.toastFailed)
+    expect(toastState('send')).toBe('fail')
   })
 
   it('reports a failed delivery', async () => {
@@ -840,7 +891,24 @@ describe('saving the document', () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     await click(button(host, zh.sendToAgent))
-    expect(host.textContent).toContain(`${zh.saveError}the session refused the annotation message`)
+    expect(toastText('send')).toBe(zh.toastFailed)
+    expect(toastState('send')).toBe('fail')
+  })
+
+  it('runs the same document send again from the failed card', async () => {
+    seatState.sendFails = new Error('the session refused the annotation message')
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.sendToAgent))
+    const failed = required(document.querySelector<HTMLElement>('.da-toast[data-kind="send"]'))
+    expect(failed.getAttribute('data-state')).toBe('fail')
+    seatState.sendFails = null
+    await click(button(failed, zh.toastResend))
+    expect(seatState.saves).toHaveLength(2)
+    expect(seatState.sends).toHaveLength(1)
+    expect(toastText('send')).toBe(zh.toastSentAgent)
+    expect(toastState('send')).toBe('ok')
+    expect(seatState.discards).toEqual(['dsh-resource://file/session/s1/report.pdf'])
   })
 
   it('says so when the sidecars could not be deleted after delivery, and still clears', async () => {
@@ -872,7 +940,7 @@ describe('saving the document', () => {
       .toEqual([[1, 600, 800], [3, 600, 800]])
     // Nothing was sent: a draft is the reader's to send.
     expect(seatState.sends).toEqual([])
-    expect(host.textContent).toContain(zh.composed)
+    expect(toastText('send')).toBe(zh.toastSavedAll)
     expect(seatState.discards).toHaveLength(1)
   })
 
@@ -881,7 +949,19 @@ describe('saving the document', () => {
     const { host } = await mount()
     await edit([mark('m1', 1)])
     await click(button(host, zh.sendToComposer))
-    expect(host.textContent).toContain(`${zh.saveError}the conversation service is unavailable`)
+    expect(toastText('send')).toBe(zh.toastFailed)
+    expect(toastState('send')).toBe('fail')
+  })
+
+  it('keeps the draft in the composer when clearing its sidecar fails', async () => {
+    seatState.discardFails = new Error('the disk is read-only')
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    await click(button(host, zh.sendToComposer))
+    expect(seatState.composes).toHaveLength(1)
+    expect(toastText('send')).toBe(zh.toastSavedAll)
+    expect(toastText('note')).toBe(`${zh.clearError}the disk is read-only`)
+    expect(currentProps().documentMarks).toEqual([])
   })
 
   it('saves nothing when no page carries a mark', async () => {
@@ -902,6 +982,11 @@ describe('saving the document', () => {
     await edit([mark('m1', 1)])
     await click(button(host, zh.nextPage))
     await edit([mark('m3', 2)])
+    await act(async () => {
+      currentProps().onSummaryChange?.('这份文档的总目标')
+      await Promise.resolve()
+    })
+    await settle()
     const page = defined(surfaces[surfaces.length - 1])
     // The page body is handed the document's door for a one-mark send.
     expect(page.onSendMark).toBeDefined()
@@ -912,10 +997,64 @@ describe('saving the document', () => {
     // What travelled is the one mark, saved as a document of one mark.
     const saved = defined(seatState.saves[seatState.saves.length - 1])
     expect(saved.input.marks.map(entry => entry.id)).toEqual(['m1'])
-    expect(host.textContent).toContain(zh.sentOne)
+    expect(saved.input.summary).toBe('这份文档的总目标')
+    expect(toastText('send')).toBe(zh.toastSentAgent)
     // The other page's mark is still the document's, and the sidecar was not
     // deleted: this was not a delivery of the whole document.
     expect(seatState.discards).toHaveLength(0)
+  })
+
+  it('keeps work added while a whole-document send is still in flight', async () => {
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    let release: (() => void) | undefined
+    seatState.sendGate = {
+      wait: new Promise<void>((resolve) => { release = resolve }),
+      release: () => { release?.() },
+    }
+    await click(button(host, zh.sendToAgent))
+    expect(toastText('send')).toBe(zh.toastSending)
+    expect(toastState('send')).toBe('sending')
+    // This mark was drawn after the message had already left. The answer belongs
+    // to the first snapshot, not to everything that now happens to be on screen.
+    await edit([mark('m1', 1), mark('m2', 1)])
+    await act(async () => {
+      seatState.sendGate?.release()
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    await settle()
+    expect(currentProps().documentMarks?.map(entry => entry.id)).toEqual(['m2'])
+    await waitForSave()
+    expect(defined(seatState.drafts[seatState.drafts.length - 1]).input.marks.map(entry => entry.id))
+      .toEqual(['m2'])
+  })
+
+  it('rewrites the sidecar with work added while a one-mark send is still in flight', async () => {
+    await mount()
+    await edit([mark('m1', 1), mark('m2', 1)])
+    let release: (() => void) | undefined
+    seatState.sendGate = {
+      wait: new Promise<void>((resolve) => { release = resolve }),
+      release: () => { release?.() },
+    }
+    await act(async () => {
+      currentProps().onSendMark?.(mark('m1', 1), 'agent')
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(toastText('send')).toBe(zh.toastSending)
+    expect(toastState('send')).toBe('sending')
+    await edit([mark('m1', 1), mark('m2', 1), mark('m3', 1)])
+    await act(async () => {
+      seatState.sendGate?.release()
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    await settle()
+    expect(currentProps().documentMarks?.map(entry => entry.id)).toEqual(['m2', 'm3'])
+    // The save before delivery described one mark. The draft after delivery has to
+    // put the survivors back, or reopening the PDF silently restores the sent mark.
+    await waitForSave()
+    expect(defined(seatState.drafts[seatState.drafts.length - 1]).input.marks.map(entry => entry.id))
+      .toEqual(['m2', 'm3'])
   })
 
   it('writes the one mark the pill is about into the composer, and keeps the rest', async () => {
@@ -931,7 +1070,7 @@ describe('saving the document', () => {
       for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
     })
     expect(defined(seatState.composes[0]).input.marks.map(entry => entry.id)).toEqual(['m3'])
-    expect(host.textContent).toContain(zh.composedOne)
+    expect(toastText('send')).toBe(zh.toastSavedOne)
     expect(seatState.sends).toEqual([])
     expect(seatState.discards).toHaveLength(0)
   })
@@ -953,6 +1092,19 @@ describe('saving the document', () => {
     // own copy of the marks is what the pages are handed, and it is now empty.
     const after = defined(surfaces[surfaces.length - 1])
     expect(after.draft?.marks).toEqual([])
+  })
+
+  it('reports a failed document clear while still releasing every page', async () => {
+    seatState.discardFails = new Error('the disk is read-only')
+    const { host } = await mount()
+    await edit([mark('m1', 1)])
+    const page = defined(surfaces[surfaces.length - 1])
+    await act(async () => {
+      page.onDocumentClear?.()
+      for (let turn = 0; turn < 12; turn += 1) await Promise.resolve()
+    })
+    expect(host.textContent).toContain(`${zh.clearError}the disk is read-only`)
+    expect(defined(surfaces[surfaces.length - 1]).draft?.marks).toEqual([])
   })
 
   it('says so when the document facts are not known yet', async () => {
@@ -1346,7 +1498,10 @@ describe('the document magnified', () => {
     await mount()
     const body = currentProps()
     // The body takes its factor from the document and reports every gesture back.
-    defined(body.onZoom)(2)
+    await act(async () => {
+      defined(body.onZoom)(2)
+      await Promise.resolve()
+    })
     await settle()
     expect(currentProps().zoom).toBe(2)
   })
@@ -1400,16 +1555,13 @@ describe('a row of the list that names another page', () => {
   })
 })
 
-describe('dropping a mark that is not there', () => {
-  // Sending one mark from its pill leaves the survivors behind: the mark that was
-  // sent is dropped from the document, and a second press naming an id that is
-  // already gone must not disturb the rest.
-  it('leaves the marks alone when the id matches nothing', async () => {
+describe('one-mark delivery', () => {
+  it('removes only the mark the pill named and leaves every other mark', async () => {
     await mount()
-    await edit([mark('m1', 1)])
-    const before = currentProps().documentMarks
-    await act(async () => { defined(currentProps().onSendMark)(defined(before?.[0]), 'agent') })
+    await edit([mark('m1', 1), mark('m2', 1)])
+    await act(async () => { defined(currentProps().onSendMark)(mark('m1', 1), 'agent') })
     await settle()
     expect(currentProps().documentMarks?.map(entry => entry.id)).not.toContain('m1')
+    expect(currentProps().documentMarks?.map(entry => entry.id)).toContain('m2')
   })
 })

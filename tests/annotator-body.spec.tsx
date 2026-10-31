@@ -90,6 +90,8 @@ interface Call {
 
 /** What the stubbed host should answer. */
 interface HostAnswers {
+  /** The file path the Host reports, when a spec needs a location other than `/w/...`. */
+  readonly path?: string
   readonly annotation?: AnnotationDocument | null
   readonly sha256?: string
   readonly readError?: string
@@ -189,6 +191,29 @@ function stubSessions(): {
     sources,
     sessions: { scope: () => ({ live: true }), sessionOf: () => face, using } as unknown as SessionsLike,
     detached: { scope: () => undefined, sessionOf: () => undefined, using } as unknown as SessionsLike,
+  }
+}
+
+/** A live session whose first prompt stays open until the spec releases it. */
+function gatedSessions(): {
+  readonly sessions: SessionsLike
+  readonly prompts: unknown[][]
+  readonly release: () => void
+} {
+  const prompts: unknown[][] = []
+  let release: ((answer: { readonly ok: boolean }) => void) | undefined
+  const gate = new Promise<{ readonly ok: boolean }>((resolve) => { release = resolve })
+  const face = {
+    prompt: async (content: readonly unknown[]) => {
+      prompts.push([...content])
+      return await gate
+    },
+  }
+  const using = async (): Promise<never> => { throw new Error('unused') }
+  return {
+    prompts,
+    sessions: { scope: () => ({ live: true }), sessionOf: () => face, using } as unknown as SessionsLike,
+    release: () => { release?.({ ok: true }) },
   }
 }
 
@@ -465,9 +490,15 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', StubResizeObserver)
 })
 
-afterEach(() => {
+afterEach(async () => {
   mounted?.root.unmount()
   mounted = undefined
+  // Unmount flushes a pending draft without waiting for the component. Let that
+  // microtask reach the current fetch stub before the next spec installs its own;
+  // otherwise a late request from the previous body lands in the next body's call log.
+  await act(async () => {
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+  })
   vi.unstubAllGlobals()
   consoleError.mockRestore()
   document.body.innerHTML = ''
@@ -972,23 +1003,47 @@ describe('editing marks', () => {
 })
 
 describe('the keyboard while annotating', () => {
+  it('cancels an unfinished drawing before leaving the drawing tool', async () => {
+    mounted = await svgBody()
+    await click(button(document.body, zh.toolArrow))
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: 400, height: 300 })
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20 }))
+      overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 90 }))
+    })
+    expect(overlay.querySelector('g[opacity="0.75"]')).not.toBeNull()
+    await pressKey('Escape', { bare: true })
+    expect(overlay.querySelector('g[opacity="0.75"]')).toBeNull()
+    // The first Escape belongs to the gesture, not to the mode that owns it.
+    expect(button(document.body, zh.toolArrow).getAttribute('aria-pressed')).toBe('true')
+    await pressKey('Escape', { bare: true })
+    expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
+    await act(async () => {
+      overlay.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 120, clientY: 90 }))
+    })
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(0)
+  })
+
   it('leaves element mode on Escape', async () => {
     mounted = await svgBody()
     await click(button(document.body, zh.toolElement))
     expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('true')
-    expect(document.querySelector('.da-pick-guide')).not.toBeNull()
+    expect(document.querySelector('.da-palette-hint')).not.toBeNull()
     await pressKey('Escape', { bare: true })
     expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
-    expect(document.querySelector('.da-pick-guide')).toBeNull()
+    expect(document.querySelector('.da-palette-hint')).toBeNull()
   })
 
-  it('keeps Escape in a note box, so the caret can leave the field itself', async () => {
+  it('lets Escape leave a note box without also clearing its mark', async () => {
     mounted = await svgBody({ annotation: saved })
     await selectFirstMark(document.body)
-    const note = defined(document.querySelector('.da-float-detail textarea'))
+    const note = defined(document.querySelector('.da-float-detail textarea')) as HTMLTextAreaElement
+    note.focus()
     await act(async () => {
       note.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
+    expect(document.activeElement).not.toBe(note)
     expect(detailCard().querySelector(".da-comment")).not.toBeNull()
   })
 
@@ -1202,7 +1257,7 @@ describe('moving marks', () => {
 
 describe('zoom', () => {
   it('fits the figure without offering a zoom control at all', async () => {
-    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    mounted = await svgBody({}, {}, { stageWidth: 500, stageHeight: 400 })
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     // A 200px figure in a 476px stage, fitted at the 1.5 ceiling on open.
     expect(surface.style.width).toBe('300px')
@@ -1272,6 +1327,26 @@ describe('zoom', () => {
     expect(Number.parseFloat(surface.style.width)).toBeCloseTo(300 * Math.exp(0.4), 1)
   })
 
+  it('zooms from two touch pointers through the same live factor', async () => {
+    mounted = await svgBody({}, {}, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    stubRect(overlay, { left: 0, top: 0, width: 300, height: 100 })
+    const touch = (type: string, id: number, x: number, primary: boolean): void => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 50 })
+      Object.defineProperty(event, 'pointerId', { value: id })
+      Object.defineProperty(event, 'pointerType', { value: 'touch' })
+      Object.defineProperty(event, 'isPrimary', { value: primary })
+      overlay.dispatchEvent(event)
+    }
+    await act(async () => { touch('pointerdown', 1, 50, true) })
+    await act(async () => { touch('pointerdown', 2, 150, false) })
+    await act(async () => { touch('pointermove', 2, 200, false) })
+    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(300)
+  })
+
   it('keeps the figure point under the pointer in place across a pinch', async () => {
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
@@ -1286,39 +1361,78 @@ describe('zoom', () => {
     expect(stage.scrollLeft).toBeCloseTo(Math.max(0, offset + 100 * (width / 200) - 250), 5)
   })
 
-  it('reads a plain wheel as the magnification, not as a scroll', async () => {
-    // The same motion over the same page used to have two readings — scroll the
-    // page, or ask for the next one — and on a page that fits the pane there was
-    // nothing to scroll, so it read as a page turn. One motion, one meaning now.
-    mounted = await svgBody({}, {}, { stageWidth: 500 })
+  it('pans with an ordinary two-finger wheel and leaves the zoom alone', async () => {
+    // A trackpad sends its ordinary two-finger gesture as an unmodified wheel with
+    // independent X and Y travel. Reading that as magnification made the most common
+    // navigation gesture unexpectedly resize the figure.
+    mounted = await svgBody({}, { zoom: 2 }, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    const width = surface.style.width
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    stage.scrollLeft = 100
+    stage.scrollTop = 80
     const event = new WheelEvent('wheel', {
-      deltaY: -40, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+      deltaX: 12, deltaY: -30, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
     })
     await act(async () => { stage.dispatchEvent(event) })
-    // Taken from the browser, because a prevented wheel cannot scroll the page
-    // behind the plugin either, and zoomed in, because that is what the wheel means.
+    // Taken from the browser, because the panel owns the travel; the surface keeps
+    // the factor it had.
     expect(event.defaultPrevented).toBe(true)
-    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(300)
+    expect(stage.scrollLeft).toBe(112)
+    expect(stage.scrollTop).toBe(50)
+    expect(surface.style.width).toBe(width)
   })
 
-  it('answers a wheel both ways, and a pinch as the same gesture', async () => {
-    mounted = await svgBody({}, {}, { stageWidth: 500 })
+  it('leaves an ordinary wheel to the host when a fitted picture cannot scroll', async () => {
+    mounted = await svgBody({}, {}, { stageWidth: 500, stageHeight: 400 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
-    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
-    // A trackpad pinch arrives ctrl-modified; a mouse wheel does not. Both are the
-    // magnification, so neither may depend on the modifier to be understood.
-    await pinch(stage, { deltaY: -40, clientX: 60, clientY: 50 })
-    const magnified = Number.parseFloat(surface.style.width)
-    expect(magnified).toBeGreaterThan(300)
-    const down = new WheelEvent('wheel', {
-      deltaY: 40, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+    stage.scrollLeft = 40
+    stage.scrollTop = 10
+    const event = new WheelEvent('wheel', {
+      deltaX: 5, deltaY: 25, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
     })
-    await act(async () => { stage.dispatchEvent(down) })
-    expect(Number.parseFloat(surface.style.width)).toBeLessThan(magnified)
+    await act(async () => { stage.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(false)
+    expect(stage.scrollLeft).toBe(40)
+    expect(stage.scrollTop).toBe(10)
+  })
+
+  it('maps shift-wheel to horizontal travel when the figure has room to move', async () => {
+    mounted = await svgBody({}, { zoom: 2 }, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    stage.scrollLeft = 40
+    stage.scrollTop = 10
+    const shift = new WheelEvent('wheel', {
+      deltaX: 5, deltaY: 25, shiftKey: true, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(shift) })
+    // A native horizontal component joins the vertical one instead of turning the
+    // gesture diagonal, and Shift never scrolls the vertical axis.
+    expect(stage.scrollLeft).toBe(70)
+    expect(stage.scrollTop).toBe(10)
+  })
+
+  it('normalizes line- and page-mode wheel deltas before panning', async () => {
+    mounted = await svgBody({}, { zoom: 2 }, { stageWidth: 500 })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
+    Object.defineProperty(stage, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(stage, 'scrollHeight', { configurable: true, value: 2000 })
+    stage.scrollTop = 0
+    const lines = new WheelEvent('wheel', {
+      deltaY: 2, deltaMode: 1, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(lines) })
+    expect(stage.scrollTop).toBe(32)
+    stage.scrollTop = 0
+    const pages = new WheelEvent('wheel', {
+      deltaY: 1, deltaMode: 2, clientX: 60, clientY: 50, bubbles: true, cancelable: true,
+    })
+    await act(async () => { stage.dispatchEvent(pages) })
+    expect(stage.scrollTop).toBe(400)
   })
 
   it('scales the paper once, rather than the figure inside it as well', async () => {
@@ -1795,7 +1909,9 @@ describe('the floating strips', () => {
   /** Drag one of the strips by its grip. */
   async function dragStrip(host: HTMLElement, selector: string, dx: number, dy: number): Promise<HTMLElement> {
     const strip = defined(host.querySelector(selector)) as HTMLElement
-    stubRect(strip, { left: 100, top: 300, width: 200, height: 40 })
+    stubRect(strip, selector === '.da-palette'
+      ? { left: 8, top: 24, width: 40, height: 260 }
+      : { left: 100, top: 300, width: 200, height: 40 })
     const grip = defined(strip.querySelector('.da-palette-grip')) as HTMLElement
     // jsdom has neither capture method; a browser has both, and the strip calls them
     // through an optional chain so either world moves it.
@@ -1837,7 +1953,8 @@ describe('the floating strips', () => {
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const strip = await dragStrip(document.body, '.da-palette', 80, 120)
-    // 80/400 across and 120/600 down, from the default spot in the top left.
+    // 80/400 across and 120/600 down, from the default spot in the top left. The
+    // strip follows the pointer exactly; magnetic settling waits for release.
     expect(Number.parseFloat(strip.style.left)).toBeCloseTo(22, 3)
     expect(Number.parseFloat(strip.style.top)).toBeCloseTo(24, 3)
     // The reader's parking spot outlives the panel: a reload finds it where it was.
@@ -1845,32 +1962,124 @@ describe('the floating strips', () => {
     expect(readPreferences().palette?.y).toBeCloseTo(0.24, 6)
   })
 
-  it('parks the bar where it is dragged, and uses the far edge once past the middle', async () => {
+  it('parks the bar by its top-left and keeps its whole body in the panel', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const strip = await dragStrip(document.body, '.da-bar', 320, 300)
-    // The drag starts from the bar's own box (stubbed at 100,300 in a 400x600 panel),
-    // not from the palette's corner; past the middle of either axis it is measured
-    // from its far edge, so its whole box stays on the panel.
-    expect(Number.parseFloat(strip.style.left)).toBeCloseTo(98, 3)
-    expect(Number.parseFloat(strip.style.top)).toBeCloseTo(98.6667, 3)
-    expect(strip.style.transform).toContain('-100%')
-    expect(readPreferences().bar?.x).toBeCloseTo(0.98, 6)
-    expect(readPreferences().bar?.y).toBeCloseTo(0.986667, 6)
+    // The drag starts from the bar's own box (stubbed at 100,300 in a 400x600 panel)
+    // and the box keeps one screen corner throughout. Its 200x40 body stops 8px
+    // short of the right and bottom edges rather than hanging past them.
+    expect(Number.parseFloat(strip.style.left)).toBeCloseTo(48, 3)
+    expect(Number.parseFloat(strip.style.top)).toBeCloseTo(92, 3)
+    expect(strip.style.transform).toBe('none')
+    expect(readPreferences().bar?.x).toBeCloseTo(0.48, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo(0.92, 6)
   })
 
-  it('measures a strip from its near edge while it is in the first half', async () => {
+  it('follows the hand without writing storage, then docks on release', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    const write = vi.spyOn(Storage.prototype, 'setItem')
+    write.mockClear()
+
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 40, clientY: 310 }))
+    })
+    // Pointer moves are already a React render. The synchronous storage write belongs
+    // to the end of the gesture, not to every frame underneath it.
+    expect(write).not.toHaveBeenCalled()
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 40, clientY: 310 }))
+    })
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(2, 3)
+    expect(write).toHaveBeenCalled()
+    expect(readPreferences().bar?.x).toBeCloseTo(0.02, 6)
+    write.mockRestore()
+  })
+
+  it('does not move a strip on a tap that never crossed the drag threshold', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 121, clientY: 311 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 121, clientY: 311 }))
+    })
+    expect(bar.getAttribute('data-parked')).toBeNull()
+    expect(bar.style.left).toBe('')
+  })
+
+  it('keeps the same corner while a strip crosses the middle from below', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const bar = await dragStrip(document.body, '.da-bar', -100, -240)
-    // Carried left of centre and above it: the strip hangs from its own top left
-    // corner, so its box grows right and down from the pointer rather than being
-    // measured back from the far edge.
-    expect(bar.style.transform).toContain('translate(0, 0)')
-    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(0, 3)
-    expect(Number.parseFloat(bar.style.top)).toBeCloseTo(16.6667, 3)
+    // The original box is past the vertical middle. Carrying it above the middle
+    // must not flip the anchor and jump the bar by its own height.
+    expect(bar.style.transform).toBe('none')
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(2, 3)
+    expect(Number.parseFloat(bar.style.top)).toBeCloseTo(10, 3)
+  })
+
+  it('does not switch anchors in the frame the pointer crosses the midline', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    Object.defineProperty(grip, 'setPointerCapture', { configurable: true, value: () => {} })
+    Object.defineProperty(grip, 'releasePointerCapture', { configurable: true, value: () => {} })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 270 }))
+    })
+    expect(bar.style.transform).toBe('none')
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 269 }))
+    })
+    // A side-switching anchor used to change the transform by the bar's own height
+    // on this one-pixel move, even though the stored top changed by only 1/600.
+    expect(bar.style.transform).toBe('none')
+    expect(Number.parseFloat(bar.style.top)).toBeCloseTo((300 - 41) / 6, 3)
+  })
+
+  it('keeps following the hand when one pointer step crosses the other strip', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 800, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const tools = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    stubRect(tools, { left: 400, top: 260, width: 40, height: 200 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    Object.defineProperty(grip, 'setPointerCapture', { configurable: true, value: () => {} })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      // A fast move lands on the far side of the tool strip. Direct manipulation
+      // wins while held; release is where the strips are separated again.
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 600, clientY: 310 }))
+    })
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(72.5, 3)
   })
 
   it('starts a portalled bar from the panel its position is measured against', async () => {
@@ -1892,8 +2101,11 @@ describe('the floating strips', () => {
     await act(async () => {
       grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 240 }))
     })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 180, clientY: 240 }))
+    })
     expect(readPreferences().bar?.x).toBeCloseTo(0.3, 6)
-    expect(readPreferences().bar?.y).toBeCloseTo(0.6, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo(0.466667, 6)
   })
 
   it('starts a parked wide bar from its saved spot, not from the box centre', async () => {
@@ -1913,11 +2125,38 @@ describe('the floating strips', () => {
     await act(async () => {
       grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 160, clientY: 460 }))
     })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 160, clientY: 460 }))
+    })
     expect(readPreferences().bar?.x).toBeCloseTo(0.35, 6)
     expect(readPreferences().bar?.y).toBeCloseTo(0.75, 6)
   })
 
-  it('returns a parked bar to the safe bottom lane when a resize puts it on the figure', async () => {
+  it('grabs a strip that is still easing from the corner currently painted', async () => {
+    rememberPreferences({ bar: { x: 0.4, y: 0.4 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    // A resize or magnetic release can leave the saved destination at .4/.4 while
+    // the painted box is still on its way there. Direct manipulation must begin at
+    // the pixels under the hand, not at the animation's destination.
+    stubRect(bar, { left: 100, top: 200, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 210 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 160, clientY: 270 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 160, clientY: 270 }))
+    })
+    expect(readPreferences().bar?.x).toBeCloseTo(0.35, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo((260 / 600), 6)
+  })
+
+  it('keeps a parked bar where the reader put it when a resize crosses the figure', async () => {
     let width = 500
     let height = 400
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
@@ -1933,8 +2172,9 @@ describe('the floating strips', () => {
     const bar = defined(document.querySelector('.da-bar')) as HTMLElement
     const figure = defined(document.querySelector('.da-figure-frame')) as HTMLElement
     // The saved fraction was clear in the old layout. The narrower, shorter pane
-    // puts the same fraction over the drawing; the bar must return to its reserved
-    // bottom strip instead of sitting on the marks the reader came to annotate.
+    // puts the same fraction over the drawing, but a resize is not an instruction
+    // to undo the reader's placement. Covering the drawing is allowed; leaving the
+    // panel or covering the other strip is not.
     stubRect(bar, { left: 140, top: 260, width: 200, height: 36 })
     stubRect(figure, { left: 20, top: 120, width: 460, height: 220 })
     width = 600
@@ -1943,11 +2183,252 @@ describe('the floating strips', () => {
       defined(resized)()
       for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
     })
-    expect(bar.getAttribute('data-parked')).toBeNull()
-    expect(readPreferences().bar).toBeUndefined()
+    expect(bar.getAttribute('data-parked')).toBe('true')
+    expect(readPreferences().bar).toEqual({ x: 0.35, y: 0.7 })
   })
 
-  it('lets a cancelled drag drop the strip where it was', async () => {
+  it('clamps a remembered bar and palette into a panel that became narrower', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ bar: { x: 0.95, y: 0.95 }, palette: { x: 0.98, y: 0.2 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    // Both saved fractions were legal for a wider pane, but their measured bodies
+    // now hang 30–90px past the right and bottom edges.
+    stubRect(bar, { left: 380, top: 555, width: 200, height: 36 })
+    stubRect(palette, { left: 382, top: 120, width: 42, height: 233 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 650
+    height = 320
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(readPreferences().bar?.x).toBeCloseTo((400 - 200 - 8) / 400, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo((600 - 36 - 8) / 600, 6)
+    expect(readPreferences().palette?.x).toBeCloseTo((400 - 42 - 8) / 400, 6)
+    expect(readPreferences().palette?.y).toBeCloseTo(0.2, 6)
+  })
+
+  it('clamps the vertical side of a parked bar when only its height ran out', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ bar: { x: 0.4, y: 0.95 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 160, top: 570, width: 200, height: 36 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 650
+    height = 320
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(readPreferences().bar?.x).toBeCloseTo(0.4, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo((600 - 36 - 8) / 600, 6)
+  })
+
+  it('slides the tools just below the default bar instead of resetting their corner', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ palette: { x: 0.8, y: 0.2 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(bar, { left: 250, top: 100, width: 200, height: 40 })
+    stubRect(palette, { left: 300, top: 100, width: 40, height: 180 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 650
+    height = 320
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    // The pointer is not moving, so the repair takes the shortest route out of the
+    // collision. Here that is 28px down from the bar, not a teleport to the corner.
+    expect(readPreferences().palette).toEqual({ x: 0.8, y: 148 / 600 })
+  })
+
+  it('slides a parked bar just clear when a resize puts it on the tools', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ bar: { x: 0.35, y: 0.7 }, palette: { x: 0.8, y: 0.2 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(bar, { left: 180, top: 250, width: 120, height: 36 })
+    stubRect(palette, { left: 210, top: 230, width: 40, height: 200 })
+    // The figure is elsewhere. The overlap that matters is between the two strips:
+    // the lower one hides Send, so the reader cannot send what they just annotated.
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 20, top: 20, width: 100, height: 100 })
+    width = 600
+    height = 300
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(bar.getAttribute('data-parked')).toBe('true')
+    // The tools occupy the 8px-breathing-room box through y=438. The bar is nearest
+    // to their lower edge, so it keeps its x and moves only to the first free y.
+    expect(readPreferences().bar).toEqual({ x: 0.35, y: 438 / 600 })
+  })
+
+  it('puts the tools back in their default corner when a tiny panel cannot separate them', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ palette: { x: 0.8, y: 0.2 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 120, height: 120 })
+    stubRect(bar, { left: 0, top: 0, width: 120, height: 120 })
+    stubRect(palette, { left: 90, top: 20, width: 40, height: 180 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 121
+    height = 121
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(palette.style.left).toBe('2%')
+  })
+
+  it('unparks the bar when no collision-free place is left in a tiny panel', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ bar: { x: 0.35, y: 0.7 }, palette: { x: 0.8, y: 0.2 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 120, height: 120 })
+    stubRect(bar, { left: 0, top: 0, width: 120, height: 120 })
+    stubRect(palette, { left: 0, top: 0, width: 120, height: 120 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 121
+    height = 121
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    // The first pass clamps the saved body inside the tiny panel. The second asks
+    // whether it can coexist with the tools there; it cannot.
+    width = 122
+    height = 122
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(bar.getAttribute('data-parked')).toBeNull()
+  })
+
+  it('does not let a delayed resize frame overwrite a drag already in hand', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    stubRect(palette, { left: 150, top: 200, width: 40, height: 180 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 210 }))
+    })
+    const liveLeft = bar.style.left
+    const liveTop = bar.style.top
+    await act(async () => {
+      for (const frame of [...frames]) frame(0)
+    })
+    expect(bar.style.left).toBe(liveLeft)
+    expect(bar.style.top).toBe(liveTop)
+  })
+
+  it('stops a dirty layout frame after the chrome has unmounted', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const result = await svgBody({}, { mode: 'annotate' })
+    result.root.unmount()
+    await act(async () => {
+      for (const frame of [...frames]) frame(0)
+    })
+  })
+
+  it('puts both strips back where the press found them when the pointer is cancelled', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
@@ -1956,27 +2437,237 @@ describe('the floating strips', () => {
     for (const selector of ['.da-palette', '.da-bar']) {
       const strip = defined(document.querySelector(selector)) as HTMLElement
       const grip = defined(strip.querySelector('.da-palette-grip')) as HTMLElement
+      const left = strip.style.left
+      const top = strip.style.top
       await act(async () => {
         grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 300 }))
       })
       await act(async () => {
         grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 140, clientY: 360 }))
       })
+      expect(strip.style.left).not.toBe(left)
       await act(async () => {
         grip.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }))
       })
       expect(strip.getAttribute('data-dragging')).toBeNull()
+      expect(strip.style.left).toBe(left)
+      expect(strip.style.top).toBe(top)
     }
   })
 
-  it('flips the tools against the far edges when parked past the middle', async () => {
+  it('puts a held strip back without consuming the Escape that leaves a tool', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 360 }))
+    })
+    expect(bar.style.left).not.toBe('')
+    await pressKey('Escape', { bare: true })
+    expect(bar.style.left).toBe('')
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+  })
+
+  it('puts the palette back when Escape ends its drag', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(palette, { left: 8, top: 24, width: 40, height: 240 })
+    const grip = defined(palette.querySelector('.da-palette-grip')) as HTMLElement
+    const left = palette.style.left
+    const top = palette.style.top
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 40 }))
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 80, clientY: 140 }))
+    })
+    expect(grip.getAttribute('aria-grabbed')).toBe('true')
+    expect(palette.style.left).not.toBe(left)
+    await pressKey('Escape', { bare: true })
+    expect(palette.style.left).toBe(left)
+    expect(palette.style.top).toBe(top)
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+  })
+
+  it('ends a drag when the browser takes pointer capture away', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    const released: number[] = []
+    Object.defineProperty(grip, 'hasPointerCapture', { configurable: true, value: () => true })
+    Object.defineProperty(grip, 'releasePointerCapture', {
+      configurable: true,
+      value: (id: number) => { released.push(id) },
+    })
+    const down = new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 })
+    Object.defineProperty(down, 'pointerId', { value: 1 })
+    await act(async () => {
+      grip.dispatchEvent(down)
+    })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    await act(async () => {
+      const move = new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 360 })
+      Object.defineProperty(move, 'pointerId', { value: 1 })
+      grip.dispatchEvent(move)
+    })
+    expect(grip.getAttribute('aria-grabbed')).toBe('true')
+    expect(bar.style.left).not.toBe('')
+    const lost = new MouseEvent('lostpointercapture', { bubbles: true })
+    Object.defineProperty(lost, 'pointerId', { value: 1 })
+    await act(async () => {
+      grip.dispatchEvent(lost)
+    })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    expect(bar.getAttribute('data-dragging')).toBeNull()
+    expect(bar.style.left).toBe('')
+    expect(released).toEqual([1])
+  })
+
+  it('ends a held strip when the window loses focus or the page is hidden', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 360 }))
+    })
+    expect(bar.style.left).not.toBe('')
+    await act(async () => { window.dispatchEvent(new Event('blur')) })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    expect(bar.style.left).toBe('')
+
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    const paletteGrip = defined(palette.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      paletteGrip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 40, clientY: 40 }))
+    })
+    expect(paletteGrip.getAttribute('aria-grabbed')).toBe('false')
+    await act(async () => {
+      window.dispatchEvent(new Event('blur'))
+    })
+    expect(paletteGrip.getAttribute('aria-grabbed')).toBe('false')
+
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 360 }))
+    })
+    expect(bar.style.left).not.toBe('')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    expect(bar.style.left).toBe('')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+  })
+
+  it('ignores pointer events that do not belong to the grip already held', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    for (const selector of ['.da-palette', '.da-bar']) {
+      const strip = defined(document.querySelector(selector)) as HTMLElement
+      stubRect(strip, { left: 100, top: 300, width: 200, height: 40 })
+      const grip = defined(strip.querySelector('.da-palette-grip')) as HTMLElement
+      const primary = new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 })
+      Object.defineProperty(primary, 'pointerId', { value: 1 })
+      await act(async () => { grip.dispatchEvent(primary) })
+
+      for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+        const other = new MouseEvent(type, { bubbles: true })
+        Object.defineProperty(other, 'pointerId', { value: 2 })
+        await act(async () => { grip.dispatchEvent(other) })
+        expect(grip.getAttribute('aria-grabbed')).toBe('false')
+      }
+
+      const lost = new MouseEvent('lostpointercapture', { bubbles: true })
+      Object.defineProperty(lost, 'pointerId', { value: 1 })
+      await act(async () => { grip.dispatchEvent(lost) })
+      expect(grip.getAttribute('aria-grabbed')).toBe('false')
+
+      const rightButton = new MouseEvent('pointerdown', { bubbles: true, button: 2 })
+      Object.defineProperty(rightButton, 'pointerType', { value: 'mouse' })
+      await act(async () => { grip.dispatchEvent(rightButton) })
+      expect(grip.getAttribute('aria-grabbed')).toBe('false')
+    }
+  })
+
+  it('ignores a second pointer and a non-primary touch while one grip is held', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    const down = new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 })
+    Object.defineProperty(down, 'pointerId', { value: 1 })
+    await act(async () => { grip.dispatchEvent(down) })
+    const parkedLeft = bar.style.left
+    const second = new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 360 })
+    Object.defineProperty(second, 'pointerId', { value: 2 })
+    await act(async () => { grip.dispatchEvent(second) })
+    expect(bar.style.left).toBe(parkedLeft)
+
+    const up = new MouseEvent('pointerup', { bubbles: true })
+    Object.defineProperty(up, 'pointerId', { value: 1 })
+    await act(async () => { grip.dispatchEvent(up) })
+    const palm = new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 })
+    Object.defineProperty(palm, 'isPrimary', { value: false })
+    await act(async () => { grip.dispatchEvent(palm) })
+    expect(grip.getAttribute('aria-grabbed')).toBe('false')
+  })
+
+  it('leaves the other strip a gap rather than parking one control over the other', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(bar, { left: 100, top: 300, width: 200, height: 40 })
+    stubRect(palette, { left: 150, top: 200, width: 40, height: 180 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    Object.defineProperty(grip, 'setPointerCapture', { configurable: true, value: () => {} })
+    Object.defineProperty(grip, 'releasePointerCapture', { configurable: true, value: () => {} })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 120, clientY: 310 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 210 }))
+    })
+    // While held, the bar stays exactly under the hand even through the palette.
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(25, 3)
+    expect(Number.parseFloat(bar.style.top)).toBeCloseTo((200 / 600) * 100, 3)
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 120, clientY: 210 }))
+    })
+    // Release resolves the collision; the shortest escape is upward, where its bottom
+    // lands exactly 8px above the palette rather than painting over it.
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(25, 3)
+    expect(Number.parseFloat(bar.style.top)).toBeCloseTo((152 / 600) * 100, 3)
+  })
+
+  it('keeps the tools on-screen at the far edge without changing their corner', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const strip = await dragStrip(document.body, '.da-palette', 380, 560)
-    // The palette is measured back from its far corner there, so the whole strip
-    // stays on the panel instead of hanging off it.
-    expect(strip.style.transform).toBe('translate(-100%, -100%)')
+    expect(strip.style.transform).toBe('none')
+    // The upright strip is 40x260, so both axes clamp by that whole body.
+    expect(Number.parseFloat(strip.style.left)).toBeCloseTo(88, 3)
+    expect(Number.parseFloat(strip.style.top)).toBeCloseTo((600 - 260 - 8) / 6, 3)
   })
 
   it('does nothing when a grip is dragged without a press on it', async () => {
@@ -2008,7 +2699,7 @@ describe('moving the view by hand', () => {
   }
 
   it('moves the view when the empty canvas is dragged, so a zoomed figure can be reached', async () => {
-    mounted = await svgBody({ annotation: saved }, {}, { stageWidth: 500 })
+    mounted = await svgBody({ annotation: saved }, { zoom: 2 }, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
     stage.scrollLeft = 100
@@ -2020,7 +2711,7 @@ describe('moving the view by hand', () => {
   })
 
   it('shows the hand while the view is being moved, and lets go when it is', async () => {
-    mounted = await svgBody({ annotation: saved }, {}, { stageWidth: 500 })
+    mounted = await svgBody({ annotation: saved }, { zoom: 2 }, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
     const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
@@ -2029,9 +2720,14 @@ describe('moving the view by hand', () => {
     await act(async () => {
       overlay.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 100 }))
     })
-    expect(stage.getAttribute('data-panning')).toBe('true')
+    // A press is not yet a pan. The hand closes only after the pointer has actually
+    // travelled far enough to be intentional.
+    expect(stage.getAttribute('data-panning')).toBeNull()
     await act(async () => {
       overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 120, clientY: 120 }))
+    })
+    expect(stage.getAttribute('data-panning')).toBe('true')
+    await act(async () => {
       overlay.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 120, clientY: 120 }))
     })
     expect(stage.getAttribute('data-panning')).toBeNull()
@@ -2646,6 +3342,93 @@ describe('saving', () => {
     expect(handoff()).toBe(zh.toastSentAgent)
   })
 
+  it('keeps a mark drawn while a whole-figure send is still in flight', async () => {
+    const gated = gatedSessions()
+    const result = await svgBody({ annotation: saved }, { sessions: gated.sessions })
+    mounted = result
+    await click(button(document.body, zh.sendToAgent))
+    expect(gated.prompts).toHaveLength(1)
+    // The file was sent as it stood at the press. Drawing while the session answers
+    // belongs to the next review, not to the copy already on its way.
+    await drawArrowAt(document.body, [20, 20], [120, 80])
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(2)
+    await act(async () => {
+      gated.release()
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+    })
+    await openList(document.body)
+    // Exactly the newly drawn mark remains. Clearing the whole panel here would
+    // erase work the reader did after the send had already left.
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(document.querySelector('.da-mark-text')?.textContent).not.toContain('标号指错了')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
+    // The delete retired the sent snapshot. The survivor still has to be written
+    // back, or a reload silently restores the batch that just went to the agent.
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const annotation = postBody(defined(writes[writes.length - 1]))['annotation'] as AnnotationDocument
+    expect(annotation.marks).toHaveLength(1)
+    expect(annotation.marks[0]?.id).not.toBe('m1')
+  })
+
+  it('keeps a summary edited while a whole-figure send is still in flight', async () => {
+    const gated = gatedSessions()
+    const result = await svgBody({ annotation: saved }, { sessions: gated.sessions })
+    mounted = result
+    await click(button(document.body, zh.sendToAgent))
+    expect(gated.prompts).toHaveLength(1)
+    await type(await openGoal(document.body), '下一轮的总体目标')
+    await act(async () => {
+      gated.release()
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+    })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const annotation = postBody(defined(writes[writes.length - 1]))['annotation'] as AnnotationDocument
+    expect(annotation.marks).toEqual([])
+    expect(annotation.summary).toBe('下一轮的总体目标')
+  })
+
+  it('reports a failed cleanup but keeps the next batch drawn during the send', async () => {
+    const gated = gatedSessions()
+    const result = await svgBody(
+      { annotation: saved, deleteError: 'the disk is read-only' },
+      { sessions: gated.sessions },
+    )
+    mounted = result
+    await click(button(document.body, zh.sendToAgent))
+    await drawArrowAt(document.body, [20, 20], [120, 80])
+    await act(async () => {
+      gated.release()
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+    })
+    expect(document.body.textContent).toContain(`${zh.clearError}the disk is read-only`)
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+  })
+
+  it('keeps a mark drawn while a one-mark send is still in flight', async () => {
+    const gated = gatedSessions()
+    const result = await svgBody({ annotation: saved }, { sessions: gated.sessions })
+    mounted = result
+    await selectFirstMark(document.body)
+    await click(defined(document.querySelector('.da-comment-send-primary')))
+    expect(gated.prompts).toHaveLength(1)
+    await drawArrowAt(document.body, [20, 20], [120, 80])
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(2)
+    await act(async () => {
+      gated.release()
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+    })
+    await openList(document.body)
+    // The sent mark leaves and the mark that arrived while it was leaving stays.
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(document.querySelector('.da-mark-text')?.textContent).not.toContain('标号指错了')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20)) })
+    const writes = result.calls.filter(call => call.init?.method === 'POST')
+    const annotation = postBody(defined(writes[writes.length - 1]))['annotation'] as AnnotationDocument
+    expect(annotation.marks).toHaveLength(1)
+    expect(annotation.marks[0]?.id).not.toBe('m1')
+  })
+
   it('fills the annotation into the session that owns the figure', async () => {
     const { sessions, prompts } = stubSessions()
     const result = await svgBody({ annotation: saved }, { sessions })
@@ -2896,7 +3679,11 @@ describe('a rendered document', () => {
   function htmlPayload(answers: HostAnswers = {}): unknown {
     return {
       ok: true,
-      figure: { path: HTML_PATH, mediaType: 'text/html', sha256: answers.sha256 ?? 'b'.repeat(64) },
+      figure: {
+        path: answers.path ?? HTML_PATH,
+        mediaType: 'text/html',
+        sha256: answers.sha256 ?? 'b'.repeat(64),
+      },
       annotation: answers.annotation ?? null,
     }
   }
@@ -3022,12 +3809,14 @@ describe('a rendered document', () => {
 
   /** Point the picker at whatever the frame's own hit test says is under it. */
   async function moveOver(hits: readonly Element[]): Promise<void> {
-    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
-    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
     const frameDocument = defined(frame().contentDocument)
     Object.defineProperty(frameDocument, 'elementsFromPoint', { configurable: true, value: () => hits })
     await act(async () => {
-      overlay.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 30, clientY: 40 }))
+      // The frame owns the pointer in element mode, so this is the event the browser
+      // actually delivers. The overlay stays out of the way and never sees the move.
+      defined(hits[0] ?? frameDocument.body).dispatchEvent(
+        new MouseEvent('pointermove', { bubbles: true, clientX: 30, clientY: 40 }),
+      )
     })
   }
 
@@ -3158,6 +3947,189 @@ describe('a rendered document', () => {
     expect(handoff()).toBe(zh.toastSentAgent)
   })
 
+  it('picks an element from the live document without covering the page', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+    const pageActions: string[] = []
+    frameDocument.addEventListener('pointerup', () => { pageActions.push('pointerup') })
+    frameDocument.addEventListener('click', () => { pageActions.push('click') })
+    // Nothing has armed the selection guard yet, so ordinary page interaction must
+    // still reach the document untouched.
+    const ordinaryRelease = new MouseEvent('pointerup', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    const ordinaryClick = new MouseEvent('click', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    await act(async () => {
+      lead.dispatchEvent(ordinaryRelease)
+      lead.dispatchEvent(ordinaryClick)
+    })
+    expect(ordinaryRelease.defaultPrevented).toBe(false)
+    expect(ordinaryClick.defaultPrevented).toBe(false)
+    expect(pageActions).toEqual(['pointerup', 'click'])
+    pageActions.length = 0
+    await click(button(document.body, zh.toolElement))
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    // The document keeps native links, scrolling and its own scripts. The parent
+    // listens in the document's capture phase and only names the pressed element.
+    expect(stage.getAttribute('data-pass')).toBe('true')
+    const press = new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    const release = new MouseEvent('pointerup', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    const followUp = new MouseEvent('click', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    await act(async () => {
+      lead.dispatchEvent(press)
+      lead.dispatchEvent(release)
+      lead.dispatchEvent(followUp)
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(press.defaultPrevented).toBe(true)
+    expect(release.defaultPrevented).toBe(true)
+    expect(followUp.defaultPrevented).toBe(true)
+    expect(pageActions).toEqual([])
+    expect(document.querySelector('[data-da-kind="element"]')).not.toBeNull()
+  })
+
+  it('says when the live document has nothing to pick', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [],
+    })
+    await click(button(document.body, zh.toolElement))
+    const press = new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, button: 0, clientX: 600, clientY: 350,
+    })
+    await act(async () => {
+      frameDocument.body.dispatchEvent(press)
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(press.defaultPrevented).toBe(true)
+    expect(aside()).toBe(zh.toolElementMiss)
+  })
+
+  it('ignores a non-primary page press and can read a frame without a view', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+    await click(button(document.body, zh.toolElement))
+
+    const secondary = new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, button: 2, clientX: 40, clientY: 50,
+    })
+    await act(async () => { lead.dispatchEvent(secondary) })
+    expect(secondary.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-da-kind="element"]')).toBeNull()
+
+    // A detached or synthetic document may have no window to report its scroll. Its
+    // own coordinates are then the only coordinates, not a reason to drop the press.
+    Object.defineProperty(frameDocument, 'defaultView', { configurable: true, value: null })
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    Reflect.deleteProperty(frameDocument, 'defaultView')
+    expect(document.querySelectorAll('[data-da-kind="element"]')).toHaveLength(1)
+  })
+
+  it('selects an existing element instead of duplicating it, and lets a blank page press close it', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    const second = defined(frameDocument.querySelectorAll('p')[1])
+    stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
+    stubRect(second, { left: 20, top: 100, width: 240, height: 60 })
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+
+    await click(button(document.body, zh.toolElement))
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(document.querySelectorAll('[data-da-kind="element"]')).toHaveLength(1)
+
+    // Asking for the same element again is a way back to its existing mark, not a
+    // second comment on the same block.
+    await click(button(document.body, zh.toolElement))
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(document.querySelectorAll('[data-da-kind="element"]')).toHaveLength(1)
+    expect(document.querySelector('.da-float-detail')).not.toBeNull()
+
+    // In select mode, a press on another block is still the page's own action, but it
+    // also dismisses the comment that was open on the old block.
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [second],
+    })
+    await act(async () => {
+      second.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 120,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(document.querySelector('.da-float-detail')).toBeNull()
+    expect(document.querySelectorAll('[data-da-kind="element"]')).toHaveLength(1)
+  })
+
+  it('lets a blank press in the page close a selected element mark', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
+    await click(button(document.body, zh.toolElement))
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(document.querySelector('.da-float-detail')).not.toBeNull()
+    stubRect(frameDocument.body, { left: 0, top: 100, width: WINDOW.width, height: 400 })
+    await act(async () => {
+      frameDocument.body.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 600, clientY: 350,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    expect(document.querySelector('.da-float-detail')).toBeNull()
+    expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
+  })
+
   it('sends the marks with no picture attached and the document wording in the message', async () => {
     const { sessions, prompts } = stubSessions()
     mounted = await htmlBody({ annotation: savedHtml }, { sessions })
@@ -3220,6 +4192,41 @@ describe('a rendered document', () => {
     expect(stage.scrollTop).toBe(0)
   })
 
+  it('pans a document with two fingers without magnifying its fixed layout', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    const width = surface.style.width
+    const calls: (readonly [number, number])[] = []
+    const view = defined(frame().contentWindow)
+    Object.defineProperty(view, 'scrollBy', {
+      configurable: true,
+      value: (x: number, y: number) => { calls.push([x, y]) },
+    })
+    const touch = (type: string, x: number, y: number, id: number, primary: boolean): void => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y })
+      Object.defineProperties(event, {
+        pointerId: { value: id },
+        pointerType: { value: 'touch' },
+        isPrimary: { value: primary },
+      })
+      overlay.dispatchEvent(event)
+    }
+    await act(async () => {
+      touch('pointerdown', 10, 10, 1, true)
+      touch('pointerdown', 100, 100, 2, false)
+      touch('pointermove', 190, 100, 2, false)
+    })
+    // Two fingers scroll the framed document, but the fixed-width paper beneath it
+    // is not a zoomable picture: changing its factor would detach every mark.
+    expect(surface.style.width).toBe(width)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[0]).toBe(-45)
+    expect(Math.abs(calls[0]?.[1] ?? 1)).toBe(0)
+  })
+
   it('drags the page under the marks, so a mark stays on the element it was drawn on', async () => {
     mounted = await htmlBody()
     await reportLayout(WINDOW.width, 1843)
@@ -3268,9 +4275,12 @@ describe('a rendered document', () => {
     await click(button(document.body, zh.toolElement))
     await moveOver([card])
     const chip = defined(document.querySelector('.da-name')) as HTMLElement
+    const hoverBox = defined(document.querySelector('.da-live-hit')) as HTMLElement
     // The name is the page's, not the panel's: it is the class its author wrote, and
     // the class the light adds is the panel's own and is not part of the answer.
     expect(chip.textContent).toBe('div.relative')
+    expect(hoverBox).not.toBeNull()
+    expect(hoverBox.closest('.da-paper')).not.toBeNull()
     expect(card.classList.contains('da-spot')).toBe(true)
     // Placed in the document's own pixels, inside the paper, so the window clips the
     // name exactly where it clips the page.
@@ -3288,6 +4298,144 @@ describe('a rendered document', () => {
     // A pointer that names nothing says nothing, rather than leaving an old name up.
     await moveOver([])
     expect(document.querySelector('.da-name')).toBeNull()
+    expect(document.querySelector('.da-live-hit')).toBeNull()
+  })
+
+  it('keeps the element depth chosen under the pointer when hover and click agree', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    const field = frameDocument.createElement('input')
+    defined(frameDocument.querySelector('#s')).append(field)
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+    await click(button(document.body, zh.toolElement))
+    const key = async (target: EventTarget, value: string): Promise<void> => {
+      await act(async () => {
+        target.dispatchEvent(new KeyboardEvent('keydown', {
+          key: value, bubbles: true, cancelable: true,
+        }))
+      })
+    }
+    // Depth keys before the pointer has named anything have no ladder to walk.
+    await key(lead, 'ArrowUp')
+    expect(document.querySelector('.da-name')).toBeNull()
+    await moveOver([lead])
+    expect(document.querySelector('.da-name')?.textContent).toBe('p#lead')
+
+    // Choosing the tool leaves focus on the palette, outside the frame. Moving the
+    // pointer over the page must still arm the depth keys, or the printed shortcut is
+    // dead until the reader happens to click inside the document first.
+    await key(window, 'ArrowUp')
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+    // Once the frame itself owns focus, the same control hears the key there.
+    await key(lead, 'ArrowDown')
+    expect(document.querySelector('.da-name')?.textContent).toBe('p#lead')
+    await key(lead, 'ArrowUp')
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+    // A reflow can replace the box under a still pointer; it must not reset the rung.
+    await moveOver([lead])
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+    await key(lead, 'ArrowUp')
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+    await key(window, 'ArrowDown')
+    expect(document.querySelector('.da-name')?.textContent).toBe('p#lead')
+    await key(window, 'ArrowUp')
+    await key(lead, 'Enter')
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+    // A key in a form belongs to the form, not to the element picker.
+    await key(field, 'ArrowUp')
+    expect(document.querySelector('.da-name')?.textContent).toBe('section#s')
+
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerdown', {
+        bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+      }))
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    // Clicking commits the same rung the hover box and name were already promising.
+    expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<section id="s">')
+  })
+
+  it('previews an element when the framed document has no window', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    Object.defineProperty(frameDocument, 'defaultView', { configurable: true, value: null })
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+    await click(button(document.body, zh.toolElement))
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 40, clientY: 50 }))
+    })
+    // A document parsed without a browsing context has scroll zero, but it still has
+    // an element to name and a box to preview.
+    expect(document.querySelector('.da-name')?.textContent).toBe('p#lead')
+    expect(document.querySelector('.da-live-hit')).not.toBeNull()
+
+    const pageActions: string[] = []
+    frameDocument.addEventListener('pointerup', () => { pageActions.push('pointerup') })
+    frameDocument.addEventListener('click', () => { pageActions.push('click') })
+    const press = new MouseEvent('pointerdown', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    const release = new MouseEvent('pointerup', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    const followUp = new MouseEvent('click', {
+      bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
+    })
+    await act(async () => {
+      lead.dispatchEvent(press)
+      lead.dispatchEvent(release)
+      lead.dispatchEvent(followUp)
+      for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+    })
+    // With no window, the document itself owns the rest of the guarded press.
+    expect(release.defaultPrevented).toBe(true)
+    expect(followUp.defaultPrevented).toBe(true)
+    expect(pageActions).toEqual([])
+    expect(document.querySelector('[data-da-kind="element"]')).not.toBeNull()
+  })
+
+  it('puts the element preview away when the pointer leaves the frame', async () => {
+    mounted = await htmlBody()
+    await reportLayout(WINDOW.width, 1843)
+    const frameDocument = defined(frame().contentDocument)
+    const lead = defined(frameDocument.querySelector('#lead'))
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [lead],
+    })
+    await click(button(document.body, zh.toolElement))
+    await moveOver([lead])
+    expect(document.querySelector('.da-name')).not.toBeNull()
+    expect(document.querySelector('.da-live-hit')).not.toBeNull()
+    expect(lead.classList.contains('da-spot')).toBe(true)
+    await act(async () => {
+      defined(frameDocument.documentElement).dispatchEvent(new MouseEvent('pointerleave', { bubbles: false }))
+    })
+    expect(document.querySelector('.da-name')).toBeNull()
+    expect(document.querySelector('.da-live-hit')).toBeNull()
+    expect(lead.classList.contains('da-spot')).toBe(false)
+    // Returning from the toolbar can begin with pointerover; the first element the
+    // hand crosses must be enough to show what a press will take.
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, clientX: 30, clientY: 40 }))
+    })
+    expect(document.querySelector('.da-name')).not.toBeNull()
+    expect(document.querySelector('.da-live-hit')).not.toBeNull()
+    await act(async () => {
+      lead.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }))
+    })
+    expect(document.querySelector('.da-name')).toBeNull()
+    expect(document.querySelector('.da-live-hit')).toBeNull()
   })
 
   it('draws on a frame that has no window yet, and scrolls nothing', async () => {
@@ -3417,6 +4565,8 @@ describe('a rendered document', () => {
       mounted = result
       expect(frame()).not.toBeNull()
       expect(document.body.textContent).not.toContain(zh.loading)
+      await click(button(document.body, zh.toolElement))
+      expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('true')
       // With no document there is nobody to ask for a width, so the surface stays
       // unmeasured and no overlay is laid over a page that is not there.
       expect(document.querySelector('svg.da-overlay')).toBeNull()
@@ -3502,6 +4652,7 @@ describe('a rendered document', () => {
       expect(field.dataset['live']).toBe('false')
       expect(document.querySelector('.da-live-badge')?.textContent).toBe('HTML')
       expect(document.querySelector('.da-live-icon path')).not.toBeNull()
+      expect(document.querySelector('.da-live-parent')?.textContent).toBe('.../w/')
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
       await go('localhost:5173')
@@ -3520,6 +4671,11 @@ describe('a rendered document', () => {
       expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
       // The file's marks were locators in a document nobody is looking at any more.
       expect(document.querySelectorAll('.da-mark')).toHaveLength(0)
+    })
+
+    it('omits the breadcrumb when the file has no parent directory', async () => {
+      mounted = await htmlBody({ path: '/report.html' })
+      expect((defined(document.querySelector('.da-live-parent')) as HTMLElement).hidden).toBe(true)
     })
 
     it('hands back an address that is not one, without asking the Host', async () => {
@@ -3634,6 +4790,27 @@ describe('a rendered document', () => {
       await report({ kind: 'pick', ...PICKED })
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+    })
+
+    it('takes one blank click to close a picked comment, then gives the page back', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL })
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+      expect(stage.getAttribute('data-pass')).toBe('true')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      // A selected mark needs the overlay in front once, so the blank click can
+      // dismiss it even though the document itself lives in another browsing context.
+      expect(stage.getAttribute('data-pass')).toBeNull()
+      const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+      stubRect(overlay, { left: 0, top: 0, width: 200, height: 100 })
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 190, clientY: 90 }))
+        overlay.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 190, clientY: 90 }))
+        overlay.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 190, clientY: 90 }))
+      })
+      expect(stage.getAttribute('data-pass')).toBe('true')
     })
 
     it('records the element the page reported, and not its class', async () => {
@@ -4353,40 +5530,38 @@ describe('removing a mark the owner has selected', () => {
   })
 })
 
-describe('the wheel as the one magnification gesture', () => {
-  // The reader's complaint was that the same motion meant two things: a wheel over
-  // a page that fits the pane looked like a request for the next page, while a wheel
-  // meant for a closer look is the same motion. It means one thing now, and the page
-  // turn is the keyboard's.
-  it('magnifies on a plain wheel upward, with no modifier held', async () => {
+describe('the pinch as the magnification gesture', () => {
+  // A pinch arrives as a ctrl-modified wheel. It is exactly the gesture for a closer
+  // look; the ordinary unmodified wheel remains a pan and is covered above.
+  it('magnifies on a pinch out', async () => {
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
     const before = Number.parseFloat(surface.style.width)
     const event = new WheelEvent('wheel', {
-      deltaY: -30, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
+      deltaY: -30, ctrlKey: true, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
     })
     await act(async () => { stage.dispatchEvent(event) })
     expect(event.defaultPrevented).toBe(true)
     expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(before)
   })
 
-  it('shrinks on a plain wheel downward', async () => {
+  it('shrinks on a pinch in', async () => {
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     stubRect(stage, { left: 0, top: 0, width: 500, height: 400 })
     const before = Number.parseFloat(surface.style.width)
     const event = new WheelEvent('wheel', {
-      deltaY: 30, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
+      deltaY: 30, ctrlKey: true, clientX: 120, clientY: 90, bubbles: true, cancelable: true,
     })
     await act(async () => { stage.dispatchEvent(event) })
     expect(Number.parseFloat(surface.style.width)).toBeLessThan(before)
   })
 
   it('keeps the point under the pointer where it was', async () => {
-    // A wheel that grew the picture away from the pointer would make the reader chase
+    // A pinch that grew the picture away from the pointer would make the reader chase
     // the part they were looking at.
     mounted = await svgBody({}, {}, { stageWidth: 500 })
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
@@ -4396,7 +5571,7 @@ describe('the wheel as the one magnification gesture', () => {
     for (let step = 0; step < 6; step += 1) {
       await act(async () => {
         stage.dispatchEvent(new WheelEvent('wheel', {
-          deltaY: -60, clientX: 400, clientY: 180, bubbles: true, cancelable: true,
+          deltaY: -60, ctrlKey: true, clientX: 400, clientY: 180, bubbles: true, cancelable: true,
         }))
       })
     }
@@ -4503,7 +5678,7 @@ describe('the light the picker shines', () => {
     // drawing the rectangular box that a curve (or a diagonal line) never occupies.
     expect(document.querySelector('.da-name')?.textContent).toBe('text#lead')
     expect(document.querySelector('.da-live-hit')).toBeNull()
-    expect(document.querySelector('.da-pick-guide')?.textContent).toContain('1 / 1')
+    expect(document.querySelector('.da-palette-hint')?.textContent).toContain('1 / 1')
   })
 
   it('says so when element mode lands on nothing', async () => {

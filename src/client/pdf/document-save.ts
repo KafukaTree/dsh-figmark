@@ -52,13 +52,13 @@ export interface SaveContext {
   readonly autosave: {
     /** Drop a pending write. */
     readonly cancel: () => void
+    /** Wait until a write already under way has finished. */
+    readonly drained: () => Promise<void>
     /** Record what this save wrote. @param input - the annotation it persisted. */
     readonly markWritten: (input: PagedAnnotationInput) => void
     /** Forget what is on disk, so the next edit is written rather than skipped. */
     readonly forget: () => void
   }
-  /** Report a status line. @param text - what to say. */
-  readonly say: (text: string) => void
   /** Report a failure. @param text - what went wrong. */
   readonly fail: (text: string) => void
   /** Say that a hand-off is under way, so the buttons report it. */
@@ -71,40 +71,50 @@ export interface SaveContext {
     readonly saveFailed: string
     /** "the document is not ready" line. */
     readonly notReady: string
-    /** "sending to the agent" line. */
-    readonly sending: string
-    /** "putting it in the composer" line. */
-    readonly composing: string
-    /** "it is in the composer" line. */
-    readonly composed: string
-    /** "that one is in the composer" line. */
-    readonly composedOne: string
-    /** "it was sent" line. */
-    readonly sent: string
-    /** "that one was sent" line. */
-    readonly sentOne: string
     /** "clearing failed" prefix. */
     readonly clearFailed: string
   }
   /** The document's state after a clear. */
   readonly cleared: () => void
   /**
-   * Take one mark out of the document, leaving the rest.
+   * Remove exactly the marks a hand-off carried, then report whether work remains.
    *
-   * A per-mark hand-off delivers one mark, so the document keeps the others — and
-   * the sidecar has to follow, which it does on its own: dropping the mark changes
-   * what the next collect describes, and the background writer reconciles disk with
-   * that. The one thing it cannot know is that the disk now holds a document of one
-   * mark rather than of all of them, so the caller forgets the written signature
-   * first, and the next pass writes the survivors instead of skipping them.
-   * @param id - the mark that was delivered.
+   * The reader can keep drawing while the session is answering. Removing every mark
+   * that happens to exist when the answer arrives would erase that newer work; this
+   * removes the snapshot that actually travelled instead.
+   *
+   * @param ids - ids in the delivered snapshot.
+   * @param sentSummary - the document note in that snapshot.
+   * @param summaryDelivered - whether that note travelled as part of this hand-off.
    */
-  readonly dropped: (id: string) => void
+  readonly delivered: (
+    ids: ReadonlySet<string>,
+    sentSummary: string,
+    summaryDelivered: boolean,
+  ) => void
   /** Creation time of the document this save produced. @param at - its timestamp. */
   readonly setCreatedAt: (at: string) => void
   /** Whether the file on disk is not the one the marks were drawn on. @param stale - new value. */
   readonly setStale: (stale: boolean) => void
 }
+
+/** A hand-off whose document, page model and bytes are all ready to travel. */
+export interface PreparedDelivery {
+  /** Exactly the snapshot the card stands for. */
+  readonly input: PagedAnnotationInput
+  /** Whether this snapshot is the document, rather than one mark from its pill. */
+  readonly whole: boolean
+  /** The parsed document those bytes came from. */
+  readonly pdf: PdfDocument
+  /** The original bytes the annotated copy is written into. */
+  readonly bytes: Uint8Array<ArrayBuffer>
+}
+
+/** What a hand-off can be before its work starts. */
+export type DeliveryPreparation =
+  | { readonly kind: 'ready'; readonly value: PreparedDelivery }
+  | { readonly kind: 'not-ready' }
+  | { readonly kind: 'nothing' }
 
 /**
  * The text of a failure, whether it was an `Error` or not.
@@ -127,6 +137,7 @@ export function messageOf(cause: unknown): string {
 export async function discardDocument(context: SaveContext): Promise<void> {
   // A write that is still waiting would put the sidecar back the moment it ran.
   context.autosave.cancel()
+  await context.autosave.drained()
   context.autosave.forget()
   try {
     await context.seat.discard(context.address)
@@ -146,65 +157,99 @@ export async function discardDocument(context: SaveContext): Promise<void> {
  * which they cannot see from the pill they pressed.
  *
  * @param context - the document being saved.
- * @param target - who receives the annotation.
  * @param only - the single mark being sent, or undefined to send the document.
+ * @returns the ready snapshot, or why there is none.
  */
-export async function saveAndDeliver(
-  context: SaveContext,
-  target: DeliveryTarget,
-  only?: AnnotationMark,
-): Promise<void> {
+export function prepareDelivery(context: SaveContext, only?: AnnotationMark): DeliveryPreparation {
   // The only enforcement point: the toolbar buttons stay clickable so this guard is
   // what decides, not a disabled attribute that hides the reason — and "decides" has
   // to mean "answers", or a live button that drops its press reads as a broken one.
   const collected = context.collect()
-  if (collected === null) {
-    context.fail(context.copy.notReady)
-    return
-  }
+  if (collected === null) return { kind: 'not-ready' }
   // One mark is sent as a document of one mark: the message, the sidecar and the
   // drawn copy all describe what is being sent, and each of them reads the marks
   // from this one input rather than consulting the document again.
   const input = only === undefined
     ? collected
     : { ...collected, marks: collected.marks.filter(mark => mark.id === only.id) }
-  const { pdf, bytes } = context
-  if (input.marks.length === 0) {
-    context.fail(context.copy.nothingToSend)
-    return
-  }
+  if (input.marks.length === 0) return { kind: 'nothing' }
   // A collected document always has both: `collectInput` answers null unless the figure
   // and its page count are known, and the page count is read off this same `pdf`, which
   // came from these same `bytes`. The guard is kept because the compiler cannot follow
   // that argument, and it is narrowed to what it means: these two are known here.
   /* v8 ignore start -- a collected document always carries both, for the reason above. */
-  if (pdf === null || bytes === undefined) {
-    context.fail(context.copy.notReady)
-    return
-  }
+  const { pdf, bytes } = context
+  if (pdf === null || bytes === undefined) return { kind: 'not-ready' }
   /* v8 ignore stop */
+  return { kind: 'ready', value: { input, whole: only === undefined, pdf, bytes } }
+}
+
+/**
+ * Write and hand off one prepared snapshot.
+ *
+ * Failures are thrown rather than painted here: the caller owns the send card, and
+ * that card can only show its retry button when the same task rejects.
+ */
+export async function saveAndDeliver(
+  context: SaveContext,
+  target: DeliveryTarget,
+  prepared: PreparedDelivery,
+): Promise<readonly string[]> {
   context.setBusy(true)
-  context.say(target === 'agent' ? context.copy.sending : context.copy.composing)
-  try {
-    const pages = markedPages(groupByPage(input.marks))
-    const annotatedPdf = await context.annotate(bytes, pdf, pages, context.figureUnit)
-    const saved = await context.seat.save(context.address, input, annotatedPdf)
-    context.autosave.cancel()
-    context.autosave.markWritten(input)
-    context.setCreatedAt(input.createdAt ?? new Date().toISOString())
-    context.setStale(false)
-    const pageImages = await context.review(pdf, pages)
-    if (target === 'composer') {
-      await context.seat.compose(input, saved, pageImages, annotatedPdf)
-      context.say(only === undefined ? context.copy.composed : context.copy.composedOne)
-    } else {
-      const warnings = await context.seat.send(input, saved, pageImages, annotatedPdf)
-      const delivered = only === undefined ? context.copy.sent : context.copy.sentOne
-      context.say(`${delivered}${warnings.length === 0 ? '' : ` ${warnings.join(' ')}`}`)
-    }
-    if (only === undefined) {
-      await discardDocument(context)
-      return
+  const outcome = await writePrepared(context, target, prepared).then(
+    value => ({ ok: true as const, value }),
+    (cause: unknown) => ({ ok: false as const, cause }),
+  )
+  context.setBusy(false)
+  if (!outcome.ok) {
+    throw new Error(`${context.copy.saveFailed}${messageOf(outcome.cause)}`)
+  }
+  return outcome.value
+}
+
+/**
+ * Write one prepared snapshot and update the document afterwards.
+ *
+ * Kept apart from the busy flag so a rejection has one unwind point: the
+ * public function turns the promise into either its warnings or the sentence
+ * the retryable toast card shows.
+ */
+async function writePrepared(
+  context: SaveContext,
+  target: DeliveryTarget,
+  prepared: PreparedDelivery,
+): Promise<readonly string[]> {
+  const { input, whole, pdf, bytes } = prepared
+  const pages = markedPages(groupByPage(input.marks))
+  const annotatedPdf = await context.annotate(bytes, pdf, pages, context.figureUnit)
+  const saved = await context.seat.save(context.address, input, annotatedPdf)
+  context.autosave.cancel()
+  context.autosave.markWritten(input)
+  context.setCreatedAt(input.createdAt ?? new Date().toISOString())
+  context.setStale(false)
+  const pageImages = await context.review(pdf, pages)
+  if (target === 'composer') {
+      await context.seat.compose(input, saved, pageImages)
+  } else {
+      const warnings = await context.seat.send(input, saved, pageImages)
+    if (whole) {
+      const sentIds = new Set(input.marks.map(mark => mark.id))
+      const sentSummary = input.summary
+      // Stop the writer before retiring the snapshot it was describing. A write that
+      // is already on the wire has to finish first, or it can put the old sidecar
+      // back after the delete.
+      context.autosave.cancel()
+      await context.autosave.drained()
+      try {
+        await context.seat.discard(context.address)
+      } catch (cause) {
+        context.fail(`${context.copy.clearFailed}${messageOf(cause)}`)
+      }
+      // Keep the delivered snapshot as the last written signature. The surviving
+      // state now differs from it, so the normal edit effect writes the survivors —
+      // while an empty survivor set becomes the usual delete rather than a stale file.
+      context.delivered(sentIds, sentSummary, true)
+      return warnings
     }
     // The sidecar on disk holds the one mark that was sent, so the survivors have to
     // be written back over it: left alone it would deliver that mark again on the
@@ -213,11 +258,24 @@ export async function saveAndDeliver(
     // dropping the mark is what gives it the survivors to write — if there are none,
     // the same pass deletes the sidecar, which is the right end state for a
     // document whose last mark has been sent.
-    context.autosave.forget()
-    context.dropped(only.id)
-  } catch (cause) {
-    context.fail(`${context.copy.saveFailed}${messageOf(cause)}`)
-  } finally {
-    context.setBusy(false)
+    context.autosave.cancel()
+    await context.autosave.drained()
+    context.delivered(new Set(input.marks.map(mark => mark.id)), input.summary, false)
+    return warnings
   }
+  // A draft is not a delivery: clear only the snapshot that was parked. A
+  // whole-document draft was this document's full snapshot, so its marks and note
+  // leave; a one-mark draft leaves every other page where it was.
+  const ids = new Set(input.marks.map(mark => mark.id))
+  context.autosave.cancel()
+  await context.autosave.drained()
+  if (whole) {
+    try {
+      await context.seat.discard(context.address)
+    } catch (cause) {
+      context.fail(`${context.copy.clearFailed}${messageOf(cause)}`)
+    }
+  }
+  context.delivered(ids, input.summary, whole)
+  return []
 }

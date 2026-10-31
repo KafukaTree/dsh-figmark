@@ -72,6 +72,11 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-palette{position:absolute;z-index:13;display:flex;flex-direction:column;align-items:center;gap:2px;
   padding:6px 5px;border-radius:16px;background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
+  /* Dragging is direct manipulation and must not lag the pointer. The transition is
+     for the two moments where position is decided by the layout instead: the magnetic
+     release dock and a resize repair. None of this applies while the hand is down. */
+  transition:left 180ms cubic-bezier(.22,1,.36,1),top 180ms cubic-bezier(.22,1,.36,1),
+    box-shadow 140ms ease;will-change:left,top;
   /* The panel clips whatever reaches past it, and the palette is positioned outside
      the one child that scrolls, so a strip taller than the panel would leave its last
      tools painted outside the clip — unclickable, and no scroll to reach them. The
@@ -79,7 +84,8 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
      annotator/placement.ts); this turns that bound into reachable tiles, not a cut. */
   overflow-y:auto;scrollbar-width:thin;box-sizing:border-box}
 /* While it is being dragged the pointer is the grip, whatever it passes over. */
-.da-palette[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
+.da-palette[data-dragging="true"]{z-index:14;opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14);
+  transition:none}
 .da-palette[data-dragging="true"] *{cursor:move !important}
 /* The handle: a block of six dots, the one part of a strip that only drags. The block
    is turned to suit the strip — wider than tall on the bar, taller than wide on the
@@ -181,7 +187,9 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   display:flex;align-items:center;flex:0 0 auto;flex-wrap:nowrap;
   width:max-content;max-width:calc(100% - 20px);padding:4px 5px;border-radius:16px;
   background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
-  box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08)}
+  box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
+  transition:left 180ms cubic-bezier(.22,1,.36,1),top 180ms cubic-bezier(.22,1,.36,1),
+    box-shadow 140ms ease;will-change:left,top}
 /* One row at every width: it scrolls sideways before it wraps into a second row
    that would cover the drawing the bottom inset protects. The style fold stays
    outside this scroller so its popup is never clipped. */
@@ -194,7 +202,8 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* A bar standing in for the page body's own: it is placed by the pane rather than
    dragged, because there is no page yet to park it over. */
 .da-bar[data-static="true"]{bottom:8px}
-.da-bar[data-dragging="true"]{opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14)}
+.da-bar[data-dragging="true"]{z-index:14;opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14);
+  transition:none}
 .da-bar[data-dragging="true"] *{cursor:move !important}
 /* The bar's buttons are white glyphs on the dark strip, and every state of them is a
    veil of white: the accent is spent on the marks, not on the panel's chrome. */
@@ -315,33 +324,24 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-figure{display:block;user-select:none;-webkit-user-drag:none}
 /* The table is a thing you can push. The hand only shows under the tools that
    leave a drag free to move the view: under a drawing tool the same drag draws. */
-.da-stage[data-hand="true"]{cursor:grab}
+.da-stage[data-hand="true"]{cursor:default}
+.da-stage[data-hand="true"][data-pannable="true"]{cursor:grab}
 /* A drag that has started is a hand closed on the table: the cursor is how the
    reader knows the gesture took, without moving the picture first. Every descendant
    too, and not just the stage, because the overlay covers the figure and would
    otherwise keep saying what it said before the press. */
 .da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
-/* Element mode says what it is before the reader risks a click. A top-centre banner
-   sat across the first line of real content; this smaller status pill tucks into the
-   quiet upper-right margin instead. It is not a control and takes no pointer events. */
-.da-pick-guide{position:absolute;z-index:9;top:8px;right:8px;
-  display:flex;align-items:center;gap:6px;max-width:calc(100% - 64px);box-sizing:border-box;
-  padding:3px 7px;border-radius:999px;background:rgba(24,24,27,.86);color:#fff;
-  box-shadow:0 5px 18px rgba(10,14,24,.2),0 0 0 1px rgba(255,255,255,.08);
-  font:10px/14px -apple-system,"PingFang SC",sans-serif;white-space:nowrap;pointer-events:none}
-.da-pick-mode{flex:0 0 auto;color:#9bbcff;font-weight:700;letter-spacing:.02em}
-.da-pick-mode::before{content:"";display:inline-block;width:5px;height:5px;margin-right:4px;
-  border-radius:50%;background:var(--da-accent,#176df2);vertical-align:1px}
-.da-pick-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.82)}
-.da-pick-keys{flex:0 0 auto;padding-left:5px;border-left:1px solid rgba(255,255,255,.18);
-  color:rgba(255,255,255,.5)}
-@media (max-width:560px){.da-pick-keys{display:none}}
-/* A split pane is narrower than the browser window that contains it, so a viewport
-   media query cannot see the space this guide actually has. In a compact pane the
-   level is the state the reader needs; the keyboard legend is useful only after that
-   state survives, and its fixed width was otherwise clipping both. */
-.da-root[data-compact="true"] .da-pick-keys{display:none}
-.da-root[data-compact="true"] .da-pick-guide{max-width:calc(100% - 76px)}
+/* Element mode belongs to the tool that armed it, not to a banner over the document.
+   The compact footer lives inside the floating palette: it cannot collide with page
+   content, it travels when the palette is moved, and the state word is the only copy
+   the reader needs once the mode is already selected. */
+.da-palette-hint{display:flex;flex-direction:column;align-items:center;gap:1px;
+  width:100%;box-sizing:border-box;margin-top:1px;padding:4px 1px 1px;
+  border-top:1px solid rgba(255,255,255,.12);white-space:nowrap;pointer-events:none}
+.da-palette-hint-mode{font-size:9px;font-weight:700;line-height:11px;color:#a9c8ff}
+.da-palette-hint-depth{font-size:10px;font-weight:700;line-height:12px;
+  color:#fff;font-variant-numeric:tabular-nums}
+.da-palette-hint-keys{font-size:8px;line-height:10px;letter-spacing:.02em;color:rgba(255,255,255,.48)}
 /* The rendered document takes the figure's place, and while no mark-making tool is
    armed it is the reader's own page: it takes the pointer events, so a link follows,
    a button presses, a video plays. A mark on it keeps its own hit area (the overlay
@@ -372,28 +372,38 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    of location is on screen, a quiet badge says the file format or that this is a
    proxied page, and focus rings the whole field instead of suddenly drawing a blue
    outline around a previously borderless text box. */
-.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:7px 14px 8px;
-  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.035));
-  border-bottom:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.22))}
+.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:6px 12px 7px;
+  background:linear-gradient(180deg,var(--dsw-alias-bg-layer-1,rgba(127,127,127,.045)),
+    color-mix(in srgb,var(--dsw-alias-bg-layer-1,#fff) 45%,transparent));
+  border-bottom:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.16))}
 .da-live-bar[hidden]{display:none}
-.da-live-field{display:flex;flex:1 1 auto;align-items:center;gap:7px;min-width:0;height:34px;box-sizing:border-box;
-  padding:0 8px 0 10px;border:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:9px;
-  background:var(--dsw-alias-bg-base,#fff);box-shadow:0 1px 2px rgba(20,40,80,.04);
-  transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
+.da-live-field{display:flex;flex:0 1 360px;align-items:center;gap:6px;min-width:0;width:min(360px,100%);
+  height:31px;box-sizing:border-box;padding:0 6px 0 9px;
+  border:0.5px solid color-mix(in srgb,var(--dsw-alias-border-l2,#bbb) 72%,transparent);
+  border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 88%,transparent);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(20,40,80,.035);
+  transition:border-color .15s ease,box-shadow .15s ease,background .15s ease,width .15s ease}
 .da-live-field:hover{border-color:var(--dsw-alias-border-l3,rgba(127,127,127,.46))}
 .da-live-field:focus-within{border-color:var(--da-accent,#176df2);
-  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14));background:var(--dsw-alias-bg-base,#fff)}
-.da-live-icon{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.55;
+  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14));background:var(--dsw-alias-bg-base,#fff);
+  flex-basis:min(480px,100%)}
+.da-live-icon{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.55;
   stroke-linecap:round;stroke-linejoin:round;color:var(--dsw-alias-label-tertiary,inherit)}
 .da-live-field[data-live="true"] .da-live-icon{color:var(--da-accent,#176df2)}
+.da-live-parent{flex:0 1 auto;min-width:0;max-width:48%;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--dsw-alias-label-tertiary,inherit);
+  font:10.5px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-live-parent[hidden]{display:none}
+.da-live-parent-sep{padding:0 2px;color:var(--dsw-alias-label-tertiary,inherit);opacity:.55}
+.da-live-field:focus-within .da-live-parent{display:none}
 .da-live-addr{flex:1 1 auto;min-width:0;height:30px;padding:0;border:0;outline:none;
   background:transparent;color:var(--dsw-alias-label-primary,inherit);
-  font:12px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+  font:11.5px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-live-addr::placeholder{color:var(--dsw-alias-label-tertiary,inherit);opacity:.8}
-.da-live-badge{flex:0 0 auto;padding:2px 6px;border-radius:4px;
+.da-live-badge{flex:0 0 auto;padding:2px 6px;border-radius:999px;
   background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.1));
-  color:var(--dsw-alias-label-tertiary,inherit);font-size:9px;font-weight:700;line-height:14px;
-  letter-spacing:.07em;text-transform:uppercase;white-space:nowrap}
+  color:var(--dsw-alias-label-tertiary,inherit);font-size:8.5px;font-weight:750;line-height:13px;
+  letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
 .da-live-field[data-live="true"] .da-live-badge{background:var(--da-accent-soft,rgba(23,109,242,.14));
   color:var(--da-accent,#176df2)}
 .da-live-note{flex:0 0 auto;font-size:11.5px;color:var(--da-quiet,#6b6f75);white-space:nowrap}
@@ -411,8 +421,21 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-live-error[hidden]{display:none}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-tool="select"]{cursor:inherit}
+/* A mark is an object to pick up, while the blank table around it is a table to
+   push. Inheriting the stage's grab cursor over both made every mark claim to be
+   empty canvas; the move cursor says what a press on the object actually does. */
+.da-overlay[data-tool="select"] [data-da-mark]{cursor:move}
+.da-overlay[data-tool="select"] [data-da-kind="element"]{cursor:pointer}
 .da-overlay:not([data-tool="select"]):not([data-tool="element"]){cursor:crosshair}
-.da-overlay[data-tool="element"]{cursor:crosshair}
+/* Picking names a clickable object, not a point to draw. A pointer plus the
+   hovered outline says "this whole element is the target"; a drawing crosshair
+   made element mode look like one more pen. */
+.da-overlay[data-tool="element"]{cursor:default}
+.da-overlay[data-tool="element"][data-pick="true"]{cursor:pointer}
+/* A drawing tool owns the whole paper. Stored marks stay visible, but their hit
+   paths and handles must not steal the stroke that starts on top of one. */
+.da-overlay:not([data-tool="select"]) [data-da-mark] path,
+.da-overlay:not([data-tool="select"]) [data-da-handle]{pointer-events:none !important}
 /* The element a click would take, or already names, lit in its own shape rather than
    boxed. A drop shadow follows whatever the element paints — a stroked curve, filled
    glyphs, a patch — so one rule lights every kind of artist the figure can hold. The
@@ -509,14 +532,16 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-dock-sep{width:1px;height:16px;margin:0 3px;background:var(--dsw-alias-border-l3,currentColor);opacity:.6;flex:0 0 auto}
 /* The count rides on the list's own button: it is the one thing about the list a
    reader wants without opening it. */
-/* Two digits made this 20px wide over a 15px glyph, covering a third of the picture a
-   reader uses to recognise the button. It now sits off the glyph's corner rather than
-   on it, and a count that grows past two digits is capped rather than allowed to eat
-   the icon: the number on the bar is a reminder, the list itself is one click away. */
-.da-dock-count{position:absolute;z-index:1;top:0;right:-4px;min-width:13px;height:13px;padding:0 3px;
-  border-radius:7px;background:var(--dsw-alias-border-l4,#c9ced8);color:var(--dsw-alias-label-primary,#2d2d2d);
-  box-shadow:0 0 0 1px rgba(24,24,27,.3);font-size:8.5px;font-weight:700;line-height:13px;
-  text-align:center;font-variant-numeric:tabular-nums;pointer-events:none}
+/* The count is part of the button rather than a badge hanging outside it. The bar's
+   horizontal scroll clips overflow, so an absolutely positioned corner badge lost its
+   top row exactly while the reader was scrolling to the list. A small inline pill is
+   both fully painted and a wider target for the same action. */
+.da-dock-list{width:auto;min-width:34px;padding:0 5px 0 4px;gap:3px;border-radius:999px}
+.da-dock-list svg{width:14px;height:14px}
+.da-dock-count{display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;
+  padding:0 3px;border-radius:7px;background:rgba(255,255,255,.86);color:#25262b;
+  font-size:9px;font-weight:750;line-height:14px;text-align:center;font-variant-numeric:tabular-nums;
+  pointer-events:none}
 
 /* --- the floating records ------------------------------------------------ */
 /* A record is a card over the figure, opened from the dock and closed on its own
@@ -768,6 +793,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 @media (prefers-reduced-motion:reduce){
   .da-toast,.da-toast[data-leaving="true"],.da-toasts{transition:none!important;animation:none!important}
   .da-toast *{animation-duration:.001s!important;animation-delay:0s!important}
+  .da-palette,.da-bar{transition:none!important}
   /* The strips' press is a scale, and a scale is the one motion this reader asked
      not to see — the buttons stay put and the click still lands. */
   .da-bar .da-btn,.da-bar .da-dock-btn,.da-palette .da-btn{transition:none!important;transform:none!important}
@@ -898,10 +924,10 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 .da-staged-seat:empty{display:none}
 .da-staged-seat .da-staged{margin:0}
 .da-staged{display:flex;flex-direction:column;align-items:flex-start;box-sizing:border-box;width:100%;margin:0 0 8px}
-.da-staged-card{position:relative;box-sizing:border-box;width:min(280px,100%);padding:9px 10px;border-radius:12px;
+.da-staged-card{position:relative;box-sizing:border-box;width:min(264px,100%);padding:7px 8px 7px 9px;border-radius:11px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
-  background:var(--dsw-alias-bg-layer-2,#f7f7f9);box-shadow:0 1px 2px rgba(0,0,0,.03)}
-.da-staged-open{appearance:none;display:flex;align-items:center;gap:10px;box-sizing:border-box;width:100%;
+  background:var(--dsw-alias-bg-layer-2,#f7f7f9);box-shadow:0 1px 2px rgba(0,0,0,.025)}
+.da-staged-open{appearance:none;display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;
   padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
 .da-staged-open:hover .da-staged-title{color:var(--da-accent,#176df2)}
 .da-staged-open[disabled]{opacity:.65;cursor:default}
@@ -910,30 +936,28 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
    quiet fill the shipped attachment rail gives its thumbnails rather than the surface's
    own colour — on the card's surface a white tile would be a bare outline. */
 .da-staged-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;
-  width:48px;height:48px;overflow:hidden;border-radius:10px;
+  width:40px;height:40px;overflow:hidden;border-radius:9px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
   background:var(--dsw-alias-interactive-bg-hover,#f2f2f4);color:var(--dsw-alias-label-tertiary,inherit)}
 .da-staged-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.da-staged-glyph{width:20px;height:20px}
+.da-staged-glyph{width:18px;height:18px}
 /* min-width 0 on the column and on the sentence is what makes the ellipsis possible:
    a flex item refuses to shrink below its content unless it is told it may. */
-.da-staged-text{display:flex;flex-direction:column;gap:2px;min-width:0;padding-right:18px}
+.da-staged-text{display:flex;flex-direction:column;gap:3px;min-width:0;padding-right:18px}
 .da-staged-head{display:flex;align-items:center;gap:5px;min-width:0}
-.da-staged-title{font-size:12.5px;font-weight:650;line-height:1.35;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.da-staged-count{flex:0 0 auto;padding:0 4px;border-radius:5px;font-size:9px;line-height:14px;
+.da-staged-title{min-width:0;flex:1 1 auto;font-size:11.5px;font-weight:650;line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-staged-count{flex:0 0 auto;min-width:16px;padding:0 4px;border-radius:99px;font-size:9px;line-height:15px;
+  text-align:center;font-weight:700;font-variant-numeric:tabular-nums;
   background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.06));color:var(--da-accent,#176df2);
-  font-variant-numeric:tabular-nums}
-.da-staged-file{font-size:10px;line-height:1.3;color:var(--dsw-alias-label-tertiary,inherit);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.da-staged-line{display:flex;align-items:center;gap:4px;min-width:0;font-size:10.5px;line-height:1.35;
-  color:var(--dsw-alias-label-tertiary,inherit)}
+}
+.da-staged-line{display:flex;align-items:center;gap:4px;min-width:0;font-size:10px;line-height:1.35;
+  color:var(--dsw-alias-label-secondary,inherit)}
 .da-staged-mark-icon{flex:0 0 auto;width:10px;height:10px;color:var(--da-accent,#176df2)}
 .da-staged-shape{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-secondary,inherit)}
-.da-staged-note{flex:0 0 auto;padding:0 3px;border-radius:3px;font-size:8.5px;
-  background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.05))}
 .da-staged-said{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--dsw-alias-label-secondary,inherit)}
+  color:var(--dsw-alias-label-tertiary,inherit)}
 /* The remove control rides in the corner the text is padded away from, so it never
    covers a word; it is quiet until the card is under the pointer. */
 .da-staged-x{position:absolute;top:6px;right:6px;display:flex;align-items:center;justify-content:center;

@@ -214,7 +214,6 @@ export function apply(ctx: Context): void {
       seat: createDocumentSeat({
         sessions: ctx.get('sessions') as SessionsLike | undefined,
         conversation: ctx.get('conversation') as ComposerLike | undefined,
-        fileUpload: ctx.get('fileUpload') as FileUploadLike | undefined,
         sessionId: String(sessionId),
         locale: locale.getLocale().locale?.startsWith('en') === true ? 'en' : 'zh',
       }),

@@ -16,9 +16,8 @@ import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer, type ComposerLike } from './composer'
-import { annotatedPdfFile } from './review-attachment'
 import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
-import { deliverAnnotation, type DeliveredPageImage, type FileUploadLike, type SessionsLike } from './session'
+import { deliverAnnotation, type DeliveredPageImage, type SessionsLike } from './session'
 
 /**
  * Facts one whole-document annotation is persisted against.
@@ -98,27 +97,23 @@ export interface DocumentSeat {
    * @param input - the document's marks and note.
    * @param saved - paths the save wrote.
    * @param pageImages - the annotated pages, rendered.
-   * @param annotatedPdf - the annotated document, attached to the message.
    * @returns what the delivery could not do, empty when it did everything.
    */
   send(
     input: PagedAnnotationInput,
     saved: SavedPaths,
     pageImages: readonly PageImage[],
-    annotatedPdf: Uint8Array,
   ): Promise<readonly string[]>
   /**
    * Write the annotation into the session's composer draft instead of sending it.
    * @param input - the document's marks and note.
    * @param saved - paths the save wrote.
    * @param pageImages - the annotated pages, rendered.
-   * @param annotatedPdf - the annotated document, staged beside the message.
    */
   compose(
     input: PagedAnnotationInput,
     saved: SavedPaths,
     pageImages: readonly PageImage[],
-    annotatedPdf: Uint8Array,
   ): Promise<void>
   /**
    * Delete the document's sidecars, leaving the document itself alone.
@@ -160,8 +155,6 @@ export interface DocumentSeatOptions {
   readonly sessions: SessionsLike | undefined
   /** The client conversation service, used to fill the composer draft. */
   readonly conversation: ComposerLike | undefined
-  /** The client upload service, used to attach the annotated document. */
-  readonly fileUpload: FileUploadLike | undefined
   /** Session the figures belong to. */
   readonly sessionId: string
   /** Language of the messages this seat composes. */
@@ -181,19 +174,17 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
     draft: async (address, input) => {
       await saveAnnotation(address, buildPagedDocument(input), undefined, true)
     },
-    send: async (input, saved, pageImages, annotatedPdf) => {
+    send: async (input, saved, pageImages) => {
       const sessions = options.sessions
       if (sessions === undefined) throw new Error('the sessions service is unavailable')
       const document = buildPagedDocument(input)
       const images = await renderPageImages(document, pageImages)
       return await deliverAnnotation({
         sessions,
-        fileUpload: options.fileUpload,
         sessionId: options.sessionId,
         document,
         paths: saved,
         pageImages: images,
-        annotatedPdf,
         // The first annotated page stands for the document in the bubble the
         // message lands in; nothing in that bubble can reach the pages themselves.
         thumb: await captureThumb(images[0]?.image),
@@ -201,7 +192,7 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
       })
     },
     discard: async (address) => { await deleteAnnotation(address) },
-    compose: async (input, saved, pageImages, annotatedPdf) => {
+    compose: async (input, saved, pageImages) => {
       const conversation = options.conversation
       // The card is drawn in the composer's own dock, so a seat without the composer
       // has nowhere to put it: refusing here says so once instead of parking a
@@ -220,20 +211,19 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
         document,
         paths: saved,
         thumb,
-        // The annotated PDF is what the direct send attaches, so it is what the box is
-        // given to carry: one file, with the marks already written into it.
-        file: annotatedPdfFile(annotatedPdf, document.figure.path),
+        // A PDF now travels as its path and marked page images. No whole-file upload
+        // means the box arms text and pictures without a multi-megabyte attachment.
+        file: undefined,
+        pageImages: images.length,
         locale: options.locale,
         send: async () => {
           if (sessions === undefined) throw new Error('the sessions service is unavailable')
           return await deliverAnnotation({
             sessions,
-            fileUpload: options.fileUpload,
             sessionId: options.sessionId,
             document,
             paths: saved,
             pageImages: images,
-            annotatedPdf,
             thumb,
             locale: options.locale,
           })

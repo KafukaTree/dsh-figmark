@@ -11,6 +11,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -27,16 +28,18 @@ import {
   WEIGHT_DEFAULT, clampWeight, needsReviewImage,
 } from '../shared/annotation'
 import { figureMediaType } from '../shared/figure-kind'
-import { Canvas, type MarkPatch, type Tool } from './Canvas'
+import { Canvas, type CanvasInput, type MarkPatch, type Tool } from './Canvas'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import type { SidecarWriteResult } from '../shared/http'
 import {
-  anchorInDocument, elementChoicesInDocument, loadFrameDocument, measureFrameContent,
+  anchorInDocument, elementChoicesInDocument, eventOwnerOf, loadFrameDocument, measureFrameContent,
 } from './html-dom'
-import type { PickLevel } from './element-choice'
+import {
+  sameChoiceElements, type ElementChoices, type PickLevel,
+} from './element-choice'
 import { shownMarksOf, useShownMarks } from './shown-marks'
 import {
   anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
@@ -83,7 +86,8 @@ import {
 } from './annotator/geometry'
 import { buildAnnotationDocument } from './annotator/documents'
 import {
-  DEFAULT_PALETTE, boxesOverlap, draggedSpot, placementStyle, spotOfBox,
+  DEFAULT_PALETTE, clampedSpot, draggedSpot, placementStyle, separatedSpot,
+  settledSpot, spotOfBox,
 } from './annotator/placement'
 import {
   clipStatus, failureStatus, hostGestureStatus, reportDeliveryWarnings,
@@ -100,6 +104,23 @@ import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
 import { WeightRail } from './annotator/weight-rail'
 
 export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, SurfaceDraft, Translate, TranslateVars } from './annotator-contract'
+
+/** One floating strip's live press, including the place to restore if it aborts. */
+interface StripDrag {
+  readonly pointerId: number
+  readonly restore: PaletteSpot | undefined
+  readonly origin: PaletteSpot
+  readonly box: { readonly left: number; readonly top: number }
+  current: PaletteSpot | null
+}
+
+/** The last directory in a file path, shortened to the part that locates it. */
+function parentPathOf(path: string): string {
+  const parts = path.replace(/[\\/]+$/u, '').split(/[\\/]/u).filter(part => part !== '')
+  parts.pop()
+  const parent = parts.at(-1)
+  return parent === undefined ? '' : `.../${parent}`
+}
 
 /**
  * Render one figure with its annotation layer.
@@ -179,6 +200,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [chipAnchor, setChipAnchor] = useState<MarkAnchor | null>(null)
   /** Where the hovered element sits in the picker's child-to-parent ladder. */
   const [pickLevel, setPickLevel] = useState<PickLevel | undefined>(undefined)
+  /**
+   * The element ladder and chosen rung under the pointer in a same-origin document.
+   *
+   * The frame owns its pointers in element mode, so this small picker state cannot
+   * live in Canvas. Keeping it here lets hover, the arrow-key depth control, and the
+   * press that commits a mark all agree on the exact element under the hand.
+   */
+  const htmlPick = useRef<{ readonly choices: ElementChoices; readonly index: number } | null>(null)
+  /** Whether the rest of one same-origin element press must not reach the page. */
+  const htmlClickGuard = useRef(false)
   /**
    * The page being framed instead of the file, when one is.
    *
@@ -486,16 +517,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const [liveMark, setLiveMark] = useState<AnnotationMark | null>(null)
   /**
-   * Shut the style panel when the reader picks up a tool.
-   *
-   * Arming a tool is the moment the panel has done its job; leaving it open over
-   * the figure would hide the very corner the next stroke starts in.
-   */
-  useEffect(() => {
-    setOpenPanel(current => (current === 'style' ? null : current))
-  }, [tool])
-
-  /**
    * Keep the drawing choices on the reader's machine as they change.
    *
    * Written here rather than on unmount because a reload has no unmount: the moment
@@ -564,6 +585,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
   /** The panel's own box, for placing the cards that float over it. */
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /** The canvas's input face, used by the one Escape hierarchy in this body. */
+  const canvasInput = useRef<CanvasInput | null>(null)
 
   /**
    * Where the palette is parked, as fractions of the panel.
@@ -575,9 +598,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * off the edge when it narrows.
    */
   const [palette, setPalette] = useState<PaletteSpot | undefined>(remembered.palette)
+  /** The current palette spot, read by the resize guard without being its trigger. */
+  const parkedPalette = useRef(palette)
+  parkedPalette.current = palette
   const paletteRef = useRef<HTMLDivElement | null>(null)
   const [dragging, setDragging] = useState(false)
-  const dragFrom = useRef<{ pointerId: number; origin: PaletteSpot; box: DOMRect } | null>(null)
+  /** A press is held even before it crosses the movement threshold. */
+  const [stripHeld, setStripHeld] = useState(false)
+  const dragFrom = useRef<StripDrag | null>(null)
+  /** The one strip gesture allowed to exist at a time. */
+  const dragOwner = useRef<'palette' | 'bar' | null>(null)
   /** The palette's box, in percentages of the panel. */
   const paletteStyle = placementStyle(palette ?? DEFAULT_PALETTE)
 
@@ -594,7 +624,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const parkedBar = useRef(barSpot)
   parkedBar.current = barSpot
   const [barDragging, setBarDragging] = useState(false)
-  const barFrom = useRef<{ pointerId: number; origin: PaletteSpot; box: DOMRect } | null>(null)
+  const barFrom = useRef<StripDrag | null>(null)
   /**
    * Follow the pointer that is dragging a floating strip.
    *
@@ -605,11 +635,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param event - the pointer event that is moving the strip.
    * @param from - which strip's press is in progress.
    * @param write - where its new spot goes.
+   * @param start - enter the visible dragging state once the slop is crossed.
    */
   const followPointer = useCallback((
     event: ReactPointerEvent<HTMLDivElement>,
-    from: { current: { pointerId: number; origin: PaletteSpot; box: DOMRect } | null },
+    from: { current: StripDrag | null },
     write: (spot: PaletteSpot | undefined) => void,
+    start: () => void,
     strip: HTMLElement | null,
   ): void => {
     const held = from.current
@@ -619,20 +651,98 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const root = strip?.offsetParent ?? rootRef.current
     // A move without a press on the handle is not a drag of ours.
     /* v8 ignore next */
-    if (held === null || root === null || !(root instanceof Element)) return
+    if (held === null || event.pointerId !== held.pointerId
+      || root === null || !(root instanceof Element)) return
+    if (held.current === null
+      && Math.hypot(event.clientX - held.box.left, event.clientY - held.box.top) < 3) return
     const bounds = root.getBoundingClientRect()
+    const own = strip?.getBoundingClientRect()
     /* v8 ignore next -- both call sites hold a live ref for the whole drag. */
-    const width = strip?.offsetWidth ?? 0
+    const width = own?.width ?? 0
     /* v8 ignore next -- both call sites hold a live ref for the whole drag. */
-    const height = strip?.offsetHeight ?? 0
-    write(draggedSpot(held, event, bounds, { width, height }))
+    const height = own?.height ?? 0
+    const crossingSlop = held.current === null
+    if (crossingSlop) start()
+    const spot = draggedSpot(held, event, bounds, { width, height })
+    held.current = spot
+    write(spot)
   }, [])
   const dragPalette = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    followPointer(event, dragFrom, setPalette, paletteRef.current)
+    event.preventDefault()
+    followPointer(
+      event,
+      dragFrom,
+      setPalette,
+      () => { setDragging(true) },
+      paletteRef.current,
+    )
   }, [followPointer])
   const dragBar = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    followPointer(event, barFrom, setBarSpot, barRef.current)
+    event.preventDefault()
+    followPointer(
+      event,
+      barFrom,
+      setBarSpot,
+      () => { setBarDragging(true) },
+      barRef.current,
+    )
   }, [followPointer])
+  /**
+   * Finish a drag with the strip's magnetic edge dock.
+   *
+   * Moving from the live drag into the parked state is deliberately split in two:
+   * pointer moves are pixel-for-pixel direct, and only the release may settle onto a
+   * gutter. The saved spot is the settled one, so reopening the panel does not reveal
+   * a quarter-pixel parking position that the drag itself never showed as deliberate.
+   */
+  const settleStrip = useCallback((
+    current: PaletteSpot,
+    write: (spot: PaletteSpot | undefined) => void,
+    strip: HTMLElement | null,
+    other: HTMLElement | null,
+  ): void => {
+    const panel = strip?.offsetParent ?? rootRef.current
+    /* v8 ignore next -- a mounted grip always has both boxes. */
+    if (strip === null || panel === null || !(panel instanceof Element)) return
+    const panelBox = panel.getBoundingClientRect()
+    const own = strip.getBoundingClientRect()
+    /* v8 ignore next -- an unmeasured strip is not visible enough to drag. */
+    if (panelBox.width <= 0 || panelBox.height <= 0 || own.width <= 0 || own.height <= 0) return
+    write(settledSpot(
+      current,
+      panelBox,
+      own,
+      other?.getBoundingClientRect(),
+    ))
+  }, [])
+
+  /**
+   * Abandon a strip drag and put it back where the press found it.
+   *
+   * A pointer that is cancelled, loses capture, or belongs to a window that stops
+   * being visible has no trustworthy release position. Leaving the strip at the last
+   * move would turn that interruption into a permanent parking decision, so the only
+   * honest result is the place it occupied before the press.
+   */
+  const cancelStripDrag = useCallback((
+    from: { current: StripDrag | null },
+    write: (spot: PaletteSpot | undefined) => void,
+    stop: (moving: boolean) => void,
+    event?: ReactPointerEvent<HTMLDivElement>,
+  ): void => {
+    const held = from.current
+    if (held === null || (event !== undefined && event.pointerId !== held.pointerId)) return
+    from.current = null
+    dragOwner.current = null
+    setStripHeld(false)
+    write(held.restore)
+    stop(false)
+    if (event !== undefined
+      && typeof event.currentTarget.hasPointerCapture === 'function'
+      && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }, [])
 
   /**
    * The palette's drag, as one bundle.
@@ -645,25 +755,52 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const paletteHandle: StripHandle = {
     dragging,
     onDown: (event) => {
+      if (dragOwner.current !== null || event.isPrimary === false
+        || (event.pointerType === 'mouse' && event.button !== 0)) return
+      event.preventDefault()
       /* v8 ignore next -- nothing to measure against until the panel is mounted. */
       if (rootRef.current === null) return
+      const tools = paletteRef.current
+      /* v8 ignore next -- a mounted grip belongs to a mounted strip. */
+      if (tools === null) return
       /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
       event.currentTarget.setPointerCapture?.(event.pointerId)
+      const panel = tools.offsetParent ?? rootRef.current
       dragFrom.current = {
         pointerId: event.pointerId,
-        origin: palette ?? DEFAULT_PALETTE,
+        restore: parkedPalette.current,
+        // Read the strip's current visual corner rather than its saved destination.
+        // A resize or release may still be easing when the reader grabs it; using the
+        // destination here makes the first pointer move jump backwards along that
+        // transition.
+        origin: spotOfBox(tools.getBoundingClientRect(), panel.getBoundingClientRect()),
         box: { left: event.clientX, top: event.clientY } as DOMRect,
+        current: null,
       }
-      setDragging(true)
+      dragOwner.current = 'palette'
+      setStripHeld(true)
     },
     onMove: dragPalette,
     onUp: (event) => {
+      const held = dragFrom.current
+      if (held === null || event.pointerId !== held.pointerId) return
+      const current = held.current
+      if (current !== null) {
+        settleStrip(current, setPalette, paletteRef.current, barRef.current)
+      }
+      dragFrom.current = null
+      dragOwner.current = null
+      setStripHeld(false)
+      setDragging(false)
       /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
       event.currentTarget.releasePointerCapture?.(event.pointerId)
-      dragFrom.current = null
-      setDragging(false)
     },
-    onCancel: () => { dragFrom.current = null; setDragging(false) },
+    onCancel: (event) => {
+      cancelStripDrag(dragFrom, setPalette, setDragging, event)
+    },
+    onLost: (event) => {
+      cancelStripDrag(dragFrom, setPalette, setDragging, event)
+    },
   }
 
   /**
@@ -677,6 +814,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const barHandle: StripHandle = {
     dragging: barDragging,
     onDown: (event) => {
+      if (dragOwner.current !== null || event.isPrimary === false
+        || (event.pointerType === 'mouse' && event.button !== 0)) return
+      event.preventDefault()
       const root = rootRef.current
       /* v8 ignore next -- nothing to measure against until the panel is mounted. */
       if (root === null) return
@@ -690,28 +830,68 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       const panel = bar.offsetParent ?? root
       barFrom.current = {
         pointerId: event.pointerId,
-        // A parked bar already has the exact anchor its inline style uses. Reading
-        // the box back would be ambiguous once a wide bar crosses the middle: its
-        // centre can be on the far side while its saved fraction still places it by
-        // the near corner. Only the CSS-owned default needs a measurement.
-        origin: barSpot ?? spotOfBox(bar.getBoundingClientRect(), panel.getBoundingClientRect()),
+        restore: parkedBar.current,
+        // Always begin from the corner that is actually painted. If a resize or a
+        // magnetic release is still in motion, this is between its old and new
+        // fractions; the saved destination would make the bar jump on first move.
+        origin: spotOfBox(bar.getBoundingClientRect(), panel.getBoundingClientRect()),
         box: { left: event.clientX, top: event.clientY } as DOMRect,
+        current: null,
       }
-      setBarDragging(true)
+      dragOwner.current = 'bar'
+      setStripHeld(true)
     },
     onMove: dragBar,
     onUp: (event) => {
+      const held = barFrom.current
+      if (held === null || event.pointerId !== held.pointerId) return
+      const current = held.current
+      if (current !== null) {
+        settleStrip(current, setBarSpot, barRef.current, paletteRef.current)
+      }
+      barFrom.current = null
+      dragOwner.current = null
+      setStripHeld(false)
+      setBarDragging(false)
       /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
       event.currentTarget.releasePointerCapture?.(event.pointerId)
-      barFrom.current = null
-      setBarDragging(false)
     },
-    onCancel: () => { barFrom.current = null; setBarDragging(false) },
+    onCancel: (event) => {
+      cancelStripDrag(barFrom, setBarSpot, setBarDragging, event)
+    },
+    onLost: (event) => {
+      cancelStripDrag(barFrom, setBarSpot, setBarDragging, event)
+    },
   }
 
   useEffect(() => {
+    if (!stripHeld) return
+    const stop = (): void => {
+      if (dragFrom.current !== null) {
+        cancelStripDrag(dragFrom, setPalette, setDragging)
+      }
+      if (barFrom.current !== null) {
+        cancelStripDrag(barFrom, setBarSpot, setBarDragging)
+      }
+    }
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') stop()
+    }
+    window.addEventListener('blur', stop)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('blur', stop)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [cancelStripDrag, stripHeld])
+
+  useEffect(() => {
+    // A pointer move is already a layout update. Writing storage from every one adds
+    // synchronous main-thread work under the hand; persist the final parked position
+    // when the drag ends instead.
+    if (dragging || barDragging) return
     rememberPreferences({ color, weight, ...(palette === undefined ? {} : { palette }), ...(barSpot === undefined ? {} : { bar: barSpot }) })
-  }, [barSpot, color, palette, weight])
+  }, [barDragging, barSpot, color, dragging, palette, weight])
 
   /**
    * The bar's box, when the reader has moved it off the bottom edge.
@@ -1015,25 +1195,95 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }),
     [zoom, fitWidth, fitHeight, paper, props.fitWidth],
   )
+  /** Whether the paper currently extends beyond the viewport in either direction. */
+  const pannable = paper !== null
+    && (paper.width * scale > fitWidth + 1 || paper.height * scale > fitHeight + 1)
 
   /**
-   * Rescue a parked bar that a resize has put back over the figure.
+   * Keep both parked strips inside a panel whose shape has changed.
    *
-   * Its saved spot is a fraction of the panel, which is what makes it survive a
-   * resize; it is also what lets a bar parked in a side gutter land on the picture
-   * when the pane changes shape. The default bottom anchor has a reserved inset, so
-   * returning there is the one place guaranteed not to cover the drawing. This only
-   * runs when the available box changes, not while the reader is deliberately
-   * dragging the bar over the figure.
+   * A saved fraction survives a resize, but a wide strip can still grow past the
+   * right or bottom edge because only its anchor is stored. The first duty here is
+   * therefore body-aware clamping. A strip that would then cover the other strip slides
+   * only far enough to clear it; covering the drawing is allowed because the reader may
+   * have parked it there deliberately. This runs only on an available-box change, never
+   * under the reader's current drag.
    */
-  useEffect(() => {
-    if (parkedBar.current === undefined) return
-    const bar = barRef.current
-    const figure = figureRef.current
-    /* v8 ignore next -- the chrome and the frame are mounted together. */
-    if (bar === null || figure === null) return
-    if (boxesOverlap(bar.getBoundingClientRect(), figure.getBoundingClientRect(), 8)) {
-      setBarSpot(undefined)
+  useLayoutEffect(() => {
+    let live = true
+    const settle = (): void => {
+      if (!live) return
+      // A resize can hand us its second layout frame while the reader has already
+      // grabbed a strip. Repairing against that frame used to overwrite the live drag
+      // with the old parked spot, which looked like the control jumping back.
+      if (dragFrom.current !== null || barFrom.current !== null) return
+      const root = rootRef.current
+      const bar = barRef.current
+      const tools = paletteRef.current
+      /* v8 ignore next -- the chrome and the frame are mounted together. */
+      if (root === null || bar === null) return
+      const paletteSpot = parkedPalette.current
+      const barSpot = parkedBar.current
+      let fittedPalette = paletteSpot
+      if (paletteSpot !== undefined && tools !== null) {
+        const panel = tools.offsetParent ?? root
+        const panelBox = panel.getBoundingClientRect()
+        const own = tools.getBoundingClientRect()
+        if (panelBox.width <= 0 || panelBox.height <= 0 || own.width <= 0 || own.height <= 0) {
+          // The first layout frame can report zeroes; moving a saved spot against
+          // those numbers would erase it before the panel has a size.
+        } else {
+          const fitted = clampedSpot(paletteSpot, panelBox, own)
+          if (fitted.x !== paletteSpot.x || fitted.y !== paletteSpot.y) setPalette(fitted)
+          fittedPalette = fitted
+        }
+      }
+      if (barSpot === undefined) {
+        const toolsBox = tools?.getBoundingClientRect()
+        if (fittedPalette === undefined || toolsBox === undefined || tools === null) return
+        const panel = tools.offsetParent ?? root
+        const panelBox = panel.getBoundingClientRect()
+        // The first layout frame can report a panel or strip with no body. A zero
+        // obstacle looks collision-free, and running the arithmetic on it rewrites a
+        // remembered corner as 0,0 before the browser has laid the chrome out.
+        if (panelBox.width <= 0 || panelBox.height <= 0
+          || toolsBox.width <= 0 || toolsBox.height <= 0) return
+        const safe = separatedSpot(
+          fittedPalette,
+          panelBox,
+          toolsBox,
+          bar.getBoundingClientRect(),
+        )
+        setPalette(safe ?? DEFAULT_PALETTE)
+        return
+      }
+      const panel = bar.offsetParent ?? root
+      const panelBox = panel.getBoundingClientRect()
+      const own = bar.getBoundingClientRect()
+      if (panelBox.width <= 0 || panelBox.height <= 0 || own.width <= 0 || own.height <= 0) return
+      const fitted = clampedSpot(barSpot, panelBox, own)
+      if (fitted.x !== barSpot.x || fitted.y !== barSpot.y) {
+        setBarSpot(fitted)
+        return
+      }
+      // The two strips must remain individually grabbable. A panel too small to
+      // separate them falls back to the bar's reserved lane.
+      /* v8 ignore next 3 -- the palette and bar are mounted and removed together. */
+      const toolsBox = tools?.getBoundingClientRect()
+      const safe = toolsBox === undefined
+        ? barSpot
+        : separatedSpot(barSpot, panelBox, own, toolsBox)
+      if (safe === undefined) setBarSpot(undefined)
+      else if (safe.x !== barSpot.x || safe.y !== barSpot.y) setBarSpot(safe)
+    }
+    // Check in the new layout, then once more after the browser has settled it. A split
+    // drag can deliver size and chrome measurements across frames; checking only the
+    // first left the bar sitting over the palette and made Send unreachable.
+    settle()
+    const frame = requestAnimationFrame(settle)
+    return () => {
+      live = false
+      cancelAnimationFrame(frame)
     }
   }, [fitHeight, fitWidth])
 
@@ -1251,6 +1501,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }, PINCH_SETTLE_DELAY_MS)
   }, [paper])
 
+  /** Apply one frame of a two-finger pinch to the live drawing factor. */
+  const pinchBy = useCallback((factor: number, clientX: number, clientY: number): void => {
+    zoomAt(liveScale.current * factor, clientX, clientY)
+  }, [zoomAt])
+
   useEffect(() => () => { clearTimeout(settleTimer.current) }, [])
 
   useEffect(() => {
@@ -1261,33 +1516,46 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // it instead would take the window away from the one thing it is for.
     if (isDocument) return
     /**
-     * The wheel is the magnification, whatever modifier it carries.
+     * A trackpad's ordinary two-finger scroll is a pan; a pinch is the zoom.
      *
-     * It used to be two gestures in one: a plain wheel panned the scrollport, and
-     * only a ctrl-modified one — which is how a trackpad reports a pinch — zoomed.
-     * That split is what made the gesture ambiguous: over a page that fits the pane
-     * there is nothing to scroll, so a plain wheel looks like a request for another
-     * page, while the reader who wants a closer look makes exactly the same motion.
-     * One motion, one meaning: up magnifies, down shrinks, and a pinch arrives as the
-     * same thing with a modifier on it.
-     *
-     * Panning is still there — a drag with the select tool moves the view — so
-     * nothing is lost by taking the wheel's second job away from it.
+     * Browsers report a pinch as a ctrl-modified wheel, while two-finger scroll
+     * arrives as an unmodified wheel with independent X and Y deltas. Treating both
+     * as zoom made moving around the figure fight looking closer at it. The ordinary
+     * gesture now moves the table, and `Cmd`/`Ctrl` + wheel is the explicit mouse
+     * equivalent of a pinch. Shift maps a vertical mouse wheel to horizontal travel.
      */
     const onWheel = (event: WheelEvent): void => {
+      const magnify = event.ctrlKey || event.metaKey
+      // A fitted picture has no hidden edge to reveal. Leaving the event alone lets
+      // the surrounding panel scroll, which is the gesture the reader actually made.
+      if (!magnify && !pannable) return
       event.preventDefault()
-      zoomAt(
-        liveScale.current * wheelZoomFactor(event.deltaY, event.deltaMode, stage.clientHeight),
-        event.clientX,
-        event.clientY,
-      )
+      if (magnify) {
+        zoomAt(
+          liveScale.current * wheelZoomFactor(event.deltaY, event.deltaMode, stage.clientHeight),
+          event.clientX,
+          event.clientY,
+        )
+        return
+      }
+      // WheelEvent uses three units. A line-mode mouse wheel sends values around
+      // one, which is almost no travel if treated as CSS pixels; page mode sends
+      // pages. Normalize both before deciding which axis the gesture belongs to.
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1
+      const dx = event.deltaX * unit
+      const dy = event.deltaY * unit
+      // Shift is the conventional horizontal wheel. Add any native horizontal
+      // component instead of testing it away: a trackpad often reports a little of
+      // both, and that used to turn an intentional horizontal gesture diagonal.
+      stage.scrollLeft += event.shiftKey ? dx + dy : dx
+      stage.scrollTop += event.shiftKey ? 0 : dy
     }
     // Not passive: a passive listener may see the event but cannot keep the
     // browser from acting on it, and the browser's own pinch-zoom is exactly
     // what this handler exists to replace.
     stage.addEventListener('wheel', onWheel, { passive: false })
     return () => { stage.removeEventListener('wheel', onWheel) }
-  }, [isDocument, zoomAt])
+  }, [isDocument, pannable, zoomAt])
 
   // --- edits ----------------------------------------------------------------
 
@@ -1306,11 +1574,131 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const addMark = useCallback((mark: AnnotationMark): void => {
     const already = elementMarkOn(marks, mark)
     if (already !== undefined) {
+      setTool('select')
       setSelectedId(already.id)
+      setFocusId(already.id)
       return
     }
     commit(appendedMarks(marks, mark))
-  }, [commit, marks, setSelectedId])
+    setTool('select')
+    setSelectedId(mark.id)
+    setFocusId(mark.id)
+  }, [commit, marks])
+
+  /**
+   * Make the document itself the picker while the overlay steps aside.
+   *
+   * A same-origin rendered document can be read by this side, so there is no reason
+   * to cover it with a transparent canvas just to hear a click. Letting the frame keep
+   * its own pointer events preserves links, scrolling, media and any local interaction;
+   * this capture listener only names the element the press landed on. In element mode
+   * that press becomes a mark. In select mode it selects an existing mark, or closes
+   * the current one while allowing the page's native action to continue.
+   */
+  useEffect(() => {
+    if (figure?.kind !== 'html' || livePage !== null
+      || (tool !== 'select' && tool !== 'element')) return
+    const document_ = frameRef.current?.contentDocument
+    if (document_ === null || document_ === undefined) return
+    const onPress = (event: MouseEvent): void => {
+      if (event.button !== 0) return
+      // Pressing an element is a marking gesture, not a page gesture. Keep the guard
+      // through the compatibility click even though adding the mark switches tools
+      // before that click arrives.
+      if (tool === 'element') htmlClickGuard.current = true
+      const view = document_.defaultView
+      const scrollX = view?.scrollX ?? 0
+      const scrollY = view?.scrollY ?? 0
+      const choices = elementChoicesInDocument(
+        document_,
+        event.clientX + scrollX,
+        event.clientY + scrollY,
+      )
+      const shownPick = htmlPick.current
+      const anchor = choices === undefined
+        ? undefined
+        : choices.anchors[
+          shownPick !== null && sameChoiceElements(shownPick.choices, choices)
+            ? Math.min(shownPick.index, choices.anchors.length - 1)
+            : choices.preferred
+        ]
+      if (anchor === undefined) {
+        if (tool === 'element') {
+          event.preventDefault()
+          event.stopImmediatePropagation()
+          setStatus({ tone: 'info', text: t('toolElementMiss') })
+        }
+        if (tool === 'select' && selectedId !== null) {
+          setSelectedId(null)
+          setFocusId(null)
+          setOpenPanel(null)
+        }
+        return
+      }
+      const already = elementMarkOn(marks, elementMark(anchor, color))
+      if (already !== undefined) {
+        htmlClickGuard.current = true
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        setTool('select')
+        setSelectedId(already.id)
+        return
+      }
+      if (tool === 'element') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        addMark(elementMark(anchor, color))
+        return
+      }
+      if (selectedId !== null) {
+        setSelectedId(null)
+        setFocusId(null)
+        setOpenPanel(null)
+      }
+    }
+    document_.addEventListener('pointerdown', onPress, true)
+    return () => { document_.removeEventListener('pointerdown', onPress, true) }
+  }, [
+    addMark, color, figure, livePage, marks, selectedId, setSelectedId, t, tool,
+  ])
+
+  /**
+   * Keep the page from acting on the rest of an element-selection press.
+   *
+   * A browser follows pointerdown with pointerup and click. Preventing the first one
+   * is not enough for a presentation whose own script listens for a click to advance:
+   * the mark lands correctly and the slide also turns. This listener belongs to the
+   * document rather than the element tool, because adding a mark changes the tool
+   * before the click is dispatched.
+   */
+  useEffect(() => {
+    if (figure?.kind !== 'html' || livePage !== null) return
+    const document_ = frameRef.current?.contentDocument
+    if (document_ === null || document_ === undefined) return
+    const owner = eventOwnerOf(document_)
+    const swallow = (event: Event): void => {
+      if (!htmlClickGuard.current) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (event.type === 'pointerup') {
+        // A browser normally dispatches click immediately after pointerup. Clear on
+        // the next task so a suppressed compatibility click cannot leave the guard on.
+        window.setTimeout(() => { htmlClickGuard.current = false }, 0)
+      } else {
+        htmlClickGuard.current = false
+      }
+    }
+    const cancel = (): void => { htmlClickGuard.current = false }
+    owner.addEventListener('pointerup', swallow, true)
+    owner.addEventListener('click', swallow, true)
+    owner.addEventListener('pointercancel', cancel, true)
+    return () => {
+      owner.removeEventListener('pointerup', swallow, true)
+      owner.removeEventListener('click', swallow, true)
+      owner.removeEventListener('pointercancel', cancel, true)
+      htmlClickGuard.current = false
+    }
+  }, [figure, livePage])
 
   // --- a page through the proxy ---------------------------------------------
 
@@ -1473,6 +1861,21 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const setMarkDetail = useCallback((id: string, value: string): void => {
     history.amend(current => detailedMarks(current, id, value))
   }, [])
+
+  /**
+   * Arm one tool and put the previous tool's editing furniture away.
+   *
+   * A drawing or element gesture owns the whole surface. Carrying a selected mark's
+   * handles and comment into it made one pointerpress mean two things at once.
+   */
+  const chooseTool = useCallback((next: Tool): void => {
+    setTool(next)
+    if (next === 'select') return
+    setSelectedId(null)
+    setFocusId(null)
+    setLiveMark(null)
+    setOpenPanel(null)
+  }, [setOpenPanel])
 
   /**
    * Pick a mark out for editing, from a double click on the picture.
@@ -1644,10 +2047,28 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         return
       }
       if (typing(event.target)) return
-      // Escape lets go of the selection. It used to leave a viewing mode as well;
-      // element picking is the one mode with something else to leave first.
+      // Escape dismisses exactly one layer, from the most transient outward.
       if (key === 'Escape') {
-        if (tool === 'element') {
+        if (dragFrom.current !== null) {
+          event.preventDefault()
+          cancelStripDrag(dragFrom, setPalette, setDragging)
+          return
+        }
+        if (barFrom.current !== null) {
+          event.preventDefault()
+          cancelStripDrag(barFrom, setBarSpot, setBarDragging)
+          return
+        }
+        if (canvasInput.current?.cancel() === true) {
+          event.preventDefault()
+          return
+        }
+        if (openPanel !== null) {
+          event.preventDefault()
+          setOpenPanel(null)
+          return
+        }
+        if (tool !== 'select') {
           event.preventDefault()
           setTool('select')
           return
@@ -1655,6 +2076,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         if (selectedId === null) return
         event.preventDefault()
         setSelectedId(null)
+        setFocusId(null)
         return
       }
       // Delete removes the picked-out mark. The check is on the selection, so a
@@ -1667,7 +2089,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => { window.removeEventListener('keydown', onKeyDown) }
-  }, [redo, removeMark, selectedId, tool, undo])
+  }, [
+    barFrom, cancelStripDrag, openPanel, redo, removeMark, selectedId, setOpenPanel,
+    setSelectedId, tool, undo,
+  ])
 
   // --- export and delivery --------------------------------------------------
 
@@ -1861,6 +2286,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // The two refusals are told apart because they ask for different things: an
     // unmarked figure wants marks, an unloaded one wants a moment.
     const scope = only === undefined ? marks : [only]
+    // One send is about this snapshot. A mark or note the reader creates while the
+    // session is answering belongs to the next review and must survive this one.
+    const sentIds = new Set(scope.map(mark => mark.id))
+    const sentSummary = summary
     if (scope.length === 0) {
       await toasts.notify('annotate.none')
       return
@@ -1943,12 +2372,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             send: async () => {
               return await deliverAnnotation({
                 sessions,
-                fileUpload: undefined,
                 sessionId,
                 document: document_,
                 paths: saved,
                 pageImages,
-                annotatedPdf: undefined,
                 thumb,
                 locale,
               })
@@ -1957,14 +2384,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         } else {
           warnings = await deliverAnnotation({
             sessions,
-            // A single-surface figure is reviewed as the picture it is, which travels
-            // as an image part and not as an attached file.
-            fileUpload: undefined,
             sessionId,
             document: document_,
             paths: saved,
             pageImages,
-            annotatedPdf: undefined,
             thumb,
             locale,
           })
@@ -1982,17 +2405,37 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // leaves the surface and the sidecar holding the rest — the reader pressed a
       // button beside one sentence, and one sentence is what it meant.
       if (only === undefined) {
-        await discard()
+        const current = live.current
+        const remaining = current.marks.filter(mark => !sentIds.has(mark.id))
+        // The figure note belongs to a whole-figure delivery. If it changed while the
+        // session was answering, the new sentence has not travelled and stays.
+        const keptSummary = current.summary === sentSummary ? '' : current.summary
+        // Retire the files that describe the sent snapshot before writing a fresh
+        // draft for anything the reader produced in the meantime.
+        autosave.current?.cancel()
+        await autosave.current?.drained()
+        try {
+          if (livePage === null) await deleteAnnotation(address)
+        } catch (error) {
+          setStatus(failureStatus(t, 'clearError', error))
+        }
+        commit(remaining)
+        setCreatedAt(remaining.length > 0 || keptSummary.trim() !== '' ? current.createdAt : null)
+        setStale(false)
+        writeSummary(keptSummary)
+        setSelectedId(currentSelection =>
+          remaining.some(mark => mark.id === currentSelection) ? currentSelection : null)
+        if (remaining.length > 0 || keptSummary.trim() !== '') autosave.current?.schedule()
         return
       }
       // Only the mark that was sent leaves. The sidecar on disk describes that one
       // mark, so it has to be rewritten from the survivors — letting the autosave
       // notice the change does that, because the signature recorded above still
       // names the delivered document.
-      commit(removedMarks(marks, only.id))
-      // The mark that was sent is gone, so it cannot stay selected: the pill would be
-      // showing a sentence for a mark that is no longer on the figure.
-      setSelectedId(null)
+      commit(removedMarks(live.current.marks, only.id))
+      // The sent mark loses the selection. A mark drawn while that send was in flight
+      // is now the reader's object and keeps it.
+      setSelectedId(current => current === only.id ? null : current)
       autosave.current?.schedule()
     } finally {
       // A failure never reaches here: the bubble answers with its outcome instead of
@@ -2000,7 +2443,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // state, which must lift whether the hand-off worked or not.
       setBusy(null)
     }
-  }, [address, buildDocument, commit, discard, exportPng, layer, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, t, toasts])
+  }, [address, buildDocument, commit, exportPng, layer, livePage, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, summary, t, toasts, writeSummary])
   /**
    * Hand the sentence beside one mark to someone.
    *
@@ -2269,6 +2712,90 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     setChipAnchor(anchor ?? null)
   }, [lightUp])
 
+  /**
+   * Follow the pointer inside a same-origin rendered document.
+   *
+   * The frame keeps native pointer ownership in element mode so links and scrolling
+   * still behave like the page. That also means the overlay never receives a move:
+   * without this capture listener the page can be clicked but the reader cannot see
+   * which element the click will take. The listener only observes; it never prevents
+   * or retargets the page's own event.
+   */
+  useEffect(() => {
+    if (figure?.kind !== 'html' || livePage !== null || tool !== 'element') return
+    const document_ = frameRef.current?.contentDocument
+    if (document_ === null || document_ === undefined) return
+    const report = (pick: { readonly choices: ElementChoices; readonly index: number }): void => {
+      htmlPick.current = pick
+      const anchor = pick.choices.anchors[pick.index]
+      lightElement(anchor, { level: pick.index + 1, count: pick.choices.anchors.length })
+    }
+    const onMove = (event: PointerEvent): void => {
+      const view = document_.defaultView
+      const choices = elementChoicesInDocument(
+        document_,
+        event.clientX + (view?.scrollX ?? 0),
+        event.clientY + (view?.scrollY ?? 0),
+      )
+      if (choices === undefined) {
+        htmlPick.current = null
+        lightElement(undefined)
+        return
+      }
+      const previous = htmlPick.current
+      const index = previous !== null && sameChoiceElements(previous.choices, choices)
+        ? Math.min(previous.index, choices.anchors.length - 1)
+        : choices.preferred
+      report({ choices, index })
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      const target = event.target as Element | null
+      if (target !== null && typeof target.closest === 'function' && (
+        target.closest('[contenteditable]:not([contenteditable="false"])') !== null
+        || target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+      )) return
+      const current = htmlPick.current
+      if (current === null) return
+      event.preventDefault()
+      const delta = event.key === 'ArrowUp' ? 1 : -1
+      const index = Math.min(
+        current.choices.anchors.length - 1,
+        Math.max(0, current.index + delta),
+      )
+      if (index !== current.index) report({ choices: current.choices, index })
+    }
+    const forget = (): void => {
+      htmlPick.current = null
+      lightElement(undefined)
+    }
+    // Crossing from the panel into the frame can start with pointerover rather than a
+    // move. Without that first event the mode looks armed but names nothing until the
+    // hand travels again inside the page.
+    document_.addEventListener('pointerover', onMove, true)
+    document_.addEventListener('pointermove', onMove, true)
+    document_.addEventListener('pointercancel', forget, true)
+    document_.documentElement.addEventListener('pointerleave', forget)
+    // The pointer and the keyboard can have different owners here. Moving over the
+    // frame leaves focus on the tool palette until the reader presses inside the page,
+    // so listening only to the frame makes "↑↓" silently dead right after choosing
+    // the element tool. Same-origin windows do not forward keydown to one another, so
+    // the two listeners never hear the same keystroke twice.
+    document_.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document_.removeEventListener('pointerover', onMove, true)
+      document_.removeEventListener('pointermove', onMove, true)
+      document_.removeEventListener('pointercancel', forget, true)
+      document_.documentElement.removeEventListener('pointerleave', forget)
+      document_.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keydown', onKeyDown)
+      forget()
+    }
+  }, [figure, lightElement, livePage, tool])
+
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
   if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
   // A tone of its own, not the quiet grey a loading note gets: this one is the
@@ -2370,6 +2897,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * they get — the picker joins at the end.
    */
   const tools = isVector || isHtml ? TOOLS : TOOLS.filter(entry => !ELEMENT_TOOLS.has(entry.tool))
+  const elementGuide = tool === 'element'
+    ? {
+        label: pickLevel === undefined
+          ? `${t('toolElementMode')}, ${t('toolElementHint')}, ${t('toolElementKeys')}`
+          : `${t('toolElementMode')}, ${t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}, ${t('toolElementKeys')}`,
+        ...(pickLevel === undefined
+          ? {}
+          : { depth: t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count }) }),
+      }
+    : undefined
 
   const chromeStrips = (
     <>
@@ -2379,7 +2916,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         handle={paletteHandle}
         tools={tools}
         tool={tool}
-        onChoose={setTool}
+        elementGuide={elementGuide}
+        onChoose={chooseTool}
         t={t} />
       <FigureBar
         stripRef={barRef}
@@ -2436,28 +2974,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
         : null
   /**
-   * The one visible explanation of element mode.
-   *
-   * The tool icon alone is indistinguishable from a shape tool once the pointer is on
-   * the figure, and the only result of a click used to be a mark appearing somewhere
-   * the reader did not expect. This strip says what a click takes, where it sits in the
-   * hierarchy, and how to move one level without hunting for another control.
-   */
-  const pickGuideLabel = pickLevel === undefined
-    ? `${t('toolElementMode')}, ${t('toolElementHint')}`
-    : `${t('toolElementMode')}, ${t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}, ${t('toolElementKeys')}`
-  const pickGuide = tool === 'element' ? (
-    <div className="da-pick-guide" role="status" aria-live="polite" aria-label={pickGuideLabel}>
-      <span className="da-pick-mode">{t('toolElementMode')}</span>
-      <span className="da-pick-copy">
-        {pickLevel === undefined
-          ? t('toolElementHint')
-          : t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}
-      </span>
-      {pickLevel === undefined ? null : <span className="da-pick-keys">{t('toolElementKeys')}</span>}
-    </div>
-  ) : null
-  /**
    * Whether the page under the overlay owns the pointer.
    *
    * Reading is the page's own: a link follows, a video plays, the page scrolls itself.
@@ -2465,9 +2981,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * page the panel cannot read, where the reader marks by pointing instead of by
    * reading the DOM. Anything being drawn takes the pointer back to this side.
    */
-  const passing = isHtml && (tool === 'select' || (livePage !== null && tool === 'element'))
+  // While a mark is selected the overlay owns one blank click so the comment can
+  // close. With nothing selected the document is handed back to the iframe, which
+  // is what lets links, text, and page controls work normally.
+  const passing = isHtml && (
+    livePage === null
+      // A file's frame is same-origin. It can stay fully interactive in select and
+      // element mode because the capture listener above names the element itself.
+      ? tool === 'select' || tool === 'element'
+      // A proxied page is another origin. With a mark selected the overlay takes one
+      // blank press so the comment can close; otherwise the page owns its pointer.
+      : selectedId === null && (tool === 'select' || tool === 'element')
+  )
   /** The address the frame is pointed at, when it is not the file's own document. */
   const pageUrl = livePage === null ? undefined : livePage.url
+  /** The quiet directory breadcrumb shown beside a file's name while it is at rest. */
+  const liveParent = loaded === null ? '' : parentPathOf(loaded.path)
 
   return (
     <div className="da-root" data-html={isHtml} data-live-error={liveError !== null}
@@ -2490,7 +3019,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           box. Enter opens, Escape gives the field back — the browser's own contract,
           because this is the browser's job. */}
       <div className="da-live-bar" hidden={!isHtml}>
-        <div className="da-live-field" data-live={livePage !== null}>
+        <div className="da-live-field" data-live={livePage !== null}
+          title={loaded?.path ?? undefined}>
           {livePage === null ? (
             <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <path d="M6.5 3.5h7l4 4v13h-11zM13.5 3.5v4h4M9 11.5h6M9 14.5h6M9 17.5h4" />
@@ -2501,6 +3031,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
               <path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.5 5.1 3.5 8.5S14.3 18.2 12 20.5M12 3.5C9.7 5.8 8.5 8.6 8.5 12s1.2 6.2 3.5 8.5" />
             </svg>
           )}
+          <span className="da-live-parent"
+            hidden={livePage !== null || liveText !== null || liveParent === ''}>
+            {liveParent}
+            <span className="da-live-parent-sep" aria-hidden>/</span>
+          </span>
           <input
             className="da-live-addr"
             value={shownAddress(liveText, livePage, loaded?.path ?? '')}
@@ -2559,7 +3094,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         // the very first layout is the one the reader will be looking at.
         htmlView={htmlView ?? { width: fitWidth, height: fitHeight }}
         onWheel={isHtml ? scrollHtml : undefined}
-        stageClass={{ hand: tool === 'select' && !isHtml, panning }}
+        stageClass={{
+          hand: tool === 'select' && !isHtml,
+          panning,
+          pannable,
+        }}
         // A page is the reader's own while nothing is being drawn on it: the frame
         // takes the pointer, the overlay steps aside, and only the marks stay pressable.
         passing={passing}
@@ -2568,6 +3107,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         onRasterLoad={setFileRasterSize}
         overlay={paper === null || size === null ? null : (
           <Canvas
+            inputRef={canvasInput}
             // The paper, not the figure: a mark in the margin has to have
             // somewhere to be drawn and somewhere to be pressed.
             width={paper.width}
@@ -2604,6 +3144,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             onPan={panBy}
             onPanStart={() => { setPanning(true) }}
             onPanEnd={() => { setPanning(false) }}
+            // A rendered document has its own scrollport, so a page drag is useful
+            // even when the outer stage itself has nothing to scroll.
+            pannable={isHtml || pannable}
+            // A page is viewed through a fixed window. Its own pinch belongs to the
+            // document or iframe; magnifying the paper underneath would detach the
+            // marks and the element boxes from the layout the reader is reading.
+            onZoomAt={isHtml ? undefined : pinchBy}
             onHover={lightElement}
             onPickMiss={() => { setStatus({ tone: 'info', text: t('toolElementMiss') }) }}
             onEdit={editMark}
@@ -2628,7 +3175,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             </span>
           </>
         )}
-        guide={pickGuide}
         t={t}
       />
 

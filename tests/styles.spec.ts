@@ -38,24 +38,17 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('.da-root[data-html="true"][data-live-error="true"]>.da-toasts{top:86px}')
   })
 
-  it('keeps the current element level visible in a narrow split pane', () => {
-    // The CSS media query sees the browser window, which stays wide while the preview
-    // column is narrow. The measured pane marks that state on the root instead, and
-    // the guide gives up its secondary key legend before its current level.
-    expect(STYLES).toContain('.da-root[data-compact="true"] .da-pick-keys{display:none}')
-    expect(STYLES).toContain('.da-root[data-compact="true"] .da-pick-guide{max-width:calc(100% - 76px)}')
-  })
-
-  it('keeps the element guide in the quiet corner instead of over the page', () => {
-    expect(STYLES).toContain('.da-pick-guide{position:absolute;z-index:9;top:8px;right:8px;')
-    expect(STYLES).not.toContain('.da-pick-guide{position:absolute;z-index:9;top:10px;left:50%;')
+  it('puts the element-mode legend inside the palette rather than over the page', () => {
+    expect(STYLES).toContain('.da-palette-hint{display:flex;flex-direction:column;')
+    expect(STYLES).not.toContain('.da-pick-guide{position:absolute;')
   })
 
   it('keeps the annotation count inside the toolbar scrollport', () => {
-    // The count used to start four pixels above its button inside an overflow-hidden
-    // horizontal strip, which clipped the top of the badge in the real panel.
-    expect(STYLES).toContain('.da-dock-count{position:absolute;z-index:1;top:0;right:-4px;')
-    expect(STYLES).not.toContain('.da-dock-count{position:absolute;top:-4px;right:-6px;')
+    // A corner badge lived above an overflow-hidden horizontal strip, which clipped
+    // its top row in the real panel. The count is now ordinary button content.
+    expect(STYLES).toContain('.da-dock-list{width:auto;min-width:34px;')
+    expect(STYLES).toContain('.da-dock-count{display:inline-flex;')
+    expect(STYLES).not.toContain('.da-dock-count{position:absolute;')
   })
 
   it('keeps the palette grip in reach when the palette has to scroll', () => {
@@ -64,6 +57,25 @@ describe('the annotator stylesheet', () => {
     // top, the reader could not drag the palette at all. It is sticky and shares the
     // strip's own ground so the tiles pass underneath instead of showing through.
     expect(STYLES).toMatch(/\.da-palette-grip\{position:sticky;top:0;z-index:1;background:inherit/u)
+  })
+
+  it('animates only the settled position, never the pointer-following drag', () => {
+    // The transition is there for a magnetic release and a resize repair. Turning it
+    // on while the pointer is down makes the strip lag behind the hand, which is the
+    // exact "生硬又追不上" motion this rule exists to prevent.
+    expect(STYLES).toContain('transition:left 180ms cubic-bezier(.22,1,.36,1)')
+    expect(STYLES).toMatch(/\.da-palette\[data-dragging="true"\]\{[^}]*transition:none/u)
+    expect(STYLES).toMatch(/\.da-bar\[data-dragging="true"\]\{[^}]*transition:none/u)
+    expect(STYLES).toContain('.da-palette,.da-bar{transition:none!important}')
+  })
+
+  it('uses one cursor per gesture: push the paper, move a mark, or pick an element', () => {
+    expect(STYLES).toContain('.da-stage[data-hand="true"][data-pannable="true"]{cursor:grab}')
+    expect(STYLES).toContain('.da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}')
+    expect(STYLES).toContain('.da-overlay[data-tool="select"] [data-da-mark]{cursor:move}')
+    expect(STYLES).toContain('.da-overlay[data-tool="select"] [data-da-kind="element"]{cursor:pointer}')
+    expect(STYLES).toContain('.da-overlay[data-tool="element"][data-pick="true"]{cursor:pointer}')
+    expect(STYLES).not.toContain('.da-overlay[data-tool="element"]{cursor:crosshair}')
   })
 
   it('paints the note that blocks the panel in a tone of its own', () => {
@@ -224,13 +236,10 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('overflow-x:auto')
   })
 
-  it('lets the hand under the select tool reach the overlay over the figure', () => {
-    // The stage says `grab`; the overlay covers the whole figure and is what the
-    // pointer is actually over, so a cursor of its own there took the hand away the
-    // moment the reader moved onto the picture — exactly where dragging starts. It
-    // inherits instead, and a drag in progress (which is `grabbing`) wins over every
-    // descendant, so the closed hand also survives the move onto a mark.
-    expect(STYLES).toContain('.da-stage[data-hand="true"]{cursor:grab}')
+  it('lets the pannable hand under select reach the overlay over the figure', () => {
+    // The open hand is only a promise where the paper can actually move. The overlay
+    // inherits it, and a drag in progress wins over every descendant.
+    expect(STYLES).toContain('.da-stage[data-hand="true"][data-pannable="true"]{cursor:grab}')
     expect(STYLES).toContain('.da-overlay[data-tool="select"]{cursor:inherit}')
     expect(STYLES).not.toContain('.da-overlay[data-tool="select"]{cursor:default}')
     expect(STYLES).toContain('[data-panning="true"] *{cursor:grabbing !important}')

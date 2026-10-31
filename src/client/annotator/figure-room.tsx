@@ -92,8 +92,6 @@ export interface FigureRoomProps {
    * marks and tools, which is the body's business.
    */
   readonly chip?: ReactNode
-  /** A short mode guide drawn above the paper without taking pointer events. */
-  readonly guide?: ReactNode
   /** The translator seat. */
   readonly t: Translate
 }
@@ -104,6 +102,8 @@ export interface StageCursor {
   readonly hand: boolean
   /** Whether the hand has closed on the table. */
   readonly panning: boolean
+  /** Whether there is actually more paper than the window can show. */
+  readonly pannable: boolean
 }
 
 /**
@@ -124,6 +124,7 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
       data-html={figure?.kind === 'html' ? 'true' : undefined}
       data-pass={props.passing ? 'true' : undefined}
       data-hand={props.stageClass.hand ? 'true' : undefined}
+      data-pannable={props.stageClass.pannable ? 'true' : undefined}
       data-panning={props.stageClass.panning ? 'true' : undefined}>
       <div className="da-surface" ref={props.surfaceRef} style={props.surfaceStyle}>
         <div className="da-paper" ref={props.paperRef} style={props.paperStyle}>
@@ -174,7 +175,6 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
           {props.chip}
         </div>
       </div>
-      {props.guide}
     </div>
   )
 }

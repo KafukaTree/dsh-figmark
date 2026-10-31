@@ -37,6 +37,34 @@ import type { CanvasProps, EventPoint, MarkPatch, SurfaceClickEvent, SurfaceEven
 
 /** Hit reach of a control handle, as a multiple of its side: generous enough to grab. */
 const HANDLE_REACH = 2.2
+/** Screen-pixel travel before a press becomes a pan, move, or a different target. */
+const DRAG_SLOP = 4
+
+/** One pointer owns at most one gesture until it is released or cancelled. */
+interface ActivePointer {
+  readonly id: number
+  readonly x: number
+  readonly y: number
+}
+
+/** A point or element that is committed only if this pointer releases as a click. */
+interface PendingTap {
+  readonly mark: AnnotationMark
+  readonly existing: AnnotationMark | undefined
+}
+
+interface TouchPoint {
+  readonly x: number
+  readonly y: number
+}
+
+/** Two fingers, remembered in screen coordinates between pointer events. */
+interface Pinch {
+  readonly ids: readonly [number, number]
+  distance: number
+  centerX: number
+  centerY: number
+}
 
 /**
  * Whether a key event is going into a field where arrow keys edit text.
@@ -64,8 +92,10 @@ export interface SurfaceHandlers {
   readonly onPointerMove: (event: SurfaceEvent) => void
   /** End the gesture in flight, committing whatever it drew. */
   readonly onPointerUp: (event: SurfaceEvent) => void
-  /** The pointer was cancelled, which ends the gesture like a release does. */
+  /** The pointer was cancelled, which abandons the gesture without committing it. */
   readonly onPointerCancel: (event: SurfaceEvent) => void
+  /** Pointer capture disappeared before a release, so the gesture is abandoned. */
+  readonly onLostPointerCapture: (event: SurfaceEvent) => void
   /** The pointer left, so the picker names nothing any more. */
   readonly onPointerLeave: () => void
   /** A click on the paper itself: it means "nothing is selected". */
@@ -88,6 +118,10 @@ export interface GestureView {
   readonly hover: MarkAnchor | null
   /** The sizes the surface's own controls are drawn at. */
   readonly sizes: ControlSizes
+  /** Abandon any input still in flight without committing it. */
+  readonly cancel: () => boolean
+  /** Whether an input gesture still owns the surface. */
+  readonly isActive: () => boolean
   /** What the svg binds. */
   readonly handlers: SurfaceHandlers
 }
@@ -110,6 +144,12 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
   const drawing = useRef(false)
   const panning = useRef<{ x: number; y: number } | null>(null)
   const panned = useRef(false)
+  const active = useRef<ActivePointer | null>(null)
+  const pendingTap = useRef<PendingTap | null>(null)
+  const touches = useRef(new Map<number, TouchPoint>())
+  /** Fingers still down after a pinch whose navigation gesture has already ended. */
+  const draining = useRef(new Set<number>())
+  const pinch = useRef<Pinch | null>(null)
   /**
    * Whether the press that just ended has already spent the click it comes with.
    *
@@ -191,6 +231,54 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    */
   const pressedAt = useRef<{ value: FigurePoint }>({ value: [0, 0] })
 
+  const pointerId = (event: SurfaceEvent): number => event.pointerId ?? 1
+
+  /**
+   * Claim the surface for one primary left-button pointer.
+   *
+   * Mouse, pen, and touch all arrive as pointer events, but their useful gestures
+   * do not overlap: a second finger belongs to a future pinch, and a right press is
+   * a context menu. Keeping the owner as an id rather than a boolean is what stops
+   * a second pointer from steering the first pointer's mark or pan.
+   */
+  const claim = (event: SurfaceEvent): boolean => {
+    if (active.current !== null) return false
+    if (event.isPrimary === false || event.button !== 0) return false
+    active.current = { id: pointerId(event), x: event.clientX, y: event.clientY }
+    return true
+  }
+
+  /**
+   * Keep a claimed pointer until its own release, even if it leaves the surface.
+   *
+   * A point or element pick is committed on pointerup rather than on pointerdown.
+   * Without capture, releasing outside the SVG produced neither pointerup nor click:
+   * the owner stayed claimed and the next press was silently ignored.
+   */
+  const capture = (event: SurfaceEvent): void => {
+    /* v8 ignore next -- jsdom has no pointer capture; browsers do. */
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const owns = (event: SurfaceEvent): boolean =>
+    active.current === null || active.current.id === pointerId(event)
+
+  /** Whether any gesture or uncommitted tap still owns this surface. */
+  const isActive = (): boolean =>
+    pinch.current !== null
+    || active.current !== null
+    || drawing.current
+    || pendingTap.current !== null
+    || panning.current !== null
+    || press !== null
+
+  const travelled = (event: SurfaceEvent): boolean => {
+    const from = active.current
+    /* v8 ignore next -- a live gesture always has an owner. */
+    if (from === null) return false
+    return Math.hypot(event.clientX - from.x, event.clientY - from.y) >= DRAG_SLOP
+  }
+
   const toFigure = (event: EventPoint): FigurePoint => figurePointOf(event, geometry)
   const anchorFor = (event: EventPoint, point: FigurePoint): MarkAnchor | undefined =>
     anchorOf(event, point, geometry, {
@@ -231,17 +319,21 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    * @param handle - the handle it grabbed instead of the shape, when it did.
    */
   const beginGesture = (mark: AnnotationMark, event: SurfaceEvent, handle?: Press['handle']): void => {
+    // Under a mark-making tool the drawn mark is not the target: let the press
+    // continue to the surface, where that tool can start its own gesture on top.
+    if (handle === undefined && tool !== 'select') return
+    if (!claim(event)) return
     event.stopPropagation()
     props.onSelect(mark.id)
-    if (handle === undefined && tool !== 'select') return
     // An element mark cannot be dragged: its box is where the element was, and a box
     // moved a few pixels away would still claim to name that element while pointing
     // at nothing in particular. Picking it again is how it is placed, so the press
     // that would move it just selects it.
-    if (handle === undefined && mark.kind === 'element') return
-    if (typeof event.currentTarget.setPointerCapture === 'function' && event.pointerId !== undefined) {
-      event.currentTarget.setPointerCapture(event.pointerId)
+    if (handle === undefined && mark.kind === 'element') {
+      active.current = null
+      return
     }
+    capture(event)
     setPress({
       id: mark.id,
       from: pressedAt.current.value,
@@ -266,6 +358,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    * @returns true when a handle took the press.
    */
   const beginHandle = (mark: AnnotationMark, event: SurfaceEvent): boolean => {
+    if (tool !== 'select') return false
     // Handles are only drawn around the selected mark, so a press on any other
     // mark must fall through to moving it — otherwise a click near a corner of
     // an unselected mark would silently resize it.
@@ -289,10 +382,14 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
   }
 
   const start = (event: SurfaceEvent): void => {
+    // The second finger belongs to the pinch that started in the capture phase. It
+    // must not reset the click debt or claim the surface for another gesture.
+    if (pinch.current !== null) return
     // Every gesture begins here, so this is where the previous one's trailing click
     // stops being owed: a press that neither pans nor draws must leave a later click
     // meaning what it says.
     settled.current = false
+    if (!claim(event)) return
     if (tool === 'select') {
       // A press on a placed element selects it, the way a press on any other mark
       // does — but it is found by asking the figure what is under the pointer, not by
@@ -300,6 +397,9 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       // mark is about: pressing elsewhere inside the box is pressing paper.
       const overElement = elementMarkAt(event, toFigure(event))
       if (overElement !== undefined) {
+        // The surface claimed the pointer only to decide what this press means;
+        // the mark's own gesture now owns it.
+        active.current = null
         beginGesture(overElement, event)
         // The press landed on the overlay because the mark paints nothing, so the
         // browser will report the trailing click on the overlay too — and a click on
@@ -311,24 +411,20 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       // area takes its presses first, so reaching here on the surface means the
       // pointer is over the table rather than over anything on it. Pushing the
       // table moves the view, which is the only way to reach a zoomed-in corner.
-      if (props.onPan === undefined) return
+      if (props.onPan === undefined || props.pannable === false) return
       panning.current = { x: event.clientX, y: event.clientY }
       panned.current = false
       // The browser's own capture is what keeps a drag alive past the edge of the
       // surface; a host without it still pans, just loses the pointer at the edge.
-      /* v8 ignore next -- jsdom and every browser the panel runs in implement it. */
-      event.currentTarget.setPointerCapture?.(event.pointerId)
-      props.onPanStart?.()
+      capture(event)
       return
     }
     event.preventDefault()
     const point = toFigure(event)
     if (tool === 'point') {
       const mark = pointMark({ color, weight: penWeight, point }, anchorFor(event, point))
-      props.onAdd(mark)
-      props.onSelect(mark.id)
-      props.onDrawn?.(mark.id)
-      settled.current = true
+      pendingTap.current = { mark, existing: undefined }
+      capture(event)
       return
     }
     if (tool === 'element') {
@@ -350,30 +446,35 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       // lands on the mark that is there, which is the one the reader wanted to comment
       // on, and nothing new appears for a fourth or fifth time.
       const already = elementMarkOn(props.marks, mark)
-      if (already !== undefined) {
-        props.onSelect(already.id)
-        settled.current = true
-        return
-      }
-      props.onAdd(mark)
-      props.onSelect(mark.id)
-      props.onDrawn?.(mark.id)
-      settled.current = true
+      pendingTap.current = { mark, existing: already }
+      capture(event)
       return
     }
     drawing.current = true
-    if (typeof event.currentTarget.setPointerCapture === 'function' && event.pointerId !== undefined) {
-      event.currentTarget.setPointerCapture(event.pointerId)
-    }
+    capture(event)
     setDraft(draftMark({ tool: tool as DragTool, color, weight: penWeight, point }))
   }
 
   const move = (event: SurfaceEvent): void => {
+    if (event.pointerType === 'touch') {
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    }
+    if (pinch.current !== null) {
+      movePinch(event)
+      return
+    }
+    if (!owns(event)) return
+    if (pendingTap.current !== null && travelled(event)) pendingTap.current = null
     const from = panning.current
     if (from !== null) {
-      const dx = event.clientX - from.x
-      const dy = event.clientY - from.y
+      const start = active.current
+      /* v8 ignore next -- a pan is a live gesture and therefore always owned. */
+      if (start === null) return
+      const dx = panned.current ? event.clientX - from.x : event.clientX - start.x
+      const dy = panned.current ? event.clientY - from.y : event.clientY - start.y
       if (dx === 0 && dy === 0) return
+      if (!panned.current && !travelled(event)) return
+      if (!panned.current) props.onPanStart?.()
       panning.current = { x: event.clientX, y: event.clientY }
       panned.current = true
       props.onPan?.(dx, dy)
@@ -395,6 +496,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       })
     }
     if (press !== null) {
+      if (press.edit === null && !travelled(event) && !(event.shiftKey && press.handle === 'rotate')) return
       const point = toFigure(event)
       const dx = point[0] - press.from[0]
       const dy = point[1] - press.from[1]
@@ -423,15 +525,23 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     setDraft(stretchDraft(draft, point))
   }
 
-  const finish = (event: SurfaceEvent): void => {
+  const settle = (event: SurfaceEvent): void => {
+    if (endPinch(event)) return
+    if (active.current === null || !owns(event)) return
     if (panning.current !== null) {
+      const started = panned.current
       panning.current = null
-      props.onPanEnd?.()
+      // The trailing click is the gesture's ending punctuation. Keep the pan flag
+      // until that click arrives so it is not mistaken for a click on nothing.
+      panned.current = started
+      active.current = null
+      if (started) props.onPanEnd?.()
       return
     }
     if (press !== null) {
       const done = press.edit
       setPress(null)
+      active.current = null
       props.onLiveEdit?.(null)
       // A press that never moved is the selection the press itself performed.
       if (done === null) return
@@ -453,14 +563,33 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       props.onUpdate(press.id, patch)
       return
     }
-    if (!drawing.current || draft === null) return
+    if (pendingTap.current !== null) {
+      const pending = pendingTap.current
+      pendingTap.current = null
+      active.current = null
+      if (pending.existing === undefined) {
+        props.onAdd(pending.mark)
+        props.onSelect(pending.mark.id)
+        props.onDrawn?.(pending.mark.id)
+      } else {
+        props.onSelect(pending.existing.id)
+        props.onDrawn?.(pending.existing.id)
+      }
+      settled.current = true
+      return
+    }
+    if (!drawing.current || draft === null) {
+      active.current = null
+      return
+    }
     drawing.current = false
+    active.current = null
+    setDraft(null)
     if (typeof event.currentTarget.hasPointerCapture === 'function'
       && event.pointerId !== undefined
       && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    setDraft(null)
     if (!draftWorthCommitting(draft)) return
     // Only a mark that points at a place carries an anchor. A box says "look in
     // here"; the element under its last corner is where the hand stopped, and the
@@ -475,11 +604,63 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     settled.current = true
   }
 
+  /**
+   * Abandon the gesture without creating or changing anything.
+   *
+   * A cancelled pointer, lost capture, hidden tab, or window blur means the browser
+   * no longer knows where the release would have happened. Treating that as a
+   * successful release made marks appear from a gesture the reader never completed.
+   */
+  const cancel = (event?: SurfaceEvent): boolean => {
+    const wasActive = isActive()
+    if (event !== undefined && endPinch(event)) return true
+    if (event === undefined) {
+      touches.current.clear()
+      draining.current.clear()
+      pinch.current = null
+    }
+    if (event !== undefined && (active.current === null || !owns(event))) return false
+    const hadPan = panning.current !== null && panned.current
+    panning.current = null
+    drawing.current = false
+    pendingTap.current = null
+    active.current = null
+    panned.current = false
+    setDraft(null)
+    setPress(null)
+    props.onLiveEdit?.(null)
+    if (hadPan) props.onPanEnd?.()
+    // A cancelled pointer normally produces no click. Suppressing a trailing one
+    // anyway keeps a later synthetic click from clearing the selection by accident;
+    // the next press resets this before it can affect a real click.
+    settled.current = true
+    if (event !== undefined
+      && typeof event.currentTarget.hasPointerCapture === 'function'
+      && event.pointerId !== undefined
+      && event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    return wasActive
+  }
+  const cancelFromLifecycle = (): void => { cancel() }
+
+  useEffect(() => {
+    window.addEventListener('blur', cancelFromLifecycle)
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') cancelFromLifecycle()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('blur', cancelFromLifecycle)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  })
+
   const onClick = (event: SurfaceClickEvent): void => {
     // Only a click on the surface itself is a click on nothing; one that
     // landed on a mark's hit area must leave that mark selected, which is
     // what lets it be dragged again straight away.
-    if (tool !== 'select' || event.target !== event.currentTarget) return
+    if (event.target !== event.currentTarget) return
     // A pan is not a click on nothing: it is how the reader reached the mark.
     if (panned.current) {
       panned.current = false
@@ -492,6 +673,10 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       settled.current = false
       return
     }
+    // A miss in element mode leaves the picker armed for another try, but it does
+    // let go of the comment on whatever was selected before. Drawing tools own
+    // their click entirely; their press already produced a mark or a miss message.
+    if (tool !== 'select' && tool !== 'element') return
     props.onSelect(null)
   }
 
@@ -508,7 +693,110 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
 
   /** A press on the paper while a drawing gesture is not in flight: nothing to do. */
   const onPointerDownCapture = (event: SurfaceEvent): void => {
+    if (event.pointerType === 'touch') {
+      if (draining.current.has(event.pointerId)) return
+      if (draining.current.size > 0) {
+        draining.current.add(event.pointerId)
+        capture(event)
+        return
+      }
+      touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+      if (touches.current.size >= 2 && pinch.current === null) {
+        // A second finger changes the meaning of the gesture already in flight: a line
+        // half drawn is not a line the reader finished. Drop it, then treat the pair
+        // as navigation from this frame onward.
+        const hadPan = panning.current !== null && panned.current
+        panning.current = null
+        drawing.current = false
+        pendingTap.current = null
+        active.current = null
+        panned.current = false
+        setDraft(null)
+        setPress(null)
+        props.onLiveEdit?.(null)
+        if (hadPan) props.onPanEnd?.()
+        settled.current = true
+        /* v8 ignore next -- jsdom has no pointer capture; browsers do. */
+        event.currentTarget.setPointerCapture?.(event.pointerId)
+        const pair = [...touches.current.entries()].slice(0, 2)
+        const firstEntry = pair[0]
+        const secondEntry = pair[1]
+        /* v8 ignore next -- the size check above guarantees two entries. */
+        if (firstEntry !== undefined && secondEntry !== undefined) {
+          const first = firstEntry[1]
+          const second = secondEntry[1]
+          pinch.current = {
+            ids: [firstEntry[0], secondEntry[0]],
+            distance: Math.hypot(second.x - first.x, second.y - first.y),
+            centerX: (first.x + second.x) / 2,
+            centerY: (first.y + second.y) / 2,
+          }
+        }
+      }
+    }
+    if (!owns(event)) return
     pressedAt.current.value = toFigure(event)
+  }
+
+  /**
+   * Continue a two-finger pinch.
+   *
+   * The distance changes scale and the centroid changes scroll: fingers can spread
+   * and travel in the same movement, as they do on a map. The pair owns the gesture
+   * until the first finger lifts, so neither finger can accidentally finish a draft
+   * that the second finger already abandoned.
+   */
+  const movePinch = (event: SurfaceEvent): void => {
+    const gesture = pinch.current
+    /* v8 ignore next -- callers only enter this path with a live pinch. */
+    if (gesture === null || event.pointerType !== 'touch') return
+    if (!gesture.ids.includes(event.pointerId)) return
+    touches.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    const first = touches.current.get(gesture.ids[0])
+    const second = touches.current.get(gesture.ids[1])
+    /* v8 ignore next -- both ids are in the map until one of them lifts. */
+    if (first === undefined || second === undefined) return
+    const distance = Math.hypot(second.x - first.x, second.y - first.y)
+    const centerX = (first.x + second.x) / 2
+    const centerY = (first.y + second.y) / 2
+    if (gesture.distance > 0 && distance > 0 && distance !== gesture.distance) {
+      props.onZoomAt?.(distance / gesture.distance, centerX, centerY)
+    }
+    const dx = centerX - gesture.centerX
+    const dy = centerY - gesture.centerY
+    if (dx !== 0 || dy !== 0) props.onPan?.(dx, dy)
+    gesture.distance = distance
+    gesture.centerX = centerX
+    gesture.centerY = centerY
+  }
+
+  /**
+   * End the pinch when one of its fingers is lifted or taken away.
+   * @returns true when the event belonged to the pinch and the normal gesture path
+   * must not also see it.
+   */
+  const endPinch = (event: SurfaceEvent): boolean => {
+    if (event.pointerType === 'touch') {
+      touches.current.delete(event.pointerId)
+      draining.current.delete(event.pointerId)
+    }
+    const gesture = pinch.current
+    if (gesture === null || !gesture.ids.includes(event.pointerId)) {
+      return false
+    }
+    pinch.current = null
+    // A remaining finger is the tail of the pinch, not the start of a drawing. Drain
+    // every finger still down before accepting new input; a third finger may land
+    // during that tail and is drained with the pair rather than replacing it.
+    for (const id of gesture.ids) {
+      touches.current.delete(id)
+      draining.current.add(id)
+    }
+    draining.current.delete(event.pointerId)
+    // A tap may still be synthesized after the lift. It is the punctuation of a
+    // pinch, not a click on paper, so let the existing click guard consume it.
+    settled.current = true
+    return true
   }
 
   return {
@@ -516,12 +804,15 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     press,
     hover,
     sizes,
+    cancel,
+    isActive,
     handlers: {
       onPointerDownCapture,
       onPointerDown: start,
       onPointerMove: move,
-      onPointerUp: finish,
-      onPointerCancel: finish,
+      onPointerUp: settle,
+      onPointerCancel: cancel,
+      onLostPointerCapture: cancel,
       onPointerLeave: () => { setPicked(null) },
       onClick,
       onDoubleClick,

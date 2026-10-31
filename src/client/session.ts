@@ -87,8 +87,6 @@ export interface DeliveredPageImage {
 export interface DeliveryInput {
   /** The client sessions service. */
   readonly sessions: SessionsLike
-  /** The client upload service, when the composition provides one. */
-  readonly fileUpload: FileUploadLike | undefined
   /** Session the figure belongs to. */
   readonly sessionId: string
   /** The saved document. */
@@ -97,8 +95,6 @@ export interface DeliveryInput {
   readonly paths: DeliveredPaths
   /** Review images of the annotated pages, in page order. */
   readonly pageImages: readonly DeliveredPageImage[]
-  /** The document carrying the written-back annotations, when there is one. */
-  readonly annotatedPdf: Uint8Array | undefined
   /**
    * A 120px picture of the review, for the bubble this message lands in.
    *
@@ -193,36 +189,6 @@ async function attachFile(input: AttachInput): Promise<boolean> {
 }
 
 /**
- * Attach the annotated document to the message, unless this session cannot take one.
- * @param input - the delivery being composed.
- * @param session - the live session face, when one is bound.
- * @param content - parts being built, appended to when the file was attached.
- * @param warnings - warnings being collected.
- */
-async function attachAnnotatedPdf(
-  input: DeliveryInput,
-  session: SessionFaceLike | undefined,
-  content: unknown[],
-  warnings: string[],
-): Promise<boolean> {
-  // Present by the caller's own check, which needs the answer before it can decide
-  // whether the message says a PDF travelled.
-  const bytes = input.annotatedPdf as Uint8Array
-  const name = input.paths.reviewPath === null
-    ? `${baseNameOf(input.document.figure.path)}.annotated.pdf`
-    : baseNameOf(input.paths.reviewPath)
-  return await attachFile({
-    fileUpload: input.fileUpload,
-    session,
-    sessionId: input.sessionId,
-    content,
-    warnings,
-    zh: input.locale === 'zh',
-    attachment: { bytes, name, noun: { zh: '带批注 PDF', en: 'annotated PDF' } },
-  })
-}
-
-/**
  * Hand one message to the session, whether it is live or has to be resumed.
  * @param sessions - the client sessions service.
  * @param sessionId - session the message belongs to.
@@ -259,10 +225,9 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
   const content: unknown[] = []
   const live = input.sessions.scope(input.sessionId)
   const session = live === undefined ? undefined : input.sessions.sessionOf(live)
-  // The message says whether the PDF travels with it, so the attachment is attempted
-  // before the text is composed. The paths only say what the Host wrote to disk.
-  const pdfAttached = input.annotatedPdf === undefined
-    || await attachAnnotatedPdf(input, session, content, warnings)
+  // A PDF travels as the path already in the message and the marked pages rendered
+  // below. Uploading the whole file made a few marks wait on tens of megabytes and is
+  // no better evidence than the pages the reader actually annotated.
   const shown = input.pageImages.slice(0, MAX_PAGE_IMAGES)
   const paged = input.document.figure.pageCount !== undefined
   for (const entry of shown) {
@@ -280,15 +245,17 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
     // says the PDF did not travel sends the agent to look for a file that is not in
     // the message — and a search is a plausible thing for it to do, which is a worse
     // outcome than saying nothing.
-    warnings.push(pdfAttached
-      ? (zh
-        ? `另有 ${hidden} 页标注未附图，请看带批注 PDF。`
-        : `${hidden} more annotated pages are not attached as images; see the annotated PDF.`)
-      : (zh
-        ? `另有 ${hidden} 页标注未附图，带批注 PDF 也未能随消息发送：这些页的标注只有位置与说明，请按上面的描述在原文档上处理。`
-        : `${hidden} more annotated pages are not attached as images, and neither is the annotated PDF: their marks travel only as the positions and notes above — work on the original document from those.`))
+    warnings.push(zh
+      ? `另有 ${hidden} 页标注未附图；原 PDF 不上传，请按上方路径和位置说明处理这些页。`
+      : `${hidden} more annotated pages are not attached as images; the PDF itself is not uploaded, so use the path above and the positions and notes for those pages.`)
   }
-  const message = buildAnnotationMessage(input.document, input.paths, input.locale, pdfAttached)
+  const message = buildAnnotationMessage(
+    input.document,
+    input.paths,
+    input.locale,
+    shown.length > 0,
+    shown.length,
+  )
   rememberDelivered(message, input.thumb)
   content.push({ type: 'text', text: message })
   await promptSession(input.sessions, input.sessionId, session, content, 'the session refused the annotation message')

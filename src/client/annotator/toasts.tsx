@@ -249,12 +249,14 @@ interface CardProps {
  * @param props - the stack to draw, its labels, and whether motion is wanted.
  * @returns the stack, or nothing at all when there is nothing to say.
  */
-export function ToastStack(props: {
+export interface ToastStackProps {
   readonly view: Toasts
   readonly label: string
   readonly resendLabel: string
   readonly reduced?: boolean
-}): ReactElement | null {
+}
+
+export function ToastStack(props: ToastStackProps): ReactElement | null {
   const { entries, mark, retry, remove } = props.view
   const reduced = props.reduced ?? prefersReducedMotion()
   if (entries.length === 0) return null

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildPagedDocument, createDocumentSeat, type PagedAnnotationInput } from '../src/client/document-seat'
 import type { ComposerLike, ComposerShellLike } from '../src/client/composer'
 import { clearParked, parkedAnnotations } from '../src/client/pending'
-import type { FileUploadLike, SessionsLike } from '../src/client/session'
+import type { SessionsLike } from '../src/client/session'
 import { defined, stubRasterizer } from './dom'
 
 /** One input document, as the body that owns the pages reports it. */
@@ -69,20 +69,6 @@ function stubSessions(): { readonly sessions: SessionsLike; readonly prompts: un
   }
 }
 
-/** One upload service stub. */
-function stubUpload(): { readonly fileUpload: FileUploadLike; readonly uploads: string[] } {
-  const uploads: string[] = []
-  return {
-    uploads,
-    fileUpload: {
-      upload: async (_sessionId, data, name) => {
-        uploads.push(`${name}:${data.byteLength}`)
-        return { ok: true, value: { file: { attachmentId: 'a'.repeat(64), name, bytes: data.byteLength } } }
-      },
-    },
-  }
-}
-
 beforeEach(() => { clearParked() })
 
 afterEach(() => { vi.unstubAllGlobals() })
@@ -116,7 +102,7 @@ describe('the document one whole-document save writes', () => {
 describe('reading the document again', () => {
   it('asks the plugin route for the whole document', async () => {
     const calls = stubFetch()
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
     const loaded = await seat.load('dsh-resource://file/session/s1/report.pdf', new AbortController().signal)
     expect(loaded.path).toBe('/w/report.pdf')
     expect(loaded.annotation).toBeNull()
@@ -127,7 +113,7 @@ describe('reading the document again', () => {
 describe('saving the document', () => {
   it('posts the whole document with its annotated copy', async () => {
     const calls = stubFetch()
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
     const saved = await seat.save('dsh-resource://file/session/s1/report.pdf', input(), new Uint8Array([0x25, 0x50]))
     expect(saved).toEqual({ annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' })
     const raw = calls[0]?.init?.body
@@ -140,7 +126,7 @@ describe('saving the document', () => {
 
   it('keeps a draft with the sidecar only, so reloading does not redo the PDF writer', async () => {
     const calls = stubFetch()
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
     await seat.draft('dsh-resource://file/session/s1/report.pdf', input())
     const raw = calls[0]?.init?.body
     if (typeof raw !== 'string') throw new Error('the write carried no JSON body')
@@ -171,7 +157,6 @@ describe('parking the document above the composer', () => {
     const composer = stubComposer()
     const seat = createDocumentSeat({
       sessions: undefined,
-      fileUpload: undefined,
       conversation: composer.conversation,
       sessionId: 's1',
       locale: 'zh',
@@ -184,31 +169,29 @@ describe('parking the document above the composer', () => {
         { page: 1, dataUrl: 'data:image/png;base64,cGFnZTE=', width: 595, height: 842 },
         { page: 3, dataUrl: 'data:image/png;base64,cGFnZTM=', width: 595, height: 842 },
       ],
-      new Uint8Array([0x25, 0x50]),
     )
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.raw).toContain('第 1 页 矩形1 (10,20)-(60,90)')
     expect(parked.raw).toContain('第 3 页 箭头1 (1,2) → (3,4)，批注：第三页')
-    // The message describes the attachment without naming a path that is about to
-    // be deleted, because the sidecars go once the note is handed over.
-    expect(parked.raw).toContain('带批注 PDF 已作为本条消息的附件发送')
+    // The whole PDF is not uploaded: the marked pages are the evidence, and the
+    // original path in the header is the index for everything else.
+    expect(parked.raw).toContain('对应标注页已作为图片随消息发送；原 PDF 未上传')
+    expect(parked.raw).not.toContain('带批注 PDF 已作为本条消息的附件发送')
     expect(parked.raw).not.toContain('.annotated.pdf')
     expect(parked.data.marks).toHaveLength(2)
     // Parking does not type into the box: the block is armed beside it, and the one
-    // press of the box's own send carries the text and the PDF together.
+    // press of the box's own send carries the text and page images together.
     expect(composer.written).toEqual([])
     expect(document_.figure.pageCount).toBe(4)
   })
 
-  it('sends the annotated copy and the pictures when the card is pressed', async () => {
+  it('sends the pictures without uploading the whole PDF when the card is pressed', async () => {
     stubFetch()
     stubRasterizer()
-    const upload = stubUpload()
     const stub = stubSessions()
     const composer = stubComposer()
     const seat = createDocumentSeat({
       sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
       conversation: composer.conversation,
       sessionId: 's1',
       locale: 'zh',
@@ -220,17 +203,15 @@ describe('parking the document above the composer', () => {
         { page: 1, dataUrl: 'data:image/png;base64,cGFnZTE=', width: 595, height: 842 },
         { page: 3, dataUrl: 'data:image/png;base64,cGFnZTM=', width: 595, height: 842 },
       ],
-      new Uint8Array([0x25, 0x50]),
     )
     // Pressing the card runs the delivery the sheet built when the document was
     // closed, so what travels is the picture the reader was looking at.
     expect(stub.prompts).toEqual([])
     await defined(parkedAnnotations('s1')[0]).send()
-    expect(upload.uploads).toEqual(['report.pdf.annotated.pdf:2'])
     const parts = (stub.prompts[0] ?? []) as { readonly type: string; readonly name?: string; readonly text?: string }[]
-    expect(parts.map(part => part.type)).toEqual(['file', 'image', 'image', 'text'])
-    expect(parts[1]?.name).toBe('report.pdf.p1.annotated.png')
-    expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
+    expect(parts.map(part => part.type)).toEqual(['image', 'image', 'text'])
+    expect(parts[0]?.name).toBe('report.pdf.p1.annotated.png')
+    expect(parts[2]?.text).toContain('对应标注页已作为图片随消息发送；原 PDF 未上传')
     // The card is spent by the dock that drew it, not by the seat.
     expect(parkedAnnotations('s1')[0]).toBeDefined()
   })
@@ -239,12 +220,11 @@ describe('parking the document above the composer', () => {
     const composer = stubComposer()
     const seat = createDocumentSeat({
       sessions: undefined,
-      fileUpload: undefined,
       conversation: composer.conversation,
       sessionId: 's1',
       locale: 'zh',
     })
-    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [])
     await expect(defined(parkedAnnotations('s1')[0]).send())
       .rejects.toThrow('the sessions service is unavailable')
   })
@@ -253,31 +233,28 @@ describe('parking the document above the composer', () => {
     const composer = stubComposer()
     const seat = createDocumentSeat({
       sessions: undefined,
-      fileUpload: undefined,
       conversation: composer.conversation,
       sessionId: 's1',
       locale: 'en',
     })
-    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    await seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [])
     expect(defined(parkedAnnotations('s1')[0]).raw).toContain('[figure annotations]')
   })
 
   it('refuses to park without a conversation service', async () => {
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
-    await expect(seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1])))
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    await expect(seat.compose(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, []))
       .rejects.toThrow('the conversation service is unavailable')
   })
 })
 
 describe('delivering the document', () => {
-  it('sends the annotated copy, one picture per marked page, and the list of marks', async () => {
+  it('sends one picture per marked page and the list of marks, without the PDF', async () => {
     stubFetch()
     stubRasterizer()
-    const upload = stubUpload()
     const stub = stubSessions()
     const seat = createDocumentSeat({
       sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
       conversation: undefined,
       sessionId: 's1',
       locale: 'zh',
@@ -290,24 +267,22 @@ describe('delivering the document', () => {
       input(),
       { annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' },
       pages,
-      new Uint8Array([0x25, 0x50]),
     )
     expect(warnings).toEqual([])
-    expect(upload.uploads).toEqual(['report.pdf.annotated.pdf:2'])
     const parts = (stub.prompts[0] ?? []) as { readonly type: string; readonly name?: string; readonly text?: string }[]
-    expect(parts.map(part => part.type)).toEqual(['file', 'image', 'image', 'text'])
-    expect(parts[1]?.name).toBe('report.pdf.p1.annotated.png')
-    expect(parts[2]?.name).toBe('report.pdf.p3.annotated.png')
-    // The message names every page of every mark, and says the copy travels with it.
-    expect(parts[3]?.text).toContain('第 1 页 矩形1 (10,20)-(60,90)')
-    expect(parts[3]?.text).toContain('第 3 页 箭头1 (1,2) → (3,4)，批注：第三页')
-    expect(parts[3]?.text).toContain('带批注 PDF 已作为本条消息的附件发送')
-    expect(parts[3]?.text).not.toContain('.annotated.pdf')
+    expect(parts.map(part => part.type)).toEqual(['image', 'image', 'text'])
+    expect(parts[0]?.name).toBe('report.pdf.p1.annotated.png')
+    expect(parts[1]?.name).toBe('report.pdf.p3.annotated.png')
+    // The message names every page of every mark, and says the whole file stayed local.
+    expect(parts[2]?.text).toContain('第 1 页 矩形1 (10,20)-(60,90)')
+    expect(parts[2]?.text).toContain('第 3 页 箭头1 (1,2) → (3,4)，批注：第三页')
+    expect(parts[2]?.text).toContain('对应标注页已作为图片随消息发送；原 PDF 未上传')
+    expect(parts[2]?.text).not.toContain('.annotated.pdf')
   })
 
   it('refuses to deliver without a sessions service', async () => {
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
-    await expect(seat.send(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1])))
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    await expect(seat.send(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, []))
       .rejects.toThrow('the sessions service is unavailable')
   })
 
@@ -315,8 +290,8 @@ describe('delivering the document', () => {
     stubFetch()
     stubRasterizer()
     const stub = stubSessions()
-    const seat = createDocumentSeat({ sessions: stub.sessions, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'en' })
-    await seat.send(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
+    const seat = createDocumentSeat({ sessions: stub.sessions, conversation: undefined, sessionId: 's1', locale: 'en' })
+    await seat.send(input(), { annotationPath: '/w/a.annot.json', reviewPath: null }, [])
     const parts = (stub.prompts[0] ?? []) as { readonly text?: string }[]
     expect(defined(parts[0]).text).toContain('[figure annotations]')
   })
@@ -325,7 +300,7 @@ describe('delivering the document', () => {
 describe('forgetting the document', () => {
   it('asks the host to delete the sidecars of this very document', async () => {
     const calls = stubFetch()
-    const seat = createDocumentSeat({ sessions: undefined, fileUpload: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
+    const seat = createDocumentSeat({ sessions: undefined, conversation: undefined, sessionId: 's1', locale: 'zh' })
     await seat.discard('dsh-resource://file/session/s1/report.pdf')
     const call = defined(calls[0])
     expect(call.init?.method).toBe('DELETE')

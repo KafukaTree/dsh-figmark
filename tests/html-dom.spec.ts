@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
 import {
   anchorInDocument, buildRenderedDocument, elementBox, elementChoicesInDocument, loadFrameDocument,
-  measureFrameContent,
+  eventOwnerOf, measureFrameContent,
 } from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
@@ -22,6 +22,15 @@ function rendered(html: string): Document {
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('rendering a document for the frame', () => {
+  it('finds the widest event target a document can offer', () => {
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+    const live = frame.contentDocument
+    if (live === null) throw new Error('the frame has no document')
+    expect(eventOwnerOf(live)).toBe(frame.contentWindow)
+    expect(eventOwnerOf(parse('<p>detached</p>'))).toBeInstanceOf(Document)
+  })
+
   it('puts the drawing policy first in the head, where it governs every reference', () => {
     const doc = rendered('<html><head><title>t</title></head><body><p>hi</p></body></html>')
     const first = doc.head.firstElementChild

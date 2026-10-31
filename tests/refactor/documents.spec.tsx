@@ -28,6 +28,7 @@ import type { AnnotatorBodyProps } from '../../src/client/AnnotatorBody'
 import type { DocumentSeat } from '../../src/client/document-seat'
 import type { PdfBodyProps } from '../../src/client/pdf/PdfBody'
 import { PdfBody } from '../../src/client/pdf/PdfBody'
+import type { ToastStackProps, Toasts } from '../../src/client/annotator/toasts'
 import { MarkdownBody } from '../../src/client/markdown/MarkdownBody'
 import type { SessionsLike } from '../../src/client/session'
 import { zh } from '../../src/client/locales'
@@ -97,6 +98,22 @@ function StubAnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   )
 }
 
+/** Quiet feedback for the structural document dumps. */
+const quietToasts: Toasts = {
+  entries: [],
+  note: () => {},
+  notify: async () => 'ok',
+  send: async () => 'ok',
+  mark: () => {},
+  retry: () => {},
+  dropTone: () => {},
+  remove: () => {},
+  clear: () => {},
+}
+
+/** The dumps do not open feedback, so the stack renders nothing. */
+function QuietToastStack(_props: ToastStackProps): ReactNode { return null }
+
 /** The copy the panel would have, resolved against the local dictionary. */
 const translate = (key: string, vars?: Record<string, number | string>): string => {
   const text = (zh as Record<string, string>)[key] ?? key
@@ -116,6 +133,8 @@ function pdfProps(overrides: Partial<PdfBodyProps> = {}): PdfBodyProps {
     figureUnit,
     markOrdinals,
     t: translate,
+    toasts: quietToasts,
+    ToastStack: QuietToastStack,
     ...overrides,
   }
 }

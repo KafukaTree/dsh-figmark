@@ -374,7 +374,7 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
       onDoubleClick={(event) => { event.stopPropagation(); onEdit(mark.id) }} />
   )
   return (
-    <g data-da-mark={mark.id} opacity={isDraft ? 0.75 : 1}>
+    <g data-da-mark={mark.id} data-da-kind={mark.kind} opacity={isDraft ? 0.75 : 1}>
       {isPoint ? <Pin mark={shown} unit={unit} number={numbers.get(mark.id)} /> : null}
       {path === undefined ? null : (
         <g transform={transform}>

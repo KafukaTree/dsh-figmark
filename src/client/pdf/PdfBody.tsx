@@ -20,13 +20,14 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import type { AnnotationDocument, AnnotationMark } from '../../shared/annotation'
 import type { AnnotatorBodyProps, BodyContent, SurfaceDraft, Translate } from '../annotator-contract'
+import type { ToastStackProps, Toasts } from '../annotator/toasts'
 import type { DocumentSeat, PagedAnnotationInput } from '../document-seat'
 import type { Autosave, AutosaveDeps } from '../autosave'
 import { useDocumentAutosave } from './document-autosave'
 import { useOpenedDocument, useSavedAnnotation, type FigureFacts } from './document-lifecycle'
-import { discardDocument, messageOf, saveAndDeliver } from './document-save'
+import { discardDocument, messageOf, prepareDelivery, saveAndDeliver } from './document-save'
 import { annotateDocument, reviewPages } from './export-pages'
-import { allMarks, collectInput, groupByPage, numberingOf, withPageMarks, withoutMark, type MarksByPage } from './page-marks'
+import { allMarks, collectInput, groupByPage, numberingOf, withPageMarks, withoutMarks, type MarksByPage } from './page-marks'
 import { PagingControls } from './paging-controls'
 import { MIN_PANE_WIDTH, renderPage, renderWidthFor, type PageBitmap } from './raster'
 import { usePaging, usePagingKeys, usePaneWidth } from './viewport'
@@ -84,6 +85,15 @@ export type PdfBodyProps = PdfBodyInjected & {
   readonly scrollportRef?: ((element: HTMLElement | null) => void) | undefined
   /** Copy, already resolved against the shell's locale or the fallback dictionary. */
   readonly t: Translate
+  /**
+   * The feedback stack, owned by the entry bundle.
+   *
+   * PDF is a lazy chunk and cannot import `../annotator/toasts`; the resolved stack
+   * and its renderer therefore cross this boundary as props, like the annotator body.
+   */
+  readonly toasts: Toasts
+  /** The entry bundle's toast renderer. */
+  readonly ToastStack: ComponentType<ToastStackProps>
 }
 
 /** One rendered page, as the pane shows it. */
@@ -94,21 +104,14 @@ interface ShownPage {
   readonly bitmap: PageBitmap
 }
 
-/** A status line under the pane. */
-interface Status {
-  /** What it says about the document. */
-  readonly tone: 'ok' | 'error' | 'info'
-  /** The text itself. */
-  readonly text: string
-}
-
 /**
  * Render one PDF, one page at a time, annotating it as a whole document.
  * @param props - document content, addressed resource, copy, and the injected seats.
  * @returns the document's toolbar and the page on screen, or why it is not there yet.
  */
 export function PdfBody(props: PdfBodyProps): ReactNode {
-  const { AnnotatorBody, seat, t } = props
+  const { AnnotatorBody, seat, t, toasts, ToastStack } = props
+  const { note, notify } = toasts
   const address = props.resourceAddress ?? ''
   const { createAutosave, annotationSignature, autosaveDelayMs, figureUnit, markOrdinals } = props
   const bytes = props.content?.kind === 'bytes' ? props.content.data : undefined
@@ -154,7 +157,15 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
    */
   const [zoom, setZoom] = useState<number | 'fit'>('fit')
   const [busy, setBusy] = useState(false)
-  const [status, setStatus] = useState<Status | null>(null)
+  /**
+   * The latest values a late delivery callback has to see.
+   *
+   * A send closes over the context that started it. Marks and notes added while the
+   * session answers render into newer contexts; keeping the current values in a ref
+   * lets the first context remove only its own snapshot without losing the newer work.
+   */
+  const latest = useRef({ marks, summary, createdAt })
+  latest.current = { marks, summary, createdAt }
   const zoomFactor = zoom === 'fit' ? 1 : zoom
   const renderWidth = renderWidthFor(pane.width, zoomFactor)
 
@@ -183,8 +194,8 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
       setCreatedAt(saved.createdAt)
     }, []),
     fail: useCallback((cause: unknown) => {
-      setStatus({ tone: 'error', text: `${translateRef.current('readError')}${messageOf(cause)}` })
-    }, []),
+      note({ tone: 'error', text: `${translateRef.current('readError')}${messageOf(cause)}` })
+    }, [note]),
   })
 
   // --- the page on screen ---------------------------------------------------
@@ -254,8 +265,8 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     annotationSignature,
     autosaveDelayMs,
     onError: useCallback((cause: unknown) => {
-      setStatus({ tone: 'error', text: `${translateRef.current('saveError')}${messageOf(cause)}` })
-    }, []),
+      note({ tone: 'error', text: `${translateRef.current('saveError')}${messageOf(cause)}` })
+    }, [note]),
   })
 
   const saveContext = {
@@ -269,19 +280,12 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
     annotate: annotateDocument,
     review: reviewPages,
     autosave,
-    say: useCallback((text: string) => { setStatus({ tone: 'info', text }) }, []),
-    fail: useCallback((text: string) => { setStatus({ tone: 'error', text }) }, []),
+    fail: useCallback((text: string) => { note({ tone: 'error', text }) }, [note]),
     setBusy,
     copy: {
       saveFailed: t('saveError'),
       notReady: t('notReady'),
       nothingToSend: t('sendNothingToSend'),
-      sending: t('sending'),
-      composing: t('composing'),
-      composed: t('composed'),
-      composedOne: t('composedOne'),
-      sent: t('sent'),
-      sentOne: t('sentOne'),
       clearFailed: t('clearError'),
     },
     cleared: useCallback(() => {
@@ -294,7 +298,20 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
       // remounts it against the empty draft.
       setGeneration(current => current + 1)
     }, []),
-    dropped: useCallback((id: string) => { setMarks(current => withoutMark(current, id)) }, []),
+    delivered: useCallback((ids: ReadonlySet<string>, sentSummary: string, summaryDelivered: boolean): void => {
+      const current = latest.current
+      const next = withoutMarks(current.marks, ids)
+      // A whole-document hand-off carried the note too, unless it changed while the
+      // session was answering. A one-mark hand-off leaves the document note alone.
+      const keptSummary = summaryDelivered && current.summary === sentSummary ? '' : current.summary
+      const remains = allMarks(next).length > 0 || keptSummary.trim() !== ''
+      setMarks(next)
+      setSummary(keptSummary)
+      setCreatedAt(remains ? current.createdAt : null)
+      // The page body seeds its list once. A delivered mark has to disappear from
+      // that body even when a newer mark from this send survives beside it.
+      setGeneration(current => current + 1)
+    }, []),
     setCreatedAt,
     setStale,
   }
@@ -305,9 +322,29 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   const contextRef = useRef(saveContext)
   contextRef.current = saveContext
 
-  const run = useCallback((target: 'agent' | 'composer'): void => {
-    void saveAndDeliver(contextRef.current, target)
-  }, [])
+  const run = useCallback((target: 'agent' | 'composer', only?: AnnotationMark): void => {
+    const context = contextRef.current
+    const prepared = prepareDelivery(context, only)
+    if (prepared.kind === 'not-ready') {
+      note({ tone: 'info', text: context.copy.notReady })
+      return
+    }
+    if (prepared.kind === 'nothing') {
+      void notify('annotate.none')
+      return
+    }
+    const event = target === 'agent'
+      ? 'annotate.send.agent'
+      : only === undefined ? 'annotate.save.all' : 'annotate.save.one'
+    let warnings: readonly string[] = []
+    void notify(event, async () => {
+      warnings = await saveAndDeliver(context, target, prepared.value)
+    }).then(outcome => {
+      if (outcome === 'ok' && warnings.length > 0) {
+        note({ tone: 'info', text: warnings.join(' ') })
+      }
+    })
+  }, [note, notify])
 
   // The pill's own two buttons mean "this mark", and this is the only place that
   // can honour that: the page body has no seat for the document's files, and the
@@ -315,8 +352,8 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   // down as an argument is what keeps the two cases from being one call whose
   // meaning depends on who made it.
   const runOne = useCallback((mark: AnnotationMark, target: 'agent' | 'composer'): void => {
-    void saveAndDeliver(contextRef.current, target, mark)
-  }, [])
+    run(target, mark)
+  }, [run])
 
   // Clearing is the document's act for the same reason sending is: one sidecar
   // serves every page, so a page that deleted it while leaving the other pages'
@@ -374,7 +411,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
           onAgent={() => { run('agent') }} onComposer={() => { run('composer') }} />
       )}
       {stale ? <div className="da-status" data-tone="error">{t('stale')}</div> : null}
-      {status === null ? null : <div className="da-status" data-tone={status.tone === 'info' ? undefined : status.tone}>{status.text}</div>}
+      <ToastStack view={toasts} label={t('close')} resendLabel={t('toastResend')} />
       {error !== null ? (
         <p className="da-hint" role="alert">{`${t('pdfOpenFailed')}${error}`}</p>
       ) : shown === null ? (

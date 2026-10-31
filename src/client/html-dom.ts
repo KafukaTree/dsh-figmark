@@ -80,6 +80,19 @@ export function buildRenderedDocument(source: string): string {
 }
 
 /**
+ * The event target that spans a rendered document.
+ *
+ * A live frame has a window that can intercept a page press before the page sees it.
+ * A detached document has no window of its own, so the document is the widest target
+ * available and has to own the same guard.
+ * @param document_ - the document rendered into the frame.
+ * @returns its window when it has one, otherwise the document itself.
+ */
+export function eventOwnerOf(document_: Document): Document | Window {
+  return document_.defaultView ?? document_
+}
+
+/**
  * Paint a document whose theme its own scripts would have chosen.
  *
  * No script runs in the frame, so a theme applied by one never arrives: the palettes

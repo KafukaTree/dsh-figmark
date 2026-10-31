@@ -157,14 +157,16 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 
-  it('draws an attachment chip: figure, count, file, and the first mark', () => {
+  it('draws a compact attachment chip: file, count, and the first mark', () => {
     park()
     mount()
-    expect(host.querySelector('.da-staged-title')?.textContent).toBe(zh['title'])
-    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1 处')
-    expect(host.querySelector('.da-staged-file')?.textContent).toBe('fig.svg')
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe('fig.svg')
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1')
+    expect(host.querySelector('.da-staged-count')?.getAttribute('aria-label')).toBe('1 处标注')
     expect(host.querySelector('.da-staged-shape')?.textContent).toBe('箭头 1')
     expect(host.querySelector('.da-staged-said')?.textContent).toBe('往右上拉一点')
+    expect(host.textContent).not.toContain(zh['title'])
+    expect(host.textContent).not.toContain('批注')
   })
 
   it('keeps the size and the coordinates off the face, in the hover titles', () => {
@@ -176,7 +178,7 @@ describe('the attachment card above the composer', () => {
     // ...they are one hover away, on the two elements that own them.
     expect(host.querySelector('.da-staged-card')?.getAttribute('title')).toBe('/w/fig.svg · 图面 1440×800，标注 1 处')
     expect(host.querySelector('.da-staged-line')?.getAttribute('title'))
-      .toBe('箭头1 (10,20) → (30,40) · 批注：往右上拉一点')
+      .toBe('箭头1 (10,20) → (30,40) · 往右上拉一点')
   })
 
   it('names the send on the card itself, not with a button row', () => {
@@ -198,24 +200,25 @@ describe('the attachment card above the composer', () => {
       },
     })
     mount()
-    expect(host.querySelector('.da-staged-count')?.textContent).toBe('3 处')
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('3')
     expect(host.querySelectorAll('.da-staged-line')).toHaveLength(1)
     expect(host.querySelector('.da-staged-shape')?.textContent).toBe('矩形 1')
     expect(host.querySelector('.da-staged-said')?.textContent).toBe('再高一点')
   })
 
-  it('says a mark came without a note rather than showing an empty line', () => {
+  it('shows only the mark kind when it came without a note', () => {
     park({
       data: { ...DATA, marks: [{ label: '矩形1 (1,2)-(3,4)', comment: '', missing: true, page: undefined }] },
     })
     mount()
-    expect(host.querySelector('.da-staged-said')?.textContent).toBe(zh['emptyDetail'])
+    expect(host.querySelector('.da-staged-shape')?.textContent).toBe('矩形 1')
+    expect(host.querySelector('.da-staged-said')).toBeNull()
   })
 
   it('draws the head of a block that has no marks left', () => {
     park({ data: { ...DATA, marks: [] } })
     mount()
-    expect(host.querySelector('.da-staged-count')?.textContent).toBe('0 处')
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('0')
     expect(host.querySelector('.da-staged-line')).toBeNull()
   })
 
@@ -332,6 +335,18 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 
+  it('does not send an armed review twice when its card is clicked twice in one tick', async () => {
+    const box = stubBox({ draft: '先看这张图' })
+    park({ armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
+    mount()
+    await act(async () => {
+      open().click()
+      open().click()
+    })
+    expect(box.pressed()).toEqual([`先看这张图\n\n${RAW}`])
+    expect(parkedAnnotations('s1')).toEqual([])
+  })
+
   it('rides the box\'s own Send, the one the reader presses in the input', () => {
     const box = stubBox({ draft: '先看这张图' })
     park({ armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
@@ -388,8 +403,9 @@ describe('the attachment card above the composer', () => {
   it('speaks the shell locale when no translator is bound', () => {
     park()
     mount({ sessionId: 's1', localeId: 'en' })
-    expect(host.querySelector('.da-staged-title')?.textContent).toBe('Figure annotations')
-    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1 marks')
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe('fig.svg')
+    expect(host.querySelector('.da-staged-count')?.textContent).toBe('1')
+    expect(host.querySelector('.da-staged-count')?.getAttribute('aria-label')).toBe('1 annotations')
     expect(remove().getAttribute('aria-label')).toBe('Remove the annotation')
   })
 
@@ -404,7 +420,7 @@ describe('the attachment card above the composer', () => {
     park()
     mount()
     act(() => { park({ data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') }) })
-    const files = [...host.querySelectorAll('.da-staged-file')].map(node => node.textContent)
+    const files = [...host.querySelectorAll('.da-staged-title')].map(node => node.textContent)
     expect(files).toEqual(['fig.svg', 'second.svg'])
   })
 
@@ -496,7 +512,7 @@ describe('the attachment card inside the composer', () => {
     draw()
     const seat = defined(card.firstElementChild) as HTMLElement
     expect(seat.className).toBe('da-staged-seat')
-    expect(defined(seat.querySelector('.da-staged-title')).textContent).toBe(zh['title'])
+    expect(defined(seat.querySelector('.da-staged-title')).textContent).toBe('fig.svg')
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 

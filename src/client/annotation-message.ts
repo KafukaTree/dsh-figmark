@@ -37,6 +37,8 @@ export type DeliveredPaths = SidecarWriteResult
  *   message is composed after that attempt so its one sentence about the attachment can
  *   be true. Defaults to "it travelled", for the callers that build a message from paths
  *   alone.
+ * @param pageImages - how many annotated pages travel as image parts. A paged
+ *   document sends these instead of uploading the whole PDF.
  * @returns the message text.
  */
 export function buildAnnotationMessage(
@@ -44,6 +46,7 @@ export function buildAnnotationMessage(
   paths: DeliveredPaths,
   locale: SummaryLocale,
   attachment = true,
+  pageImages = 0,
 ): string {
   // The paths themselves are never printed: the sidecars are deleted once the
   // annotation has been delivered, so a path in the message would be a dead
@@ -81,14 +84,18 @@ export function buildAnnotationMessage(
   // part. Both have to be true, or the message would be naming an attachment the agent
   // cannot find.
   const pictured = paths.reviewPath !== null && attachment
-  const attachmentLines = !pictured
-    ? []
-    : [paged
-      ? (zh ? '带批注 PDF 已作为本条消息的附件发送，可直接在阅读器里核对。' : 'The annotated PDF is attached to this message; you can check it in any reader.')
-      : (zh ? '标注图已作为本条消息的附件发送。' : 'The annotated image is attached to this message.')]
+  const attachmentLines = paged
+    ? pageImages > 0
+      ? [zh
+        ? '对应标注页已作为图片随消息发送；原 PDF 未上传，按上方原文件路径处理。'
+        : 'The marked pages travel as images with this message; the original PDF was not uploaded, so work from the file path above.']
+      : []
+    : pictured
+      ? [zh ? '标注图已作为本条消息的附件发送。' : 'The annotated image is attached to this message.']
+      : []
   // Only point marks: one coordinate and a sentence each. There is nothing for a
   // picture to add, so none was rendered — the figure's own path above is the index.
-  const noPicture = !pictured && !rendered && marks.length > 0 && !needsReviewImage(document)
+  const noPicture = !pictured && !rendered && pageImages === 0 && marks.length > 0 && !needsReviewImage(document)
     ? [zh
       ? '本条标注只有位置点，没有标注图：按上面逐条的坐标与说明处理原图即可。'
       : 'These marks are points only, so no annotated image was made: work from the coordinates and notes above against the original figure.']

@@ -121,7 +121,20 @@ function ParkedChip(props: {
     // annotation behind whatever is typed and delivers both. Running the card's own
     // delivery instead would put the same annotation in twice.
     if (armed !== undefined) {
-      armed.shell.submit?.()
+      // A double click reaches this handler twice before React has painted the
+      // disabled state. The ref is the guard the first click can set synchronously.
+      sending.current = true
+      setBusy(true)
+      try {
+        armed.shell.submit?.()
+      } finally {
+        // A delivered card unmounts; a refused or unavailable send leaves it in
+        // place and has to become pressable again on the next turn.
+        queueMicrotask(() => {
+          sending.current = false
+          setBusy(false)
+        })
+      }
       return
     }
     sending.current = true
@@ -151,12 +164,9 @@ function ParkedChip(props: {
   const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
   const name = data.file.slice(cut + 1)
   const first = data.marks[0]
-  const note = first === undefined || first.comment === ''
-    ? resolveTranslate(props, 'emptyDetail')
-    : first.comment
   const detail = first === undefined
     ? name
-    : `${first.label} · ${resolveTranslate(props, 'pendingNote')}：${note}`
+    : first.comment === '' ? first.label : `${first.label} · ${first.comment}`
   const hover = data.scope === '' ? data.file : `${data.file} · ${data.scope}`
   const removeLabel = resolveTranslate(props, 'pendingRemove')
   const hint = resolveTranslate(props, armed === undefined ? 'pendingSendNow' : 'pendingSendHint')
@@ -182,18 +192,19 @@ function ParkedChip(props: {
           </span>
           <span className="da-staged-text">
             <span className="da-staged-head">
-              <span className="da-staged-title">{resolveTranslate(props, 'title')}</span>
-              <span className="da-staged-count">
+              <span className="da-staged-title" title={name}>{name}</span>
+              <span
+                className="da-staged-count"
+                aria-label={resolveTranslate(props, 'cardCount', { n: data.marks.length })}
+              >
                 {resolveTranslate(props, 'pendingCount', { n: data.marks.length })}
               </span>
             </span>
-            <span className="da-staged-file">{name}</span>
             {first === undefined ? null : (
               <span className="da-staged-line" title={detail}>
                 <MarkIcon />
                 <span className="da-staged-shape">{shortLabel(first.label)}</span>
-                <span className="da-staged-note">{resolveTranslate(props, 'pendingNote')}</span>
-                <span className="da-staged-said">{note}</span>
+                {first.comment === '' ? null : <span className="da-staged-said">{first.comment}</span>}
               </span>
             )}
           </span>

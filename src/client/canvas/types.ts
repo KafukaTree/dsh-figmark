@@ -74,8 +74,23 @@ export interface MarkPatch {
 /** Tools the toolbar can activate. */
 export type Tool = 'select' | 'arrow' | 'rect' | 'ellipse' | 'pen' | 'point' | 'element'
 
+/** The minimum a parent needs to cancel input in flight inside the canvas. */
+export interface CanvasInput {
+  /** Whether a press, draft, pan, tap or edit is still waiting for release. */
+  isActive(): boolean
+  /** Abandon that input without committing it; true when something was cancelled. */
+  cancel(): boolean
+}
+
 /** Props of the drawing surface. */
 export interface CanvasProps {
+  /**
+   * A control face for input that belongs to the canvas.
+   *
+   * Escape is decided by the owner, where the menu, strips and selection hierarchy
+   * live, but only the canvas knows whether a draft or handle drag is in flight.
+   */
+  readonly inputRef?: { current: CanvasInput | null } | undefined
   /** Width of the paper, in figure pixels: the figure plus anywhere marks reach. */
   readonly width: number
   /** Height of the paper, in figure pixels. */
@@ -217,6 +232,24 @@ export interface CanvasProps {
   readonly onPanStart?: () => void
   /** The pan ended, so the view can go back to inviting one. */
   readonly onPanEnd?: () => void
+  /**
+   * Whether there is more paper than the viewport can currently show.
+   *
+   * A fitted picture has nowhere to be pushed. Treating a drag or wheel over it as
+   * a pan made the surface feel sticky and swallowed scrolling from the host.
+   */
+  readonly pannable?: boolean
+  /**
+   * Magnify around a client point while two fingers are moving.
+   *
+   * A touch screen has no wheel, so a pinch is its own route to the same zoom the
+   * trackpad gets through a ctrl-modified wheel. The factor is relative to the
+   * previous pinch frame, not to the document's fitted size.
+   * @param factor - the multiplier since the previous frame.
+   * @param clientX - the pinch centroid, in client pixels.
+   * @param clientY - the pinch centroid, in client pixels.
+   */
+  readonly onZoomAt?: ((factor: number, clientX: number, clientY: number) => void) | undefined
   /**
    * Pick one mark out for editing.
    *

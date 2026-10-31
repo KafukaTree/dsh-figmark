@@ -262,7 +262,7 @@ describe('browser entry', () => {
     }
     const stub = stubContext({ localeId: 'en-GB', sessions })
     apply(stub.ctx)
-    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { seat: { send: (input: unknown, saved: unknown, pages: unknown, pdf: unknown) => Promise<readonly string[]> } }
+    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { seat: { send: (input: unknown, saved: unknown, pages: unknown) => Promise<readonly string[]> } }
     const seat = factory('s1').seat
     const document_ = {
       figure: { address: 'a', path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), pageCount: 2 },
@@ -270,10 +270,10 @@ describe('browser entry', () => {
       summary: '',
       createdAt: null,
     }
-    const warnings = await seat.send(document_, { annotationPath: '/w/a.annot.json', reviewPath: null }, [], new Uint8Array([1]))
-    // The seat speaks the locale the slot was mounted under, and the composition
-    // here provides no upload service.
-    expect(warnings).toEqual(['This composition has no upload service, so the annotated PDF was not attached.'])
+    const warnings = await seat.send(document_, { annotationPath: '/w/a.annot.json', reviewPath: null }, [])
+    // The seat speaks the locale the slot was mounted under. A PDF no longer needs an
+    // upload service: its original path and any marked-page images are enough.
+    expect(warnings).toEqual([])
     expect(calls).toEqual([])
     const parts = (prompts[0] ?? []) as { readonly text?: string }[]
     expect(defined(parts[0]).text).toContain('[figure annotations]')
