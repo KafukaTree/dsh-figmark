@@ -248,6 +248,7 @@ export function PdfBody(props: PdfBodyProps): ReactNode {
   const revealMark = useCallback((mark: AnnotationMark): void => {
     setSelectedId(mark.id)
     if (mark.page !== undefined) paging.goTo(mark.page)
+    setOpenPanel(null)
   }, [paging])
 
   // --- save and delivery ----------------------------------------------------

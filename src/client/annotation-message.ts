@@ -56,8 +56,8 @@ export function buildAnnotationMessage(
   const zh = locale === 'zh'
   const { figure, marks } = document
   const scope = describeFigureScope(figure, locale)
-  // A rendered document is measured in the pixels it was laid out in, and it has
-  // no picture: the marks file and the locators inside it are the whole payload.
+  // A served page is measured in the pixels it was laid out in, and it has no
+  // file artifact: the page address and locators inside the message are the payload.
   const rendered = figure.mediaType === 'text/html'
   const size = figure.width === undefined || figure.height === undefined
     ? ''

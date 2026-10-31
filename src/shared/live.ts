@@ -66,6 +66,18 @@ export interface LivePick {
   readonly bbox: readonly [number, number, number, number]
   /** How far the page is scrolled, in document pixels: x, y. */
   readonly scroll: readonly [number, number]
+  /** One-based depth of the chosen element in its ancestor ladder. */
+  readonly level?: number | undefined
+  /** Number of levels in that ladder. */
+  readonly count?: number | undefined
+}
+
+/** The logical page in front of a multi-surface HTML document. */
+export interface LiveSurface {
+  /** What the page is reporting. */
+  readonly kind: 'surface'
+  /** Selector for the visible slide, or null for an ordinary scrolling page. */
+  readonly selector: string | null
 }
 
 /** How far the page has scrolled, which is what the overlay is translated by. */
@@ -96,8 +108,53 @@ export interface LiveLeave {
   readonly kind: 'leave'
 }
 
+/** The reader asked the panel to dismiss the current interaction with Escape. */
+export interface LiveCancel {
+  /** What the page is reporting. */
+  readonly kind: 'cancel'
+}
+
+/** Where one watched element is now. */
+export interface LiveBound {
+  /** The positional locator the mark stores. */
+  readonly selector: string
+  /** The element's current box in document pixels: x, y, width, height. */
+  readonly bbox: readonly [number, number, number, number]
+  /** Whether the page is currently showing the element. */
+  readonly visible: boolean
+}
+
+/** The current boxes of every element the panel asked the page to watch. */
+export interface LiveBounds {
+  /** What the page is reporting. */
+  readonly kind: 'bounds'
+  /** One entry per locator, in the order the panel sent them. */
+  readonly bounds: readonly LiveBound[]
+}
+
+/** How a request to bring a saved mark into view ended. */
+export type LiveRevealStatus = 'revealed' | 'missing' | 'hidden' | 'wrong-surface'
+
+/** The page saying whether one saved mark could be brought into view. */
+export interface LiveRevealResult {
+  /** What the page is reporting. */
+  readonly kind: 'reveal-result'
+  /** The panel's opaque request token. */
+  readonly requestId: string
+  /** Whether the element or point is now visible. */
+  readonly status: LiveRevealStatus
+}
+
 /** What a rendered page can tell the panel. */
-export type LiveEvent = LivePick | LiveScroll | LiveReady | LiveLeave
+export type LiveEvent =
+  | LivePick
+  | LiveScroll
+  | LiveReady
+  | LiveLeave
+  | LiveCancel
+  | LiveBounds
+  | LiveSurface
+  | LiveRevealResult
 
 /**
  * The message that arms or disarms the picker.
@@ -110,6 +167,44 @@ export type LiveEvent = LivePick | LiveScroll | LiveReady | LiveLeave
  */
 export function liveModeMessage(armed: boolean): Record<string, unknown> {
   return { figmark: LIVE_MESSAGE, kind: 'mode', armed }
+}
+
+/**
+ * Ask the page to keep measuring the elements saved marks name.
+ * @param selectors - unique selectors from the current annotation.
+ * @returns the message for the frame.
+ */
+export function liveWatchMessage(selectors: readonly string[]): Record<string, unknown> {
+  return { figmark: LIVE_MESSAGE, kind: 'watch', selectors }
+}
+
+/**
+ * Ask the picker to move one rung up or down its current element ladder.
+ *
+ * The palette lives in the parent window while the ladder lives in the framed page,
+ * so keyboard focus can remain on the tool button and still drive the picker.
+ * @param delta - positive for the containing element, negative for the exact one.
+ * @returns the message for the frame.
+ */
+export function liveDepthMessage(delta: -1 | 1): Record<string, unknown> {
+  return { figmark: LIVE_MESSAGE, kind: 'depth', delta }
+}
+
+/**
+ * Ask the page to bring one saved mark into view.
+ * @param requestId - token the page echoes in its answer.
+ * @param selector - element locator, or null for a geometric mark.
+ * @param surface - logical slide that owns the mark, when it has one.
+ * @param bbox - the mark's saved box, used when there is no element locator.
+ * @returns the message for the frame.
+ */
+export function liveRevealMessage(
+  requestId: string,
+  selector: string | null,
+  surface: string | null,
+  bbox: readonly [number, number, number, number],
+): Record<string, unknown> {
+  return { figmark: LIVE_MESSAGE, kind: 'reveal', requestId, selector, surface, bbox }
 }
 
 /**
@@ -169,6 +264,27 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
   const fields = data as Record<string, unknown>
   if (fields['figmark'] !== LIVE_MESSAGE) return undefined
   if (fields['kind'] === 'leave') return { kind: 'leave' }
+  if (fields['kind'] === 'cancel') return { kind: 'cancel' }
+  if (fields['kind'] === 'reveal-result') {
+    const requestId = textOf(fields['requestId'])
+    const status = fields['status']
+    if (requestId === undefined || requestId.length > 128) return undefined
+    if (status !== 'revealed' && status !== 'missing' && status !== 'hidden' && status !== 'wrong-surface') {
+      return undefined
+    }
+    return { kind: 'reveal-result', requestId, status }
+  }
+  if (fields['kind'] === 'surface') {
+    if (fields['selector'] === null) return { kind: 'surface', selector: null }
+    const selector = textOf(fields['selector'])
+    return selector === undefined || selector.length > 2048
+      ? undefined
+      : { kind: 'surface', selector }
+  }
+  if (fields['kind'] === 'bounds') {
+    const bounds = boundsOf(fields['bounds'])
+    return bounds === undefined ? undefined : { kind: 'bounds', bounds }
+  }
   const scroll = offsetOf(fields['scroll'])
   if (scroll === undefined) return undefined
   if (fields['kind'] === 'scroll' || fields['kind'] === 'ready') {
@@ -183,6 +299,7 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
   const id = textOf(fields['id'])
   const cls = textOf(fields['class'])
   const text = textOf(fields['text'])
+  const depth = depthOf(fields['level'], fields['count'])
   return {
     kind,
     tag,
@@ -192,5 +309,45 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
     ...(id === undefined ? {} : { id }),
     ...(cls === undefined ? {} : { class: cls }),
     ...(text === undefined ? {} : { text }),
+    ...(depth === undefined ? {} : depth),
   }
+}
+
+/**
+ * Read two fields as a usable one-based element depth.
+ * @param level - reported depth.
+ * @param count - reported ladder length.
+ * @returns the normalized pair, or undefined when either field is unusable.
+ */
+function depthOf(
+  level: unknown,
+  count: unknown,
+): { readonly level: number; readonly count: number } | undefined {
+  return typeof level === 'number' && typeof count === 'number'
+    && Number.isInteger(level) && Number.isInteger(count)
+    && level >= 1 && count >= level && count <= 512
+    ? { level, count }
+    : undefined
+}
+
+/**
+ * Read and cap the watched boxes a page sent.
+ * @param value - the message field.
+ * @returns the boxes, or undefined when any entry is malformed.
+ */
+function boundsOf(value: unknown): readonly LiveBound[] | undefined {
+  if (!Array.isArray(value) || value.length > 256) return undefined
+  const answer: LiveBound[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return undefined
+    const fields = item as Record<string, unknown>
+    const selector = textOf(fields['selector'])
+    const bbox = boxOf(fields['bbox'])
+    const visible = fields['visible']
+    if (selector === undefined || selector.length > 2048 || bbox === undefined || typeof visible !== 'boolean') {
+      return undefined
+    }
+    answer.push({ selector, bbox, visible })
+  }
+  return answer
 }

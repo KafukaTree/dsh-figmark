@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { AnnotationMark, FigureBox, FigurePoint } from '../shared/annotation'
-import { elementBox } from './html-dom'
+import { elementBox, surfaceIsInFront } from './html-dom'
 import { elementAt } from './spotlight'
 
 /** What a rendered document is showing, as the overlay needs it. */
@@ -48,7 +48,26 @@ export function readShownMarks(root: ParentNode | null, marks: readonly Annotati
   const boxes = new Map<string, FigureBox>()
   const away = new Set<string>()
   if (root === null) return { boxes, away }
+  const documentRoot = root.nodeType === Node.DOCUMENT_NODE
+    ? (root as Document).documentElement
+    : root.nodeType === Node.ELEMENT_NODE
+      ? root as HTMLElement
+      : null
   for (const mark of marks) {
+    if (mark.surface !== undefined) {
+      const surface = elementAt({ root, selector: mark.surface })
+      if (documentRoot !== null && !surfaceIsInFront(documentRoot, mark.surface)) {
+        away.add(mark.id)
+        continue
+      }
+      if (surface !== undefined) {
+        const surfaceBox = elementBox(surface)
+        if (surfaceBox === undefined || (surfaceBox[2] === 0 && surfaceBox[3] === 0)) {
+          away.add(mark.id)
+          continue
+        }
+      }
+    }
     const selector = mark.anchor?.selector
     if (selector === undefined) continue
     const element = elementAt({ root, selector })

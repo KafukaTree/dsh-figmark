@@ -1,11 +1,15 @@
 /** The Host routes: guard, address resolution, sidecar write, and refusal paths. */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import {
+  createServer,
+  type IncomingMessage, type Server, type ServerResponse,
+} from 'node:http'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { GUARD_HEADER, createHandlers } from '../src/host/routes'
+import type { LiveProxy } from '../src/host/live-proxy'
 import { MAX_REVIEW_BYTES } from '../src/host/store'
 import { ANNOTATION_VERSION, ANNOTATION_VERSION_V2 } from '../src/shared/annotation'
 import type { AnnotationDocument } from '../src/shared/annotation'
@@ -31,11 +35,12 @@ const document_: AnnotationDocument = {
 let server: Server
 let origin: string
 let directory: string
+let handlers: ReturnType<typeof createHandlers>
 
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'dsh-figmark-routes-'))
   process.env['ANNOTATOR_TMP'] = directory
-  const handlers = createHandlers({ sessionCwd: async () => CWD })
+  handlers = createHandlers({ sessionCwd: async () => CWD })
   server = createServer((req, res) => { void handlers.annotation(req, res) })
   await new Promise<void>(resolve => { server.listen(0, '127.0.0.1', resolve) })
   const address = server.address()
@@ -43,12 +48,14 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  handlers.close()
   await new Promise<void>(resolve => { server.close(() => { resolve() }) })
   await rm(directory, { recursive: true, force: true })
 })
 
 beforeEach(async () => {
   await writeFile(join(directory, 'fig1.svg'), FIGURE)
+  await writeFile(join(directory, 'deck.html'), '<!doctype html><html><body><main>deck</main></body></html>')
 })
 
 describe('annotation route', () => {
@@ -317,6 +324,109 @@ describe('a document that has pages', () => {
   })
 })
 
+describe('the local service discovery route', () => {
+  const guard = { [GUARD_HEADER]: '1' }
+
+  it('finds a reachable loopback page and returns its title', async () => {
+    const local = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end('<!doctype html><title>Local deck</title><main>ready</main>')
+    })
+    await new Promise<void>(resolve => { local.listen(0, '127.0.0.1', resolve) })
+    const address = local.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    try {
+      const response = await fetch(`${origin}/dsh-figmark/services`, {
+        method: 'POST',
+        headers: { ...guard, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 's1',
+          recent: [`http://127.0.0.1:${String(port)}/`],
+        }),
+      })
+      expect(response.status).toBe(200)
+      const body = await response.json() as {
+        ok: boolean
+        services: readonly { url: string; title?: string; source: string }[]
+      }
+      expect(body.ok).toBe(true)
+      expect(body.services).toContainEqual({
+        url: `http://127.0.0.1:${String(port)}/`,
+        title: 'Local deck',
+        source: 'recent',
+      })
+    } finally {
+      await new Promise<void>(resolve => { local.close(() => { resolve() }) })
+    }
+  })
+
+  it('accepts a mixed recent list and a request that leaves it out', async () => {
+    expect(() => handlers.close()).not.toThrow()
+    const mixed = await fetch(`${origin}/dsh-figmark/services`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's1', recent: [42, 'http://127.0.0.1:1/'] }),
+    })
+    expect(mixed.status).toBe(200)
+    const absent = await fetch(`${origin}/dsh-figmark/services`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 's1' }),
+    })
+    expect(absent.status).toBe(200)
+  })
+
+  it('refuses discovery without the plugin guard', async () => {
+    const response = await fetch(`${origin}/dsh-figmark/services`, { method: 'POST' })
+    expect(response.status).toBe(403)
+  })
+
+  it('requires a POST and a session id', async () => {
+    const put = await fetch(`${origin}/dsh-figmark/services`, { method: 'PUT', headers: guard })
+    expect(put.status).toBe(405)
+    const missing = await fetch(`${origin}/dsh-figmark/services`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 42 }),
+    })
+    expect(missing.status).toBe(400)
+    expect(await missing.json()).toMatchObject({ error: 'service discovery needs a session' })
+  })
+
+  it('reports a workspace lookup failure through the ordinary error body', async () => {
+    const failing = createHandlers({
+      sessionCwd: async () => { throw new Error('workspace is unavailable') },
+    })
+    const failingServer = createServer((req, res) => { void failing.annotation(req, res) })
+    await new Promise<void>(resolve => { failingServer.listen(0, '127.0.0.1', resolve) })
+    const address = failingServer.address()
+    const failingOrigin = typeof address === 'object' && address !== null
+      ? `http://127.0.0.1:${address.port}`
+      : ''
+    try {
+      const response = await fetch(`${failingOrigin}/dsh-figmark/services`, {
+        method: 'POST',
+        headers: { ...guard, 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'missing', recent: [] }),
+      })
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ error: 'workspace is unavailable' })
+    } finally {
+      failing.close()
+      await new Promise<void>(resolve => { failingServer.close(() => { resolve() }) })
+    }
+  })
+
+  it('does not expose the removed local HTML runtime', async () => {
+    const response = await fetch(`${origin}/dsh-figmark/local-html`, {
+      method: 'POST',
+      headers: { ...guard, 'content-type': 'application/json' },
+      body: JSON.stringify({ address: 'dsh-resource://file/session/s1/anything.html' }),
+    })
+    expect(response.status).toBe(404)
+  })
+})
+
 /** One request the handler sees, built without a socket. */
 interface StubRequest {
   /** HTTP method; leave unset, or set it to undefined, for a request that names none. */
@@ -557,6 +667,36 @@ describe('the live page route', () => {
     body: JSON.stringify({ url }),
   })
 
+  /** One answer captured from a directly invoked route handler. */
+  interface Capture {
+    status: number
+    text: string
+  }
+
+  /** A route request whose body may wait before it is read. */
+  const requestOf = (
+    body: string,
+    gate?: Promise<void>,
+    method = 'POST',
+  ): IncomingMessage => ({
+    method,
+    url: '/dsh-figmark/live',
+    headers: { ...guard, 'content-type': 'application/json' },
+    async *[Symbol.asyncIterator](): AsyncGenerator<Buffer> {
+      if (gate !== undefined) await gate
+      yield Buffer.from(body)
+    },
+  }) as unknown as IncomingMessage
+
+  /** The response sink a direct route invocation writes into. */
+  const sinkOf = (capture: Capture): ServerResponse => {
+    const res = {
+      writeHead: (code: number) => { capture.status = code; return res },
+      end: (payload?: string) => { capture.text = payload ?? ''; return res },
+    }
+    return res as unknown as ServerResponse
+  }
+
   it('opens the page the reader typed, and serves it with the picker in it', async () => {
     const response = await open(`${pageOrigin}/guide`)
     expect(response.status).toBe(200)
@@ -566,6 +706,8 @@ describe('the live page route', () => {
     expect(new URL(body.url).pathname).toBe('/guide')
     const framed = await fetch(body.url)
     expect(await framed.text()).toContain('/__dsh_figmark_picker.js')
+    expect((await open(`${pageOrigin}/next`)).status).toBe(200)
+    handlers.close()
   })
 
   it('refuses an address that is not a server on this machine, in words the reader can act on', async () => {
@@ -598,6 +740,165 @@ describe('the live page route', () => {
     // is not an error the reader should ever see.
     const second = await fetch(`${origin}/dsh-figmark/live`, { method: 'DELETE', headers: guard })
     expect(await second.json()).toEqual({ ok: true })
+  })
+
+  it('keeps the current page when a late cleanup names another proxy', async () => {
+    const answer = await open(`${pageOrigin}/current`)
+    expect(answer.status).toBe(200)
+    const current = (await answer.json() as { url: string }).url
+    const stale = await fetch(
+      `${origin}/dsh-figmark/live?url=${encodeURIComponent('http://127.0.0.1:1/__dsh_figmark_live/proxy/')}`,
+      { method: 'DELETE', headers: guard },
+    )
+    expect(await stale.json()).toEqual({ ok: true })
+    expect((await fetch(current)).status).toBe(200)
+    await fetch(`${origin}/dsh-figmark/live?url=${encodeURIComponent(current)}`, {
+      method: 'DELETE',
+      headers: guard,
+    })
+    await expect(fetch(current)).rejects.toThrow()
+  })
+
+  it('does not let an older open install itself after a newer one', async () => {
+    const local = createHandlers({ sessionCwd: async () => CWD })
+    let releaseFirst = (): void => {}
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    let firstStatus = 0
+    let firstText = ''
+    let secondStatus = 0
+    let secondText = ''
+
+    const request = (body: string, gate?: Promise<void>): IncomingMessage => ({
+      method: 'POST',
+      url: '/dsh-figmark/live',
+      headers: { ...guard, 'content-type': 'application/json' },
+      async *[Symbol.asyncIterator](): AsyncGenerator<Buffer> {
+        if (gate !== undefined) await gate
+        yield Buffer.from(body)
+      },
+    }) as unknown as IncomingMessage
+    const sink = (setStatus: (status: number) => void, setText: (text: string) => void): ServerResponse => {
+      const res = {
+        writeHead: (code: number) => { setStatus(code); return res },
+        end: (payload?: string) => { setText(payload ?? ''); return res },
+      }
+      return res as unknown as ServerResponse
+    }
+
+    try {
+      const first = local.annotation(
+        request(JSON.stringify({ url: `${pageOrigin}/older` }), firstGate),
+        sink(status => { firstStatus = status }, text => { firstText = text }),
+      )
+      await local.annotation(
+        request(JSON.stringify({ url: `${pageOrigin}/newer` })),
+        sink(status => { secondStatus = status }, text => { secondText = text }),
+      )
+      expect(secondStatus).toBe(200)
+      const newer = JSON.parse(secondText) as { url: string }
+
+      releaseFirst()
+      await first
+      expect(firstStatus).toBe(409)
+      expect(JSON.parse(firstText)).toMatchObject({ ok: false, error: expect.stringContaining('superseded') as unknown as string })
+      expect((await fetch(newer.url)).status).toBe(200)
+    } finally {
+      releaseFirst()
+      local.close()
+    }
+  })
+
+  it('closes the listener opened by a superseded request', async () => {
+    const closed: string[] = []
+    const local = createHandlers({ sessionCwd: async () => CWD }, {
+      open: async (url) => ({
+        url: `http://127.0.0.1:9444${url.pathname}`,
+        close: () => { closed.push(url.pathname) },
+      }),
+    })
+    let releaseFirst = (): void => {}
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const first: Capture = { status: 0, text: '' }
+    const second: Capture = { status: 0, text: '' }
+    try {
+      const older = local.annotation(
+        requestOf(JSON.stringify({ url: `${pageOrigin}/older` }), firstGate),
+        sinkOf(first),
+      )
+      await local.annotation(
+        requestOf(JSON.stringify({ url: `${pageOrigin}/newer` })),
+        sinkOf(second),
+      )
+      releaseFirst()
+      await older
+      expect(second.status).toBe(200)
+      expect(first.status).toBe(409)
+      expect(closed).toEqual(['/older'])
+    } finally {
+      releaseFirst()
+      local.close()
+    }
+  })
+
+  it('cancels a pending open when the composition closes', async () => {
+    let opened = (): void => {}
+    const opening = new Promise<void>((resolve) => { opened = resolve })
+    let releaseProxy = (_proxy: LiveProxy): void => {}
+    const proxyGate = new Promise<LiveProxy>((resolve) => { releaseProxy = resolve })
+    let closed = false
+    const local = createHandlers({ sessionCwd: async () => CWD }, {
+      open: async () => {
+        opened()
+        return proxyGate
+      },
+    })
+    const capture: Capture = { status: 0, text: '' }
+    const request = local.annotation(
+      requestOf(JSON.stringify({ url: `${pageOrigin}/pending` })),
+      sinkOf(capture),
+    )
+    await opening
+    local.close()
+    releaseProxy({
+      url: 'http://127.0.0.1:9444/pending',
+      close: () => { closed = true },
+    })
+    await request
+    expect(capture.status).toBe(409)
+    expect(closed).toBe(true)
+  })
+
+  it('cancels a pending open on a global DELETE', async () => {
+    let opened = (): void => {}
+    const opening = new Promise<void>((resolve) => { opened = resolve })
+    let releaseProxy = (_proxy: LiveProxy): void => {}
+    const proxyGate = new Promise<LiveProxy>((resolve) => { releaseProxy = resolve })
+    let closed = false
+    const local = createHandlers({ sessionCwd: async () => CWD }, {
+      open: async () => {
+        opened()
+        return proxyGate
+      },
+    })
+    const capture: Capture = { status: 0, text: '' }
+    const request = local.annotation(
+      requestOf(JSON.stringify({ url: `${pageOrigin}/pending` })),
+      sinkOf(capture),
+    )
+    await opening
+    const remove = {
+      method: 'DELETE',
+      url: '/dsh-figmark/live',
+      headers: guard,
+    } as unknown as IncomingMessage
+    await local.annotation(remove, sinkOf({ status: 0, text: '' }))
+    releaseProxy({
+      url: 'http://127.0.0.1:9444/pending',
+      close: () => { closed = true },
+    })
+    await request
+    expect(capture.status).toBe(409)
+    expect(closed).toBe(true)
   })
 
   it('refuses a method it does not have', async () => {

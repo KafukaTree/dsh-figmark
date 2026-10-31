@@ -19,7 +19,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
-  type WheelEvent as ReactWheelEvent,
 } from 'react'
 import { resolveTranslate, type AnnotatorBodyProps, type TranslateVars } from './annotator-contract'
 import { parseFileAddress } from '../shared/address'
@@ -35,17 +34,23 @@ import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import type { SidecarWriteResult } from '../shared/http'
 import {
-  anchorInDocument, elementChoicesInDocument, eventOwnerOf, loadFrameDocument, measureFrameContent,
+  RENDER_WIDTH, anchorInDocument, currentSurfaceSelector, deckSlideOf, deckSlideSize,
+  elementChoicesInDocument,
+  eventOwnerOf, loadFrameDocument, measureFrameContent, prepareDeck, showDeckSlide,
 } from './html-dom'
 import {
   sameChoiceElements, type ElementChoices, type PickLevel,
 } from './element-choice'
-import { shownMarksOf, useShownMarks } from './shown-marks'
+import {
+  sameShownMarks, shownMarksOf, useShownMarks, type ShownMarks,
+} from './shown-marks'
 import {
   anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
 } from './live-page'
 import { elementMark } from './canvas/marks'
-import { liveModeMessage, parseLiveEvent } from '../shared/live'
+import {
+  liveDepthMessage, liveModeMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
+} from '../shared/live'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
 import {
@@ -86,7 +91,7 @@ import {
 } from './annotator/geometry'
 import { buildAnnotationDocument } from './annotator/documents'
 import {
-  DEFAULT_PALETTE, clampedSpot, draggedSpot, placementStyle, separatedSpot,
+  DEFAULT_PALETTE, clampedSpot, draggedSpot, paletteRoomBeforeBar, placementStyle, separatedSpot,
   settledSpot, spotOfBox,
 } from './annotator/placement'
 import {
@@ -132,7 +137,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // One parser for both halves: it already tolerates malformed escapes, which a
   // hand-rolled `decodeURIComponent` here would throw on.
   const parsedAddress = parseFileAddress(address)
-  const mediaType = figureMediaType(parsedAddress?.path ?? '')
+  const mediaType = props.livePage === undefined ? figureMediaType(parsedAddress?.path ?? '') : 'text/html'
   const isVector = mediaType === 'image/svg+xml'
   const t = useCallback(
     (key: string, vars?: TranslateVars): string => resolveTranslate(props, key, vars),
@@ -218,13 +223,30 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * Host to stand in front of that server, and the frame is pointed at what it answers
    * with. Null means this body is showing the file it was opened on.
    */
-  const [livePage, setLivePage] = useState<LivePage | null>(null)
+  const [livePage, setLivePage] = useState<LivePage | null>(props.livePage ?? null)
+  /** The page that currently owns the frame. */
+  const previewPage = livePage
   /** What the reader is typing in the address field, or null while they are not. */
   const [liveText, setLiveText] = useState<string | null>(null)
   /** Why the last address did not open, in the reader's own words. */
   const [liveError, setLiveError] = useState<string | null>(null)
   /** Whether an address is being opened right now. */
   const [liveBusy, setLiveBusy] = useState(false)
+  /** The synchronous guard for repeated Enter presses before React paints `liveBusy`. */
+  const liveBusyRef = useRef(false)
+  /** Whether this body is still mounted, for an open that resolves after teardown. */
+  const liveMounted = useRef(true)
+  /** The one open request whose answer this body may still display. */
+  const liveOpenGeneration = useRef(0)
+  /** Whether the compact location icon is open into the full address field. */
+  const [liveAddressOpen, setLiveAddressOpen] = useState(false)
+  /** The address field, focused when its compact icon is opened. */
+  const liveAddressRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (!liveAddressOpen) return
+    liveAddressRef.current?.focus()
+  }, [liveAddressOpen])
 
   /** The key behind the chip currently drawn, so a move inside one element is free. */
   const chipShown = useRef<string>(chipKey(undefined))
@@ -244,6 +266,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [props.scrollportRef])
 
   /**
+   * The window a local rendered document is shown through.
+   *
+   * The document scrolls inside its frame, and the frame is the only thing that
+   * knows how far it has gone. A proxied page reports its offset by message instead,
+   * because its origin is not ours to read.
+   */
+  const documentView = useCallback((): Window | null => {
+    const frame = frameRef.current
+    if (frame === null || previewPage !== null) return null
+    return frame.contentWindow
+  }, [previewPage])
+
+  /**
    * Move the view by a drag.
    *
    * The scroll offset is written straight onto the element rather than held in
@@ -258,21 +293,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param dx - horizontal travel of the pointer, in client pixels.
    * @param dy - vertical travel of the pointer.
    */
-  /**
-   * The window a rendered document is shown in.
-   *
-   * A document scrolls inside its frame, and the frame is the only thing that knows
-   * how far it has gone: everything that needs the offset asks here. A surface that is
-   * a picture has no frame at all, and answers with no window.
-   */
-  const documentView = useCallback((): Window | null => {
-    const frame = frameRef.current
-    // A proxied page is a window of its own origin: nothing in it may be read from
-    // here — not even how far it has scrolled, which it reports instead.
-    if (frame === null || livePage !== null) return null
-    return frame.contentWindow
-  }, [livePage])
-
   const panBy = useCallback((dx: number, dy: number): void => {
     const stage = stageRef.current
     /* v8 ignore next -- a pan comes from the overlay, which only exists inside the stage. */
@@ -288,43 +308,39 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     stage.scrollTop -= dy
   }, [documentView])
 
-  /**
-   * Scroll the document inside its window.
-   *
-   * The overlay takes every pointer event — that is what makes a click a mark — so a
-   * wheel aimed at the page would stop at the overlay and the page itself would never
-   * move. Handing the travel to the frame's own window keeps scrolling where it
-   * belongs: the document, and not the panel around it.
-   * @param event - the wheel event, in client pixels.
-   */
-  const scrollHtml = useCallback((event: ReactWheelEvent<HTMLDivElement>): void => {
-    const view = documentView()
-    if (view === null) return
-    view.scrollBy(event.deltaX, event.deltaY)
-  }, [documentView])
-
   const [fileFigure, setFileFigure] = useState<LoadedFigure | null>(null)
   const [fileRasterSize, setFileRasterSize] = useState<{ readonly width: number; readonly height: number } | null>(null)
-  /**
-   * Width the rendered document's own layout asked for, in figure pixels; 0 until the
-   * frame has been measured.
-   *
-   * Usually the pane's width, because the frame is a pane-wide window. A document laid
-   * out for a stage of its own — a slide deck is the usual case — asks for more, and the
-   * window widens to it: the alternative is a page cut off at the pane, with the right
-   * third of every slide not there to annotate. Nothing is guessed here, because a
-   * window that has not been measured has no surface to draw on yet.
-   */
-  const [htmlDocWidth, setHtmlDocWidth] = useState(0)
+  /** Width a rendered document's frame is laid out at, in figure pixels. */
+  const [htmlWidth, setHtmlWidth] = useState(RENDER_WIDTH)
+  /** Whether the local document has reported one usable layout pass. */
+  const [htmlMeasured, setHtmlMeasured] = useState(false)
   /**
    * How far the document inside its window has been scrolled, in figure pixels.
    *
-   * A mark is recorded in the document's own coordinates, because that is the space a
-   * source reader can act on, while the reader is looking at one windowful of it. The
-   * difference is this offset: the overlay is shifted by it, so drawing and picking
-   * stay in document pixels without either of them having to know about scrolling.
+   * A local document reports from its frame and a proxied page reports by message.
+   * Both feed the same overlay shift, so marks stay in document pixels even while
+   * only one windowful of those pixels is visible.
    */
   const [htmlScroll, setHtmlScroll] = useState({ x: 0, y: 0 })
+  /** Number of scriptless slides this local document can turn, or zero for a page. */
+  const [deckCount, setDeckCount] = useState(0)
+  /** Zero-based index of the slide in front. */
+  const [deckPage, setDeckPage] = useState(0)
+  /** The current slide's own height, which replaces the pane height for a deck. */
+  const [deckHeight, setDeckHeight] = useState(0)
+  /** Boxes and visibility the interactive page has reported for saved elements. */
+  const [previewShown, setPreviewShown] = useState<ShownMarks | null>(null)
+  /** The logical slide the running page says is in front, when it has one. */
+  const [liveSurface, setLiveSurface] = useState<string | null>(null)
+  /**
+   * Whether the running page has answered the "which surface is in front" question.
+   *
+   * A missing answer before the first report means "unknown", while a reported null
+   * means "this page has no logical slides". The difference matters once a mark carries
+   * a surface: an unknown page draws its saved marks as recorded, but a page that has
+   * explicitly reported no surface must not put every slide's region on top of it.
+   */
+  const [liveSurfaceKnown, setLiveSurfaceKnown] = useState(false)
   const [figureError, setFigureError] = useState<string | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
 
@@ -344,11 +360,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const rasterSize = surface === undefined
     ? fileRasterSize
     : { width: surface.width, height: surface.height }
-  /** Whether the surface is a live document, shown through a window rather than laid
-   * out as a sheet. A document scrolls; a sheet does not, and the two gestures that
-   * depend on the difference read this. */
-  const isDocument = figure?.kind === 'html'
-
   const [loaded, setLoaded] = useState<LoadedAnnotation | null>(null)
   const [hostError, setHostError] = useState<string | null>(null)
   /**
@@ -409,11 +420,33 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * sent, and a mark on another slide is exactly the kind of thing a reader wants to
    * find in it.
    */
-  const showing = useShownMarks(
+  const staticShowing = useShownMarks(
     frameRef,
     marks,
-    figure?.kind === 'html' && marks.some(mark => mark.anchor?.selector !== undefined),
+    figure?.kind === 'html' && previewPage === null
+      && marks.some(mark => mark.anchor?.selector !== undefined),
   )
+  /**
+   * A running page reports its logical surface separately from element boxes.
+   *
+   * Element boxes say where one selector is; this says which slide is in front.
+   * Regions have no element selector, so this is the only fact that can keep a box
+   * drawn on slide five from appearing over slide six.
+   */
+  const previewShowing = useMemo<ShownMarks | null>(() => {
+    if (previewPage === null) return null
+    if (previewShown === null && !liveSurfaceKnown) return null
+    const boxes = previewShown?.boxes ?? new Map()
+    const away = new Set(previewShown?.away ?? [])
+    if (liveSurfaceKnown) {
+      for (const mark of marks) {
+        if (mark.surface !== undefined && mark.surface !== liveSurface) away.add(mark.id)
+      }
+    }
+    return { boxes, away }
+  }, [liveSurface, liveSurfaceKnown, marks, previewPage, previewShown])
+  /** A cross-origin page reports the same facts by message; a same-origin one is read. */
+  const showing = previewPage === null ? staticShowing : previewShowing
   const drawnMarks = useMemo(() => shownMarksOf(marks, showing), [marks, showing])
   const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null)
   /**
@@ -598,6 +631,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * off the edge when it narrows.
    */
   const [palette, setPalette] = useState<PaletteSpot | undefined>(remembered.palette)
+  /** A measured ceiling used only when a short panel cannot otherwise separate the strips. */
+  const [paletteLimit, setPaletteLimit] = useState<number | undefined>(undefined)
   /** The current palette spot, read by the resize guard without being its trigger. */
   const parkedPalette = useRef(palette)
   parkedPalette.current = palette
@@ -609,7 +644,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /** The one strip gesture allowed to exist at a time. */
   const dragOwner = useRef<'palette' | 'bar' | null>(null)
   /** The palette's box, in percentages of the panel. */
-  const paletteStyle = placementStyle(palette ?? DEFAULT_PALETTE)
+  const paletteStyle: CSSProperties = {
+    ...placementStyle(palette ?? DEFAULT_PALETTE),
+    ...(paletteLimit === undefined ? {} : { maxHeight: `${paletteLimit}px` }),
+  }
 
   /**
    * The floating bar's own spot, and the bits a drag of it needs.
@@ -912,28 +950,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const layer = useMemo(() => figureLayer(figure, rasterSize), [figure, rasterSize])
 
   /**
-   * The window a rendered document is shown through, in figure pixels; null until the
-   * pane and the document's own width are both known.
+   * The size of the rendered surface.
    *
-   * A window, not a sheet. The document is one pane wide and one pane tall and scrolls
-   * inside it, which is the only way a page can lay itself out the way a browser does:
-   * `100vh` is one screenful, a sticky header sticks to the top of the window, a fixed
-   * bar stays where it was put. Sizing the frame to the whole document instead made
-   * every one of those mean something else — and a `100vh` hero became a sheet as long
-   * as the page.
+   * A normal rendered document is a window, not a sheet: its width is the layout width
+   * the document asks for and its height is one pane. A scriptless deck is different:
+   * one slide is put in front, and the frame takes that slide's own height. The frame
+   * is then a page, not a viewport clipped through the middle of a 1080px slide.
    */
-  const htmlView = useMemo(
-    () => (htmlDocWidth === 0 || fitHeight === 0
-      ? null
-      : { width: Math.max(fitWidth, htmlDocWidth), height: fitHeight }),
-    [fitHeight, fitWidth, htmlDocWidth],
-  )
+  const htmlView = useMemo(() => {
+    if (previewPage !== null) {
+      return fitWidth === 0 || fitHeight === 0 ? null : { width: fitWidth, height: fitHeight }
+    }
+    const height = deckHeight > 0 ? deckHeight : fitHeight
+    return !htmlMeasured || height === 0 ? null : { width: htmlWidth, height }
+  }, [deckHeight, fitHeight, fitWidth, htmlMeasured, htmlWidth, previewPage])
 
   /**
    * The surface's measurable size; null until its content and dimensions are both
-   * known. A rendered document's surface is the window it is shown through, not the
-   * document's own length: the page scrolls, so a sheet as long as the page would be a
-   * sheet whose bottom nobody could ever see.
+   * known. A rendered document's surface is the window it is shown through.
    */
   const size = useMemo(
     () => figureSize(figure, rasterSize, htmlView),
@@ -955,9 +989,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * it rather than the mark being clipped — and because the surface is white, a mark
    * out there lands on paper instead of on nothing.
    *
-   * A rendered document is the exception: it is a window, so it is exactly the size it
-   * is shown at and grows for nothing. The page inside it scrolls instead; a paper that
-   * grew with a mark would be a window onto the desktop rather than onto the page.
+   * A rendered document is a window and grows for nothing: the page inside it scrolls.
    */
   const paper = size === null
     ? null
@@ -976,6 +1008,21 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const live = useRef({ address, createdAt, livePage, loaded, marks, size, summary })
   live.current = { address, createdAt, livePage, loaded, marks, size, summary }
 
+  useEffect(() => {
+    liveMounted.current = true
+    return () => {
+      liveMounted.current = false
+      liveOpenGeneration.current += 1
+      // StrictMode exercises cleanup and immediately mounts again. Wait one task so
+      // that probe does not close a proxy the remounted body is still showing.
+      queueMicrotask(() => {
+        if (!liveMounted.current && live.current.livePage !== null) {
+          void closeLivePage(live.current.livePage.url).catch(() => { /* the proxy may already be gone. */ })
+        }
+      })
+    }
+  }, [])
+
   /**
    * The signature of what is already on disk.
    *
@@ -991,6 +1038,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // A page surface arrives rendered, so the file's bytes are not this body's
     // to decode: decoding them here would fight the renderer that owns them.
     if (surface !== undefined) return
+    if (props.livePage !== undefined) {
+      setLoaded({
+        path: props.livePage.address,
+        mediaType: 'text/html',
+        sha256: `live:${props.livePage.address}`,
+        annotation: null,
+        unreadable: [],
+        workspace: null,
+      })
+      setFileFigure({ kind: 'html', document: '' })
+      setHostError(null)
+      return
+    }
     if (data === undefined || mediaType === undefined) return
     const decoded = decodeFigure(data, mediaType)
     const loaded = decoded.figure
@@ -999,10 +1059,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     if (loaded.kind === 'html') {
-      // A new document is a new window: it starts unmeasured and unscrolled, so the
-      // marks file is not described against the last document's geometry.
-      setHtmlDocWidth(0)
+      // A new document starts at the contracted layout width and the top of its
+      // window, so marks are not described against the last document's geometry.
+      setHtmlWidth(RENDER_WIDTH)
+      setHtmlMeasured(false)
       setHtmlScroll({ x: 0, y: 0 })
+      setDeckCount(0)
+      setDeckPage(0)
+      setDeckHeight(0)
       setFigureError(null)
     }
     // A raster has no size until the browser has decoded it, and this is a new one.
@@ -1010,62 +1074,124 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     setFileFigure(loaded)
     if (loaded.kind !== 'raster') return
     return () => { URL.revokeObjectURL(loaded.objectUrl) }
-  }, [data, mediaType, surface, t])
+  }, [data, mediaType, props.livePage, surface, t])
 
   // --- rendered document ----------------------------------------------------
 
   /** The document to load into the frame, or null when this body holds no document. */
-  const htmlSource = figure?.kind === 'html' && livePage === null ? figure.document : null
+  const htmlSource = figure?.kind === 'html' && previewPage === null ? figure.document : null
 
   /**
-   * Put the prepared document into the frame and learn the width its layout wants.
+   * Put the prepared document into the frame and learn the size it needs.
    *
-   * The frame is a same-origin sandbox with scripts off, so what it holds is markup
-   * the body may read and nothing that runs. It is then a *window*: the pane wide and
-   * the pane tall, with the document scrolling inside it. That is what makes the
-   * preview the page the reader will get rather than a re-composition of it — and the
-   * only reason the document's own pixels can be trusted as mark coordinates.
-   *
-   * Only the width is taken from the measurement: a document laid out for a stage of
-   * its own is wider than the pane, and the window takes that width so the page is
-   * whole. Height is the pane's, always — the page scrolls, it does not grow the window.
+   * A normal page is a same-origin window one pane tall and scrolls inside itself. A
+   * conventional slide deck gets one page shown at a time by {@link prepareDeck}; its
+   * frame takes that slide's whole size so the outer fit can show the entire page
+   * rather than a crop through the middle of it.
    */
   useEffect(() => {
     if (htmlSource === null) return
     const frame = frameRef.current
     const root = loadFrameDocument(frame, htmlSource)
     if (root === undefined) return
+    const deck = prepareDeck(root)
+    setDeckCount(deck?.count ?? 0)
+    setDeckPage(deck?.index ?? 0)
     const measure = (): void => {
+      const slide = deck === undefined ? undefined : deckSlideSize(root)
       // A document that has laid out nothing yet reports no size; the last
       // measurement stands rather than the window collapsing to nothing.
+      if (slide !== undefined) {
+        setHtmlWidth(slide.width)
+        setDeckHeight(slide.height)
+        setHtmlMeasured(true)
+        return
+      }
       const measured = measureFrameContent(frame)
       if (measured === undefined) return
-      if (measured.width > 0) setHtmlDocWidth(current => Math.max(current, measured.width))
+      if (measured.width > 0) setHtmlWidth(current => Math.max(current, measured.width))
+      if (deck !== undefined) setDeckHeight(measured.height)
+      setHtmlMeasured(true)
     }
     measure()
+    const view = frame?.contentWindow ?? null
+    const syncScroll = (): void => {
+      if (view === null) return
+      setHtmlScroll({ x: view.scrollX, y: view.scrollY })
+    }
+    view?.addEventListener('scroll', syncScroll, { passive: true })
+    syncScroll()
     // Content that arrives later — a font, an image, a reflow — changes the layout.
     const observer = new ResizeObserver(measure)
     observer.observe(root)
-    return () => { observer.disconnect() }
+    return () => {
+      observer.disconnect()
+      view?.removeEventListener('scroll', syncScroll)
+    }
   }, [htmlSource])
 
   /**
-   * Follow the document as it scrolls inside its window.
+   * Turn a prepared deck to another slide.
    *
-   * The overlay is drawn over the window, so what it needs is the offset the document
-   * has travelled: the marks stay where they were put in the page, and the window moves
-   * over them. Nothing is interpolated — a scroll is read once per frame, and the
-   * figures that follow are the ones the browser is already showing.
+   * The document's own script is deliberately not running, so this is the one place
+   * that changes which slide is in front. The selected mark belongs to the surface the
+   * reader left, so it is cleared before the new page is measured.
    */
+  const turnDeck = useCallback((next: number | ((page: number) => number)): void => {
+    const wanted = typeof next === 'function' ? next(deckPage) : next
+    const target = Math.max(0, Math.min(deckCount - 1, wanted))
+    if (target === deckPage) return
+    const root = frameRef.current?.contentDocument?.documentElement
+    if (root === undefined) return
+    const slide = showDeckSlide(root, target)
+    if (slide === undefined) return
+    setDeckPage(target)
+    setSelectedId(null)
+    setHtmlScroll({ x: 0, y: 0 })
+    const size = deckSlideSize(root)
+    if (size !== undefined) {
+      setHtmlWidth(size.width)
+      setDeckHeight(size.height)
+      setHtmlMeasured(true)
+    }
+  }, [deckCount, deckPage, setSelectedId])
+
   useEffect(() => {
-    if (htmlSource === null) return
-    const view = documentView()
-    if (view === null) return
-    const sync = (): void => { setHtmlScroll({ x: view.scrollX, y: view.scrollY }) }
-    sync()
-    view.addEventListener('scroll', sync, { passive: true })
-    return () => { view.removeEventListener('scroll', sync) }
-  }, [documentView, htmlSource, htmlView])
+    if (deckCount < 2) return
+    // The frame has its own window and therefore its own HTMLElement constructor.
+    // `instanceof HTMLElement` is false for every field inside it, so detect the
+    // editing surface by the shape both realms share.
+    const typing = (target: EventTarget | null): boolean => {
+      const field = target as { readonly isContentEditable?: boolean; readonly tagName?: string } | null
+      return field !== null && (field.isContentEditable === true
+        || field.tagName === 'INPUT'
+        || field.tagName === 'TEXTAREA'
+        || field.tagName === 'SELECT')
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (typing(event.target)) return
+      if (event.key === 'ArrowRight' || event.key === 'PageDown') {
+        event.preventDefault()
+        turnDeck(page => page + 1)
+      } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
+        event.preventDefault()
+        turnDeck(page => page - 1)
+      } else if (event.key === 'Home') {
+        event.preventDefault()
+        turnDeck(0)
+      } else if (event.key === 'End') {
+        event.preventDefault()
+        turnDeck(deckCount - 1)
+      }
+    }
+    const frameDocument = frameRef.current?.contentDocument
+    frameDocument?.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      frameDocument?.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [deckCount, turnDeck])
 
   // --- host annotation ------------------------------------------------------
 
@@ -1106,6 +1232,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // already read the whole sidecar: reading it here would put every page's marks
     // on the page on screen.
     if (isPage) return
+    if (props.livePage !== undefined) return
     if (address === '' || mediaType === undefined) return
     const controller = new AbortController()
     void (async () => {
@@ -1159,7 +1286,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
     })()
     return () => { controller.abort() }
-  }, [address, isPage, mediaType, writeSummary])
+  }, [address, isPage, mediaType, props.livePage, writeSummary])
 
   // --- fit width ------------------------------------------------------------
 
@@ -1206,8 +1333,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * right or bottom edge because only its anchor is stored. The first duty here is
    * therefore body-aware clamping. A strip that would then cover the other strip slides
    * only far enough to clear it; covering the drawing is allowed because the reader may
-   * have parked it there deliberately. This runs only on an available-box change, never
-   * under the reader's current drag.
+   * have parked it there deliberately. This runs for every resting layout decision,
+   * never under the reader's current drag.
    */
   useLayoutEffect(() => {
     let live = true
@@ -1239,22 +1366,51 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         }
       }
       if (barSpot === undefined) {
-        const toolsBox = tools?.getBoundingClientRect()
-        if (fittedPalette === undefined || toolsBox === undefined || tools === null) return
+        /* v8 ignore next -- the palette and bar are mounted and removed together. */
+        if (tools === null) return
         const panel = tools.offsetParent ?? root
         const panelBox = panel.getBoundingClientRect()
+        const measured = tools.getBoundingClientRect()
         // The first layout frame can report a panel or strip with no body. A zero
         // obstacle looks collision-free, and running the arithmetic on it rewrites a
         // remembered corner as 0,0 before the browser has laid the chrome out.
         if (panelBox.width <= 0 || panelBox.height <= 0
-          || toolsBox.width <= 0 || toolsBox.height <= 0) return
+          || measured.width <= 0 || measured.height <= 0) return
+        // Once capped, the visible box is shorter than the tools it contains. Collision
+        // and subsequent resizes must reason about the natural strip, or the cap itself
+        // makes the next layout pass look collision-free and immediately removes it.
+        const toolsBox = {
+          left: measured.left,
+          top: measured.top,
+          width: measured.width,
+          height: Math.max(measured.height, tools.scrollHeight),
+        }
+        const paletteAnchor = fittedPalette ?? DEFAULT_PALETTE
+        const barBox = bar.getBoundingClientRect()
         const safe = separatedSpot(
-          fittedPalette,
+          paletteAnchor,
           panelBox,
           toolsBox,
-          bar.getBoundingClientRect(),
+          barBox,
         )
-        setPalette(safe ?? DEFAULT_PALETTE)
+        if (safe === undefined) {
+          // Both controls are essential. Moving the palette cannot clear a bar that
+          // spans the whole lower lane, so let the palette scroll above it instead
+          // of painting the bar over its last tools and Send.
+          const limit = paletteRoomBeforeBar(toolsBox, barBox)
+          if (limit === undefined) {
+            setPaletteLimit(undefined)
+            setPalette(DEFAULT_PALETTE)
+          } else if (limit !== paletteLimit) {
+            setPaletteLimit(limit)
+          }
+        } else {
+          setPaletteLimit(undefined)
+          if (fittedPalette !== undefined
+            && (safe.x !== fittedPalette.x || safe.y !== fittedPalette.y)) {
+            setPalette(safe)
+          }
+        }
         return
       }
       const panel = bar.offsetParent ?? root
@@ -1268,11 +1424,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
       // The two strips must remain individually grabbable. A panel too small to
       // separate them falls back to the bar's reserved lane.
-      /* v8 ignore next 3 -- the palette and bar are mounted and removed together. */
-      const toolsBox = tools?.getBoundingClientRect()
-      const safe = toolsBox === undefined
-        ? barSpot
-        : separatedSpot(barSpot, panelBox, own, toolsBox)
+      /* v8 ignore next -- the palette and bar are mounted and removed together. */
+      if (tools === null) return
+      const measured = tools.getBoundingClientRect()
+      const toolsBox = {
+        left: measured.left,
+        top: measured.top,
+        width: measured.width,
+        height: Math.max(measured.height, tools.scrollHeight),
+      }
+      setPaletteLimit(undefined)
+      const safe = separatedSpot(barSpot, panelBox, own, toolsBox)
       if (safe === undefined) setBarSpot(undefined)
       else if (safe.x !== barSpot.x || safe.y !== barSpot.y) setBarSpot(safe)
     }
@@ -1285,7 +1447,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       live = false
       cancelAnimationFrame(frame)
     }
-  }, [fitHeight, fitWidth])
+  }, [barDragging, barSpot, dragging, fitHeight, fitWidth, palette, paletteLimit])
 
   /**
    * Where the records hang: above the bar, centred on it.
@@ -1511,10 +1673,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     const stage = stageRef.current
     if (stage === null) return
-    // A document scrolls under the wheel; it does not magnify. There is a window onto
-    // the page, and a reader who wheels is looking further down the page — enlarging
-    // it instead would take the window away from the one thing it is for.
-    if (isDocument) return
+    // An interactive page owns its own scrollport. Wheel travel belongs to that page
+    // rather than to the annotation surface underneath it.
+    if (previewPage !== null) return
     /**
      * A trackpad's ordinary two-finger scroll is a pan; a pinch is the zoom.
      *
@@ -1526,6 +1687,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
      */
     const onWheel = (event: WheelEvent): void => {
       const magnify = event.ctrlKey || event.metaKey
+      const view = documentView()
+      if (view !== null && !magnify) {
+        // The frame is the document's scrollport. The overlay sits above it, so this
+        // is the one place that can hand trackpad and mouse-wheel travel through.
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? stage.clientHeight : 1
+        const dx = event.deltaX * unit
+        const dy = event.deltaY * unit
+        event.preventDefault()
+        view.scrollBy(event.shiftKey ? dx + dy : dx, event.shiftKey ? 0 : dy)
+        return
+      }
       // A fitted picture has no hidden edge to reveal. Leaving the event alone lets
       // the surrounding panel scroll, which is the gesture the reader actually made.
       if (!magnify && !pannable) return
@@ -1555,11 +1727,32 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // what this handler exists to replace.
     stage.addEventListener('wheel', onWheel, { passive: false })
     return () => { stage.removeEventListener('wheel', onWheel) }
-  }, [isDocument, pannable, zoomAt])
+  }, [documentView, pannable, previewPage, zoomAt])
 
   // --- edits ----------------------------------------------------------------
 
   const { commit, reset: resetMarks } = history
+
+  /**
+   * Attach a new mark to the logical page it was drawn on.
+   *
+   * A viewport page needs no extra locator: its scroll offset already supplies the
+   * position. A deck keeps several pages at the same viewport coordinates, so the
+   * surface selector is the fact that tells one slide from the next. Static HTML can
+   * be inspected directly; a running page reports the surface with its picker.
+   * @param mark - the mark a gesture or picker just made.
+   * @returns the mark carrying a surface selector when one is known.
+   */
+  const scopedMark = useCallback((mark: AnnotationMark): AnnotationMark => {
+    if (mark.surface !== undefined || figure?.kind !== 'html') return mark
+    const staticRoot = frameRef.current?.contentDocument?.documentElement
+    const selector = previewPage === null
+      ? (staticRoot === null || staticRoot === undefined
+          ? undefined
+          : currentSurfaceSelector(staticRoot))
+      : liveSurface ?? undefined
+    return selector === undefined ? mark : { ...mark, surface: selector }
+  }, [figure?.kind, liveSurface, previewPage])
 
   /**
    * Add a mark to this surface's list, unless it names an element already marked.
@@ -1572,18 +1765,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * is already there, which is the one the reader meant to write in.
    */
   const addMark = useCallback((mark: AnnotationMark): void => {
-    const already = elementMarkOn(marks, mark)
+    const complete = scopedMark(mark)
+    const already = elementMarkOn(marks, complete)
     if (already !== undefined) {
       setTool('select')
       setSelectedId(already.id)
       setFocusId(already.id)
       return
     }
-    commit(appendedMarks(marks, mark))
+    commit(appendedMarks(marks, complete))
     setTool('select')
-    setSelectedId(mark.id)
-    setFocusId(mark.id)
-  }, [commit, marks])
+    setSelectedId(complete.id)
+    setFocusId(complete.id)
+  }, [commit, marks, scopedMark])
 
   /**
    * Make the document itself the picker while the overlay steps aside.
@@ -1596,7 +1790,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * the current one while allowing the page's native action to continue.
    */
   useEffect(() => {
-    if (figure?.kind !== 'html' || livePage !== null
+    if (figure?.kind !== 'html' || previewPage !== null
       || (tool !== 'select' && tool !== 'element')) return
     const document_ = frameRef.current?.contentDocument
     if (document_ === null || document_ === undefined) return
@@ -1659,7 +1853,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     document_.addEventListener('pointerdown', onPress, true)
     return () => { document_.removeEventListener('pointerdown', onPress, true) }
   }, [
-    addMark, color, figure, livePage, marks, selectedId, setSelectedId, t, tool,
+    addMark, color, figure, marks, previewPage, selectedId, setSelectedId, t, tool,
   ])
 
   /**
@@ -1672,7 +1866,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * before the click is dispatched.
    */
   useEffect(() => {
-    if (figure?.kind !== 'html' || livePage !== null) return
+    if (figure?.kind !== 'html' || previewPage !== null) return
     const document_ = frameRef.current?.contentDocument
     if (document_ === null || document_ === undefined) return
     const owner = eventOwnerOf(document_)
@@ -1698,7 +1892,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       owner.removeEventListener('pointercancel', cancel, true)
       htmlClickGuard.current = false
     }
-  }, [figure, livePage])
+  }, [figure, previewPage])
 
   // --- a page through the proxy ---------------------------------------------
 
@@ -1709,9 +1903,56 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * frame takes the pointer exactly then — and gives it back the moment a drawing tool
    * is armed, because a drawing has to be drawn on this side of the fence.
    */
-  const liveArmed = livePage !== null && tool === 'element'
+  const liveArmed = previewPage !== null && tool === 'element'
   /** The name of the element the reader's pointer is on, when the page reported one. */
-  const [liveHover, setLiveHover] = useState<{ readonly anchor: MarkAnchor; readonly name: string } | null>(null)
+  const [liveHover, setLiveHover] = useState<{
+    readonly anchor: MarkAnchor
+    readonly name: string
+    readonly level?: number
+    readonly count?: number
+  } | null>(null)
+  /** The list row whose live-page reveal is waiting for the page's answer. */
+  const pendingReveal = useRef<{ readonly id: string; readonly markId: string } | null>(null)
+  /** Opaque token and timeout for that one reveal request. */
+  const revealSerial = useRef(0)
+  const revealTimer = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
+  }, [])
+
+  /**
+   * Move the picker's ladder while keyboard focus is still in the panel.
+   *
+   * Choosing the element tool focuses its button in this window, while the hovered
+   * element lives in the framed page. Without this relay the displayed "↑↓" hint is
+   * a promise the page never hears; the shell instead consumes the arrow and scrolls
+   * the conversation behind the preview.
+   */
+  const nudgePicker = useCallback((delta: -1 | 1): void => {
+    /* v8 ignore next -- the depth buttons and key listener exist only while this page is framed. */
+    if (previewPage === null) return
+    const view = frameRef.current?.contentWindow
+    if (view == null) return
+    view.postMessage(liveDepthMessage(delta), new URL(previewPage.url).origin)
+  }, [previewPage])
+
+  useEffect(() => {
+    if (previewPage === null || tool !== 'element' || liveHover === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target as { readonly tagName?: string; readonly isContentEditable?: boolean } | null
+      if (target !== null && (target.isContentEditable === true
+        || target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT')) return
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      nudgePicker(event.key === 'ArrowUp' ? 1 : -1)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => { window.removeEventListener('keydown', onKeyDown, true) }
+  }, [liveHover, nudgePicker, previewPage, tool])
 
   /**
    * Open a page and frame it.
@@ -1722,28 +1963,48 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * @param text - what the reader typed in the address field.
    */
   const openPage = useCallback(async (text: string): Promise<void> => {
+    if (liveBusyRef.current) return
     const address = liveAddressOf(text)
     if (address === undefined) {
       setLiveError(t('liveBadAddress'))
       return
     }
+    const generation = liveOpenGeneration.current + 1
+    liveOpenGeneration.current = generation
+    liveBusyRef.current = true
     setLiveBusy(true)
     setLiveError(null)
     try {
       const page = await openLivePage(address)
+      if (!liveMounted.current || liveOpenGeneration.current !== generation) {
+        // The Host already opened a proxy for this answer. No body will mount it, so
+        // close it here rather than leaving a loopback listener behind.
+        void closeLivePage(page.url).catch(() => { /* the Host may already have replaced it. */ })
+        return
+      }
       fileBeforeLive.current ??= { marks, summary, createdAt }
       resetMarks([])
       writeSummary('')
       setCreatedAt(null)
       setSelectedId(null)
       setLiveHover(null)
+      setPickLevel(undefined)
+      setPreviewShown(null)
+      setLiveSurface(null)
+      setLiveSurfaceKnown(false)
       setHtmlScroll({ x: 0, y: 0 })
       setLiveText(null)
       setLivePage(page)
+      setLiveAddressOpen(false)
     } catch (error) {
-      setLiveError(error instanceof Error ? error.message : String(error))
+      if (liveMounted.current && liveOpenGeneration.current === generation) {
+        setLiveError(error instanceof Error ? error.message : String(error))
+      }
     } finally {
-      setLiveBusy(false)
+      if (liveOpenGeneration.current === generation) {
+        liveBusyRef.current = false
+        if (liveMounted.current) setLiveBusy(false)
+      }
     }
   }, [createdAt, marks, resetMarks, setSelectedId, summary, t, writeSummary])
 
@@ -1753,22 +2014,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * The proxy stops with it: a port still answering on the reader's machine for a page
    * nobody is looking at is a leftover, not a feature.
    */
-  const closePage = useCallback((): void => {
-    const file = fileBeforeLive.current
-    // `hidden` is a visual hint, not an enforcement point. A programmatic click on the
-    // control while the file is on screen must not turn the file into a blank page.
-    if (file === null) return
+  const closePage = useCallback((file: NonNullable<typeof fileBeforeLive.current>): void => {
     fileBeforeLive.current = null
     setLivePage(null)
     setLiveText(null)
     setLiveError(null)
     setLiveHover(null)
+    setPickLevel(undefined)
+    setPreviewShown(null)
+    setLiveSurface(null)
+    setLiveSurfaceKnown(false)
     setHtmlScroll({ x: 0, y: 0 })
+    setLiveAddressOpen(false)
     resetMarks(file.marks)
     writeSummary(file.summary)
     setCreatedAt(file.createdAt)
     setSelectedId(null)
-    void closeLivePage().catch(() => { /* a proxy already gone is not the reader's problem. */ })
+    const pageUrl = live.current.livePage?.url
+    void closeLivePage(pageUrl).catch(() => { /* a proxy already gone is not the reader's problem. */ })
   }, [resetMarks, setSelectedId, writeSummary])
 
   /**
@@ -1781,17 +2044,39 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const armPicker = useCallback((url: string, armed: boolean): void => {
     const view = frameRef.current?.contentWindow
-    if (view === null || view === undefined) return
+    if (view == null) return
     view.postMessage(liveModeMessage(armed), new URL(url).origin)
   }, [])
 
+  /**
+   * Ask the page to keep the saved element boxes current.
+   * @param url - the interactive page's own URL.
+   * @param selectors - locators carried by marks on this document.
+   */
+  const watchPicker = useCallback((url: string, selectors: readonly string[]): void => {
+    const view = frameRef.current?.contentWindow
+    if (view == null) return
+    view.postMessage(liveWatchMessage(selectors), new URL(url).origin)
+  }, [])
+
   useEffect(() => {
-    if (livePage === null) return
-    armPicker(livePage.url, liveArmed)
+    if (previewPage === null) return
+    armPicker(previewPage.url, liveArmed)
     // A drawing tool takes the pointer back, and the name chip was about a pointer the
     // page no longer owns.
     if (!liveArmed) setLiveHover(null)
-  }, [armPicker, liveArmed, livePage])
+  }, [armPicker, liveArmed, previewPage])
+
+  /** Unique selectors whose elements have to be measured by the page. */
+  const watchedSelectors = useMemo(
+    () => [...new Set(marks.flatMap(mark => mark.anchor?.selector === undefined ? [] : [mark.anchor.selector]))],
+    [marks],
+  )
+
+  useEffect(() => {
+    if (previewPage === null) return
+    watchPicker(previewPage.url, watchedSelectors)
+  }, [previewPage, watchedSelectors, watchPicker])
 
   /**
    * Listen to the page.
@@ -1802,12 +2087,45 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * scripts could read back.
    */
   useEffect(() => {
-    if (livePage === null) return
-    const origin = new URL(livePage.url).origin
+    if (previewPage === null) return
+    const origin = new URL(previewPage.url).origin
     const onMessage = (event: MessageEvent): void => {
-      if (event.origin !== origin) return
+      const view = frameRef.current?.contentWindow
+      if (event.origin !== origin || view === null || view === undefined || event.source !== view) return
       const reported = parseLiveEvent(event.data)
       if (reported === undefined) return
+      if (reported.kind === 'reveal-result') {
+        const pending = pendingReveal.current
+        if (pending === null || pending.id !== reported.requestId) return
+        pendingReveal.current = null
+        if (revealTimer.current !== null) {
+          window.clearTimeout(revealTimer.current)
+          revealTimer.current = null
+        }
+        if (reported.status === 'revealed') {
+          setSelectedId(pending.markId)
+          // The list hangs over the element it just found. Once the page has
+          // confirmed the destination, get out of the way so the reader can see it.
+          setOpenPanel(null)
+        } else {
+          setStatus({ tone: 'info', text: t(`reveal_${reported.status}`) })
+          setSelectedId(null)
+        }
+        return
+      }
+      if (reported.kind === 'surface') {
+        setLiveSurface(reported.selector)
+        setLiveSurfaceKnown(true)
+        setSelectedId(current => {
+          const selectedMark = marks.find(mark => mark.id === current)
+          return selectedMark?.surface !== undefined && selectedMark.surface !== reported.selector
+            ? null
+            : current
+        })
+        setLiveHover(null)
+        setPickLevel(undefined)
+        return
+      }
       if (reported.kind === 'scroll') {
         setHtmlScroll({ x: reported.scroll[0], y: reported.scroll[1] })
         return
@@ -1816,25 +2134,68 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         setHtmlScroll({ x: reported.scroll[0], y: reported.scroll[1] })
         // The one moment both halves are known to be listening: the page has just put
         // its picker in place, so the current mode is sent again rather than trusted.
-        armPicker(livePage.url, liveArmed)
+        armPicker(previewPage.url, liveArmed)
+        watchPicker(previewPage.url, watchedSelectors)
         return
       }
       if (reported.kind === 'leave') {
         setLiveHover(null)
+        setPickLevel(undefined)
+        return
+      }
+      if (reported.kind === 'cancel') {
+        setLiveHover(null)
+        setPickLevel(undefined)
+        setSelectedId(null)
+        setFocusId(null)
+        // Escape belongs to element mode first. Clearing the hover while leaving the
+        // picker armed made the key look broken whenever focus was inside the page.
+        setTool('select')
+        return
+      }
+      if (reported.kind === 'bounds') {
+        const bySelector = new Map<string, readonly AnnotationMark[]>()
+        for (const mark of marks) {
+          const selector = mark.anchor?.selector
+          if (selector === undefined) continue
+          bySelector.set(selector, [...(bySelector.get(selector) ?? []), mark])
+        }
+        const boxes = new Map<string, readonly [number, number, number, number]>()
+        const away = new Set<string>()
+        for (const bound of reported.bounds) {
+          for (const mark of bySelector.get(bound.selector) ?? []) {
+            if (!bound.visible || (bound.bbox[2] === 0 && bound.bbox[3] === 0)) away.add(mark.id)
+            else if (mark.kind === 'element') boxes.set(mark.id, bound.bbox)
+          }
+        }
+        const next: ShownMarks = { boxes, away }
+        setPreviewShown(current => sameShownMarks(current, next) ? current : next)
         return
       }
       if (reported.kind === 'hover') {
-        setLiveHover({ anchor: anchorOfPick(reported), name: pickName(reported) })
+        setLiveHover({
+          anchor: anchorOfPick(reported),
+          name: pickName(reported),
+          ...(reported.level === undefined ? {} : { level: reported.level }),
+          ...(reported.count === undefined ? {} : { count: reported.count }),
+        })
+        setPickLevel(reported.level === undefined || reported.count === undefined
+          ? undefined
+          : { level: reported.level, count: reported.count })
         return
       }
       // A pick is a click the reader aimed at an element. The box is where it was when
       // they pointed, which is what a mark records: the element may move afterwards.
       setLiveHover(null)
+      setPickLevel(undefined)
       addMark(elementMark(anchorOfPick(reported), color))
     }
     window.addEventListener('message', onMessage)
     return () => { window.removeEventListener('message', onMessage) }
-  }, [addMark, armPicker, color, liveArmed, livePage])
+  }, [
+    addMark, armPicker, color, liveArmed, marks, previewPage, setSelectedId, setStatus, t,
+    watchPicker, watchedSelectors,
+  ])
 
   const removeMark = useCallback((id: string): void => {
     // Only this surface's own marks reach here. A document's list used to offer the
@@ -2598,7 +2959,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // --- render ---------------------------------------------------------------
 
   /** Whether this body holds a rendered document rather than a figure file. */
-  const isHtml = mediaType === 'text/html'
+  const isHtml = mediaType === 'text/html' || livePage !== null
   /** Name what one figure point landed on, for a surface that holds its own elements. */
   const anchorAtFigurePoint = useCallback(
     (x: number, y: number) => anchorInDocument(frameRef.current?.contentDocument, x, y),
@@ -2722,7 +3083,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * or retargets the page's own event.
    */
   useEffect(() => {
-    if (figure?.kind !== 'html' || livePage !== null || tool !== 'element') return
+    if (figure?.kind !== 'html' || previewPage !== null || tool !== 'element') return
     const document_ = frameRef.current?.contentDocument
     if (document_ === null || document_ === undefined) return
     const report = (pick: { readonly choices: ElementChoices; readonly index: number }): void => {
@@ -2794,10 +3155,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       window.removeEventListener('keydown', onKeyDown)
       forget()
     }
-  }, [figure, lightElement, livePage, tool])
+  }, [figure, lightElement, previewPage, tool])
 
   if (mediaType === undefined) return <p className="da-hint">{t('unsupported')}</p>
-  if (data === undefined && surface === undefined) return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
+  if (data === undefined && surface === undefined && props.livePage === undefined) {
+    return <p className="da-hint">{t(isHtml ? 'htmlLoading' : 'loading')}</p>
+  }
   // A tone of its own, not the quiet grey a loading note gets: this one is the
   // message that blocks the whole surface, and the panel has two ways of saying
   // "this did not work" — this was the quieter of the two.
@@ -2806,14 +3169,49 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /**
    * Press a row of the list: show that mark and put the pill beside it.
    *
-   * The selection goes first and the page turn second, because a turn remounts this
-   * body for another page and the mark has to already be the one selected when the
-   * new page's pill is measured — otherwise the row would turn the page and leave
-   * the reader with nothing to read on it.
+   * A local deck can turn to the slide a selector names; a paged document reports the
+   * turn to its owner. Selection follows the turn so a page change cannot clear it
+   * after the row asked for it.
    */
   const reveal = (mark: AnnotationMark): void => {
+    if (previewPage !== null) {
+      const point = mark.points[0]
+      const bbox = mark.anchor?.bbox ?? (point === undefined ? [0, 0, 0, 0] : [point[0], point[1], 0, 0])
+      const requestId = `${Date.now().toString(36)}-${(revealSerial.current += 1).toString(36)}`
+      const view = frameRef.current?.contentWindow
+      pendingReveal.current = { id: requestId, markId: mark.id }
+      if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
+      revealTimer.current = window.setTimeout(() => {
+        pendingReveal.current = null
+        setSelectedId(null)
+        setStatus({ tone: 'info', text: t('reveal_timeout') })
+      }, 1600)
+      view?.postMessage(
+        liveRevealMessage(requestId, mark.anchor?.selector ?? null, mark.surface ?? liveSurface, bbox),
+        new URL(previewPage.url).origin,
+      )
+      revealOnPage(mark)
+      return
+    }
+    const root = frameRef.current?.contentDocument?.documentElement
+    const selector = mark.anchor?.selector
+    const slide = root === undefined || selector === undefined
+      ? undefined
+      : deckSlideOf(root, selector)
+    if (slide !== undefined) turnDeck(slide)
+    const document_ = frameRef.current?.contentDocument ?? null
+    const target = selector === undefined || document_ === null
+      ? undefined
+      : elementAt({ root: document_, selector })
+    try {
+      target?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'auto' })
+    } catch {
+      // A detached or synthetic element may not implement scrolling; selection is
+      // still useful even when the browser cannot move to it.
+    }
     setSelectedId(mark.id)
     revealOnPage(mark)
+    if (isHtml) setOpenPanel(null)
   }
 
   const selected = marks.find(mark => mark.id === selectedId) ?? null
@@ -2904,7 +3302,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           : `${t('toolElementMode')}, ${t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}, ${t('toolElementKeys')}`,
         ...(pickLevel === undefined
           ? {}
-          : { depth: t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count }) }),
+          : {
+              depth: t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count }),
+              level: pickLevel.level,
+              count: pickLevel.count,
+              onDepth: nudgePicker,
+            }),
       }
     : undefined
 
@@ -2913,6 +3316,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       <ToolPalette
         stripRef={paletteRef}
         style={paletteStyle}
+        guideSide={(palette ?? DEFAULT_PALETTE).x > 0.58 ? 'left' : 'right'}
         handle={paletteHandle}
         tools={tools}
         tool={tool}
@@ -2971,7 +3375,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         name: liveHover.name,
       }
       : (isHtml || isVector) && chipAnchor !== null
-        ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
+        ? {
+          ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], {
+            width: htmlWidth,
+          }),
+          anchor: chipAnchor,
+        }
         : null
   /**
    * Whether the page under the overlay owns the pointer.
@@ -2984,22 +3393,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   // While a mark is selected the overlay owns one blank click so the comment can
   // close. With nothing selected the document is handed back to the iframe, which
   // is what lets links, text, and page controls work normally.
-  const passing = isHtml && (
-    livePage === null
-      // A file's frame is same-origin. It can stay fully interactive in select and
-      // element mode because the capture listener above names the element itself.
-      ? tool === 'select' || tool === 'element'
-      // A proxied page is another origin. With a mark selected the overlay takes one
-      // blank press so the comment can close; otherwise the page owns its pointer.
-      : selectedId === null && (tool === 'select' || tool === 'element')
-  )
+  // A live service page owns its own pointer in ordinary reading and element modes.
+  // A selected mark puts the overlay back in front so one blank press can close its
+  // comment.
+  const passing = previewPage !== null && selectedId === null
+    && (tool === 'select' || tool === 'element')
   /** The address the frame is pointed at, when it is not the file's own document. */
-  const pageUrl = livePage === null ? undefined : livePage.url
+  const pageUrl = previewPage === null ? undefined : previewPage.url
   /** The quiet directory breadcrumb shown beside a file's name while it is at rest. */
   const liveParent = loaded === null ? '' : parentPathOf(loaded.path)
 
   return (
-    <div className="da-root" data-html={isHtml} data-live-error={liveError !== null}
+    <div className="da-root" data-html={isHtml} data-live-open={liveAddressOpen}
+      data-live-error={liveAddressOpen && liveError !== null}
       data-compact={fitWidth > 0 && fitWidth < 360} ref={rootRef}>
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
       {loaded === null || loaded.unreadable.length === 0 ? null : (
@@ -3012,71 +3418,115 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       {stale ? <div className="da-status" data-tone="error">{t(isHtml ? 'htmlStale' : 'stale')}</div> : null}
       <ToastStack view={toasts} label={t('close')} resendLabel={t('toastResend')} />
 
-      {/* The address of what is framed, in the corner the reader expects one.
-          A file shows its own name; typing a local address opens that page in the same
-          window, with the same marks and the same tools. The icon and badge name what
-          kind of location this is at rest, so the control does not read as a bare text
-          box. Enter opens, Escape gives the field back — the browser's own contract,
-          because this is the browser's job. */}
-      <div className="da-live-bar" hidden={!isHtml}>
+      {/* The address is a closed drawer by default: one location icon in the corner,
+          rather than a filename card taking a slice of every HTML preview. Opening it
+          gives the same file/page field as before; the icon itself closes it again. */}
+      <div className="da-live-bar" data-open={liveAddressOpen} hidden={!isHtml}>
         <div className="da-live-field" data-live={livePage !== null}
+          data-open={liveAddressOpen}
           title={loaded?.path ?? undefined}>
-          {livePage === null ? (
-            <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M6.5 3.5h7l4 4v13h-11zM13.5 3.5v4h4M9 11.5h6M9 14.5h6M9 17.5h4" />
-            </svg>
-          ) : (
-            <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <circle cx="12" cy="12" r="8.5" />
-              <path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.5 5.1 3.5 8.5S14.3 18.2 12 20.5M12 3.5C9.7 5.8 8.5 8.6 8.5 12s1.2 6.2 3.5 8.5" />
-            </svg>
-          )}
-          <span className="da-live-parent"
-            hidden={livePage !== null || liveText !== null || liveParent === ''}>
-            {liveParent}
-            <span className="da-live-parent-sep" aria-hidden>/</span>
-          </span>
-          <input
-            className="da-live-addr"
-            value={shownAddress(liveText, livePage, loaded?.path ?? '')}
-            aria-label={t('liveAddress')}
-            placeholder={t('liveAddress')}
-            autoComplete="off"
-            spellCheck={false}
-            // Coming back to the field shows the resting address again, so a page the
-            // reader half-typed over is what they are looking at, not a leftover.
-            onFocus={() => {
-              setLiveText(null)
-              setLiveError(null)
-            }}
-            onChange={(event) => {
-              setLiveText(event.target.value)
-              // The refusal belonged to the previous value; keeping it under a new
-              // address makes a correction look like another failure before Enter.
-              setLiveError(null)
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                void openPage(event.currentTarget.value)
-              }
-              if (event.key === 'Escape') {
-                setLiveText(null)
-                // Giving the field back also gives back what it framed. A red refusal
-                // left under the restored filename reads as a failure of that file.
-                setLiveError(null)
-              }
-            }}
-          />
-          <span className="da-live-badge" aria-hidden="true">
-            {livePage === null ? 'HTML' : t('livePage')}
-          </span>
+          <button
+            type="button"
+            className="da-live-toggle"
+            aria-expanded={liveAddressOpen}
+            aria-label={t(liveAddressOpen ? 'liveAddressCollapse' : 'liveAddressExpand')}
+            title={liveAddressOpen ? t('liveAddressCollapse') : loaded?.path ?? t('liveAddressExpand')}
+            onClick={() => { setLiveAddressOpen(open => !open) }}>
+            {livePage === null ? (
+              <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M6.5 3.5h7l4 4v13h-11zM13.5 3.5v4h4M9 11.5h6M9 14.5h6M9 17.5h4" />
+              </svg>
+            ) : (
+              <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="12" r="8.5" />
+                <path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.5 5.1 3.5 8.5S14.3 18.2 12 20.5M12 3.5C9.7 5.8 8.5 8.6 8.5 12s1.2 6.2 3.5 8.5" />
+              </svg>
+            )}
+          </button>
+          {liveAddressOpen ? (
+            <>
+              <span className="da-live-parent"
+                hidden={livePage !== null || liveText !== null || liveParent === ''}>
+                {liveParent}
+                <span className="da-live-parent-sep" aria-hidden>/</span>
+              </span>
+              <input
+                ref={liveAddressRef}
+                className="da-live-addr"
+                value={shownAddress(liveText, livePage, loaded?.path ?? '')}
+                aria-label={t('liveAddress')}
+                placeholder={t('liveAddress')}
+                autoComplete="off"
+                spellCheck={false}
+                // Coming back to the field shows the resting address again, so a page
+                // the reader half-typed over is what they are looking at, not a leftover.
+                onFocus={() => {
+                  setLiveText(null)
+                  setLiveError(null)
+                }}
+                onChange={(event) => {
+                  setLiveText(event.target.value)
+                  // The refusal belonged to the previous value; keeping it under a new
+                  // address makes a correction look like another failure before Enter.
+                  setLiveError(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void openPage(event.currentTarget.value)
+                  }
+                  if (event.key === 'Escape') {
+                    setLiveText(null)
+                    // Giving the field back also gives back what it framed. A red
+                    // refusal left under the restored filename reads as a failure of
+                    // that file.
+                    setLiveError(null)
+                  }
+                }}
+              />
+              <span className="da-live-badge" aria-hidden="true">
+                {livePage === null ? 'HTML' : t('livePage')}
+              </span>
+            </>
+          ) : null}
         </div>
-        <span className="da-live-note" hidden={!liveBusy}>{t('liveOpening')}</span>
-        <button type="button" className="da-live-back" hidden={livePage === null}
-          onClick={closePage}>{t('liveBack')}</button>
+        {liveAddressOpen ? (
+          <>
+            <span className="da-live-note" hidden={!liveBusy}>{t('liveOpening')}</span>
+            <button type="button" className="da-live-back"
+              hidden={livePage === null || (fileBeforeLive.current === null && props.onLiveBack === undefined)}
+              onClick={() => {
+                const file = fileBeforeLive.current
+                if (file !== null) closePage(file)
+                else props.onLiveBack?.()
+              }}>{t(fileBeforeLive.current === null ? 'liveBackServices' : 'liveBack')}</button>
+          </>
+        ) : null}
       </div>
-      <span className="da-live-error" hidden={liveError === null}>{liveError}</span>
+      <span className="da-live-error"
+        hidden={!liveAddressOpen || liveError === null}>{liveError}</span>
+
+      {deckCount < 2 || previewPage !== null ? null : (
+        <div className="da-deck-pager" role="group" aria-label={t('pagerLabel')}>
+          <button type="button" aria-label={t('previousPage')} title={t('previousPage')}
+            disabled={deckPage === 0}
+            onClick={() => { turnDeck(page => page - 1) }}>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="m9.5 3.5-4 4.5 4 4.5" />
+            </svg>
+          </button>
+          <span aria-live="polite">
+            {t('pageOf', { page: deckPage + 1, pages: deckCount })}
+          </span>
+          <button type="button" aria-label={t('nextPage')} title={t('nextPage')}
+            disabled={deckPage === deckCount - 1}
+            onClick={() => { turnDeck(page => page + 1) }}>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="m6.5 3.5 4 4.5-4 4.5" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       <FigureRoom
         stageRef={attachStage}
@@ -3090,12 +3540,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         figureStyle={figureStyle}
         figure={figure}
         size={size}
-        // Before the window has been measured the frame is still given the pane, so
-        // the very first layout is the one the reader will be looking at.
-        htmlView={htmlView ?? { width: fitWidth, height: fitHeight }}
-        onWheel={isHtml ? scrollHtml : undefined}
+        // Before the pane has a height, the frame still gets the contracted layout
+        // width and a zero-height window so its document can perform a first layout.
+        htmlView={htmlView ?? (previewPage === null
+          ? { width: htmlWidth, height: fitHeight }
+          : { width: fitWidth, height: fitHeight })}
         stageClass={{
-          hand: tool === 'select' && !isHtml,
+          hand: tool === 'select' && previewPage === null,
           panning,
           pannable,
         }}
@@ -3144,13 +3595,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             onPan={panBy}
             onPanStart={() => { setPanning(true) }}
             onPanEnd={() => { setPanning(false) }}
-            // A rendered document has its own scrollport, so a page drag is useful
-            // even when the outer stage itself has nothing to scroll.
-            pannable={isHtml || pannable}
-            // A page is viewed through a fixed window. Its own pinch belongs to the
-            // document or iframe; magnifying the paper underneath would detach the
-            // marks and the element boxes from the layout the reader is reading.
-            onZoomAt={isHtml ? undefined : pinchBy}
+            pannable={pannable}
+            // A local document uses the ordinary zoom machine while its page scrolls
+            // inside the frame. A proxied page owns both gestures in its own origin.
+            onZoomAt={previewPage === null ? pinchBy : undefined}
             onHover={lightElement}
             onPickMiss={() => { setStatus({ tone: 'info', text: t('toolElementMiss') }) }}
             onEdit={editMark}

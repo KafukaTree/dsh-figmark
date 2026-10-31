@@ -3,8 +3,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
 import {
-  anchorInDocument, buildRenderedDocument, elementBox, elementChoicesInDocument, loadFrameDocument,
-  eventOwnerOf, measureFrameContent,
+  anchorInDocument, buildPreviewDocument, buildRenderedDocument, currentSurfaceSelector, deckSlideOf, deckSlideSize, elementBox,
+  elementChoicesInDocument, loadFrameDocument, eventOwnerOf, measureFrameContent, prepareDeck,
+  showDeckSlide, surfaceIsInFront,
 } from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
@@ -37,8 +38,10 @@ describe('rendering a document for the frame', () => {
     expect(first?.tagName).toBe('META')
     expect(first?.getAttribute('http-equiv')).toBe('Content-Security-Policy')
     const policy = first?.getAttribute('content') ?? ''
-    // The page's own script runs; the boundary is outbound, not inbound.
-    expect(policy).toContain("script-src 'unsafe-inline'")
+    // Local HTML is arbitrary user markup. Its scripts must not run in the app
+    // origin, and the policy closes every way out of the document as a second layer.
+    expect(policy).toContain("script-src 'none'")
+    expect(policy).not.toContain('allow-scripts')
     expect(policy).toContain("connect-src 'none'")
     expect(policy).toContain("frame-src 'none'")
     // The document's own inline styles still paint it.
@@ -62,6 +65,15 @@ describe('rendering a document for the frame', () => {
     const doc = parse(source)
     expect(doc.head.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
     expect(doc.body.textContent).toBe('hi')
+  })
+
+  it('lets a preview run inline script but closes every network and frame escape', () => {
+    const doc = parse(buildPreviewDocument('<script>document.title = "ready"</script>'))
+    const policy = doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') ?? ''
+    expect(policy).toContain("script-src 'unsafe-inline'")
+    expect(policy).toContain("connect-src 'none'")
+    expect(policy).toContain("frame-src 'none'")
+    expect(policy).toContain("form-action 'none'")
   })
 })
 
@@ -138,11 +150,10 @@ describe('measuring a frame', () => {
     expect(measureFrameContent(element)).toBeUndefined()
   })
 
-  it('measures the document at the window it is already shown through', () => {
-    // The frame is a window, not a sheet: its size is the pane's, and the length it
-    // reports is the page's. Nothing is resized to measure, so a page written in
-    // `100vh` answers for the window the reader is looking at — which is the height a
-    // browser would give it too, and the reason this needs no collapsing pass.
+  it('measures the laid-out sheet without collapsing it first', () => {
+    // The frame is already at its contracted layout width. Measuring reads the
+    // content's actual width and height, including a wider explicit stage, without a
+    // second layout pass that would change the pixels the reader sees.
     const element = loaded()
     element.style.height = '700px'
     const root = defined(element.contentDocument?.documentElement)
@@ -163,6 +174,116 @@ describe('measuring a frame', () => {
   it('reports nothing while the document has laid out no height', () => {
     const element = loaded()
     expect(measureFrameContent(element)).toBeUndefined()
+  })
+})
+
+describe('turning a scriptless deck', () => {
+  function deckRoot(slides: string): HTMLElement {
+    return parse(buildRenderedDocument(`<html><head></head><body>${slides}</body></html>`)).documentElement
+  }
+
+  it('leaves a normal document alone', () => {
+    expect(prepareDeck(deckRoot('<main><p>one page</p></main>'))).toBeUndefined()
+    expect(prepareDeck(deckRoot('<section class="slide">only one</section>'))).toBeUndefined()
+  })
+
+  it('puts one slide in front and adds its page rules once', () => {
+    const root = deckRoot(
+      '<section class="slide" id="one">one</section><section class="slide" id="two">two</section>',
+    )
+    expect(prepareDeck(root)).toEqual({ count: 2, index: 0 })
+    expect(root.hasAttribute('data-figmark-deck')).toBe(true)
+    expect(root.querySelectorAll('style[data-figmark-deck-style]')).toHaveLength(1)
+    expect(root.querySelector('#one')?.hasAttribute('data-figmark-slide-current')).toBe(true)
+    expect(root.querySelector('#two')?.hasAttribute('data-figmark-slide-current')).toBe(false)
+    prepareDeck(root)
+    expect(root.querySelectorAll('style[data-figmark-deck-style]')).toHaveLength(1)
+  })
+
+  it('starts from a slide the document already marks as current', () => {
+    const current = deckRoot(
+      '<section class="slide">one</section><section class="slide current">two</section>',
+    )
+    expect(prepareDeck(current)?.index).toBe(1)
+    const active = deckRoot(
+      '<section class="slide">one</section><section class="slide active">two</section>',
+    )
+    expect(prepareDeck(active)?.index).toBe(1)
+    const aria = deckRoot(
+      '<section class="slide">one</section><section class="slide" aria-current="page">two</section>',
+    )
+    expect(prepareDeck(aria)?.index).toBe(1)
+  })
+
+  it('clamps a page turn and reports a document with no prepared slide', () => {
+    const root = deckRoot('<section class="slide">one</section><section class="slide">two</section>')
+    prepareDeck(root)
+    expect(showDeckSlide(root, 99)?.textContent).toBe('two')
+    expect(root.querySelector('[data-figmark-slide-current]')?.getAttribute('data-figmark-slide')).toBe('1')
+    expect(showDeckSlide(root, -1)?.textContent).toBe('one')
+    expect(showDeckSlide(deckRoot('<p>plain</p>'), 0)).toBeUndefined()
+  })
+
+  it('measures the slide in front, including a layout that only reports offsets', () => {
+    const root = deckRoot('<section class="slide">one</section><section class="slide">two</section>')
+    expect(deckSlideSize(root)).toBeUndefined()
+    prepareDeck(root)
+    const selected = defined(root.querySelector<HTMLElement>('[data-figmark-slide-current]'))
+    stubRect(selected, { left: 0, top: 0, width: 1920, height: 1080 })
+    expect(deckSlideSize(root)).toEqual({ width: 1920, height: 1080 })
+    stubRect(selected, { left: 0, top: 0, width: 0, height: 0 })
+    Object.defineProperties(selected, {
+      offsetWidth: { configurable: true, value: 1280 },
+      offsetHeight: { configurable: true, value: 720 },
+    })
+    expect(deckSlideSize(root)).toEqual({ width: 1280, height: 720 })
+    Object.defineProperties(selected, {
+      offsetWidth: { configurable: true, value: 0 },
+      offsetHeight: { configurable: true, value: 0 },
+    })
+    expect(deckSlideSize(root)).toBeUndefined()
+  })
+
+  it('finds the slide a selector belongs to, and refuses a broken one', () => {
+    const root = deckRoot(
+      '<section class="slide"><p id="first">one</p></section><section class="slide"><p id="second">two</p></section>',
+    )
+    prepareDeck(root)
+    expect(deckSlideOf(root, '#second')).toBe(1)
+    expect(deckSlideOf(root, '#missing')).toBeUndefined()
+    defined(root.querySelector('#second')).setAttribute('data-figmark-slide', 'not-a-number')
+    expect(deckSlideOf(root, '#second')).toBeUndefined()
+  })
+
+  it('names the logical slide currently in front', () => {
+    const root = deckRoot(
+      '<section class="slide" id="one">one</section><section class="slide current" id="two">two</section>',
+    )
+    stubRect(defined(root.querySelector('#two')), { left: 0, top: 0, width: 1024, height: 768 })
+    expect(currentSurfaceSelector(root)).toBe('#two')
+    stubRect(defined(root.querySelector('#two')), { left: 0, top: 0, width: 0, height: 0 })
+    expect(currentSurfaceSelector(root)).toBeUndefined()
+    expect(currentSurfaceSelector(deckRoot('<p>plain</p>'))).toBeUndefined()
+  })
+
+  it('compares a mark surface with the slide in front, and with visibility elsewhere', () => {
+    const root = deckRoot(
+      '<section class="slide current" id="one"><p id="front">one</p></section>'
+      + '<section class="slide" id="two"><p id="back">two</p></section>',
+    )
+    prepareDeck(root)
+    stubRect(defined(root.querySelector('#front')), { left: 0, top: 0, width: 10, height: 10 })
+    stubRect(defined(root.querySelector('#back')), { left: 0, top: 0, width: 10, height: 10 })
+    expect(surfaceIsInFront(root, '#one')).toBe(true)
+    expect(surfaceIsInFront(root, '#two')).toBe(false)
+    // A selector that no longer resolves is not evidence of being on another slide:
+    // the saved mark keeps its last recorded box rather than disappearing.
+    expect(surfaceIsInFront(root, '#missing')).toBe(true)
+    // Outside a prepared deck the browser's own lay-out is the answer.
+    const ordinary = deckRoot('<section id="shown"><p>shown</p></section>')
+    stubRect(defined(ordinary.querySelector('#shown')), { left: 0, top: 0, width: 10, height: 10 })
+    expect(surfaceIsInFront(ordinary, '#shown')).toBe(true)
+    expect(surfaceIsInFront(ordinary, '#missing')).toBe(true)
   })
 })
 

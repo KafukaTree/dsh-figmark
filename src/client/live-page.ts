@@ -14,6 +14,11 @@
  */
 import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
 import { LIVE_ROUTE, type LivePick } from '../shared/live'
+import {
+  SERVICE_DISCOVER_ROUTE,
+  type ServiceDiscoverAnswer,
+  type ServiceSummary,
+} from '../shared/services'
 import type { MarkAnchor } from '../shared/annotation'
 import { AnnotatorHostError } from './host-api'
 
@@ -27,6 +32,36 @@ export interface LivePage {
 
 /** The route one live operation is sent to. */
 const LIVE_URL = `${ROUTE_PREFIX}${LIVE_ROUTE}`
+const SERVICES_URL = `${ROUTE_PREFIX}${SERVICE_DISCOVER_ROUTE}`
+
+/** The names that mean a server on this machine. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/**
+ * Read the Host's service list without letting an unchecked object through.
+ * @param value - the answer's `services` field.
+ * @returns the validated entries, or undefined when any entry is malformed.
+ */
+function servicesOf(value: unknown): readonly ServiceSummary[] | undefined {
+  if (!Array.isArray(value) || value.length > 64) return undefined
+  const services: ServiceSummary[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return undefined
+    const fields = item as Record<string, unknown>
+    const url = fields['url']
+    const source = fields['source']
+    const title = fields['title']
+    if (typeof url !== 'string' || url === ''
+      || (source !== 'recent' && source !== 'workspace' && source !== 'common')
+      || (title !== undefined && typeof title !== 'string')) return undefined
+    services.push({
+      url,
+      source,
+      ...(title === undefined ? {} : { title }),
+    })
+  }
+  return services
+}
 
 /**
  * Whether a typed string already carries a scheme.
@@ -63,6 +98,23 @@ export function liveAddressOf(input: string): string | undefined {
 }
 
 /**
+ * Read the text as an address only when it names a loopback HTTP page.
+ *
+ * The service picker also uses its input as a title filter. `deck` is a valid URL
+ * after {@link liveAddressOf} supplies a scheme, but it is a query, not an address
+ * the reader asked to open. A loopback host is the unambiguous signal that the text
+ * came from the reader as an address.
+ * @param input - the text in the search field.
+ * @returns a normalized loopback HTTP address, or undefined for a query.
+ */
+export function loopbackAddressOf(input: string): string | undefined {
+  const address = liveAddressOf(input)
+  if (address === undefined) return undefined
+  const url = new URL(address)
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname) ? address : undefined
+}
+
+/**
  * Ask the Host to open one page and frame it.
  *
  * The old page is not closed first: an address that turns out not to be a loopback
@@ -86,14 +138,17 @@ export async function openLivePage(address: string): Promise<LivePage> {
 }
 
 /**
- * Stop standing in front of whichever page is open.
+ * Stop standing in front of one page.
  *
  * Called when the reader goes back to a file, and when the panel goes away. A proxy
  * nobody is framing is a port still answering on the reader's machine, so this runs
- * on the way out rather than being left to a reload.
+ * on the way out rather than being left to a reload. The expected proxy URL makes a
+ * late cleanup harmless: it cannot close a newer preview that replaced this one.
+ * @param expectedUrl - the proxy URL this caller owns, when it has one.
  */
-export async function closeLivePage(): Promise<void> {
-  const response = await fetch(LIVE_URL, {
+export async function closeLivePage(expectedUrl?: string): Promise<void> {
+  const suffix = expectedUrl === undefined ? '' : `?url=${encodeURIComponent(expectedUrl)}`
+  const response = await fetch(`${LIVE_URL}${suffix}`, {
     method: 'DELETE',
     headers: { [GUARD_HEADER]: '1' },
   })
@@ -104,22 +159,51 @@ export async function closeLivePage(): Promise<void> {
 }
 
 /**
+ * Ask the Host which bounded loopback candidates are answering.
+ * @param sessionId - the current session, whose workspace may name a port.
+ * @param recent - locally remembered loopback addresses.
+ * @returns reachable services in stable source order.
+ * @throws {AnnotatorHostError} when the Host refuses the scan.
+ */
+export async function discoverLiveServices(
+  sessionId: string,
+  recent: readonly string[],
+): Promise<readonly ServiceSummary[]> {
+  const response = await fetch(SERVICES_URL, {
+    method: 'POST',
+    headers: { [GUARD_HEADER]: '1', 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, recent }),
+  })
+  const body = await response.json() as Partial<ServiceDiscoverAnswer> & { readonly error?: string }
+  const services = servicesOf(body.services)
+  if (body.ok !== true || services === undefined) {
+    throw new AnnotatorHostError(
+      typeof body.error === 'string' && body.error !== ''
+        ? body.error
+        : `service discovery failed with status ${response.status}`,
+    )
+  }
+  return services
+}
+
+/**
  * Turn one reported pick into the anchor a mark carries.
  *
  * A mark is a locator: `tag`, `id`, `text` and the positional `selector` are how a
  * source reader finds the element again, and the box is where it was when the reader
- * pointed at it. The picker's `class` is deliberately dropped here — a page that
- * restyles itself renames classes, and a locator that named one would stop resolving.
- * It is used for the chip's label instead, which is read, not saved.
+ * pointed at it. The first few classes are kept only as a compact human signature in
+ * the record list; navigation continues to use the positional selector.
  * @param picked - what the page reported.
  * @returns the anchor to hang a mark on.
  */
 export function anchorOfPick(picked: LivePick): MarkAnchor {
+  const classes = picked.class?.trim().split(/\s+/u).filter(Boolean).slice(0, 3).join(' ')
   return {
     tag: picked.tag,
     bbox: picked.bbox,
     selector: picked.selector,
     ...(picked.id === undefined ? {} : { id: picked.id }),
+    ...(classes === undefined || classes === '' ? {} : { class: classes }),
     ...(picked.text === undefined ? {} : { text: picked.text }),
   }
 }

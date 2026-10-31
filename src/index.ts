@@ -74,10 +74,13 @@ export function apply(ctx: Context): void {
   const handlers = createHandlers({
     sessionCwd: (sessionId) => resolveSessionCwd(sessionId, sources()),
   })
-  ctx.effect(
-    () => webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: handlers.annotation }),
-    'dsh-figmark: annotation route',
-  )
+  ctx.effect(() => {
+    const unregister = webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: handlers.annotation })
+    return () => {
+      unregister()
+      handlers.close()
+    }
+  }, 'dsh-figmark: annotation route')
   ctx.effect(
     () => systemPrompt.section({
       name: GUIDANCE_NAME,

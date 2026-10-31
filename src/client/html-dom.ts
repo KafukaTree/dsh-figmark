@@ -1,18 +1,15 @@
 /**
- * Rendering an HTML document into an annotatable frame, and naming what a mark
- * landed on.
+ * DOM geometry and element naming shared by tree-shaped surfaces.
  *
- * The document is inlined into a same-origin frame that is not allowed to run
- * scripts and carries a policy that forbids every external reference, so what the
- * frame holds is inert markup the parent half can read — which is the whole point:
- * a mark on a document has to name the element it points at, and the source
- * reader can only act on a locator that resolves in the file.
+ * The product surface for HTML is now a live loopback service page, whose parent
+ * never reads the framed DOM. These helpers remain the pure tree implementation
+ * used by SVG and by tests that need deterministic same-origin DOM behavior; they
+ * are not a static HTML renderer registration or a live-proxy fallback.
  *
- * The frame is a window onto the document: one pane wide and one pane tall, with the
- * document scrolling inside it, so the page lays itself out the way it does in a
- * browser — its own media queries, its own `100vh`, its own sticky header. What it
- * reports is therefore what the reader sees, and the pixels it reports are the ones a
- * mark is recorded in.
+ * The frame is rendered at {@link RENDER_WIDTH} — or at the document's own width when
+ * it declares a wider stage — and its height is the pane it is shown through. The
+ * document scrolls inside that frame, so it remains one viewport instead of growing
+ * into a sheet as tall as all of its content.
  * @module dsh-figmark/client/html-dom
  */
 import type { FigureBox, MarkAnchor } from '../shared/annotation'
@@ -20,21 +17,41 @@ import { anchorTextOf } from './anchor-text'
 import { depthBelow, selectorFor } from './dom-path'
 import { anchorAtOffset, type ElementChoices } from './element-choice'
 import { isPaper, pickStack } from './pick'
+import { elementAt } from './spotlight'
+
+/**
+ * Width every document is first laid out at, in figure pixels.
+ *
+ * Fixed rather than the pane's width: a document reflows, so marks measured at one
+ * width would mean something else at another. Rendering at one width and scaling the
+ * result to the pane gives marks the same standing a PDF page has. A document that
+ * declares a wider stage may still widen the surface after its first layout; the
+ * important invariant is that its first layout and all element coordinates begin at
+ * 1024 CSS pixels.
+ */
+export const RENDER_WIDTH = 1024
 
 /**
  * Policy every rendered document carries.
  *
- * A document's own scripts are allowed to run, because a page that cannot run its
- * script is not the page: a deck never turns past its first slide, a player shows a
- * poster frame, a form does not answer. What is still shut is everything pointing out
- * of the file — no request leaves the machine, no nested frame, no form post — so the
- * script can only ever touch its own document. That boundary is the one that matters
- * here: the document is a local file the reader chose to look at, and inline media is
- * all a single-file page ever carries.
+ * The frame already refuses to run scripts; this keeps the document from reaching
+ * anywhere at all — no request leaves the machine, no nested frame, no form post —
+ * while still letting the document's own inline styles paint it.
  */
-const CONTENT_POLICY = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'"
-  + "; style-src 'unsafe-inline'"
-  + "; img-src data: blob:; font-src data: blob:; media-src data: blob:; connect-src 'none'"
+const CONTENT_POLICY = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'"
+  + "; img-src data:; font-src data:; media-src data:; connect-src 'none'"
+  + "; frame-src 'none'; form-action 'none'; base-uri 'none'"
+
+/**
+ * Policy for the read-only preview.
+ *
+ * A static document may be a self-contained deck whose inline script is what turns
+ * its slides. The preview therefore permits inline script, but no external script,
+ * stylesheet, font, media, frame, form action, or fetch/XHR connection. Inline script
+ * can still navigate its own opaque frame, but cannot reach the plugin.
+ */
+const PREVIEW_POLICY = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"
+  + "; img-src data:; font-src data:; media-src data: blob:; connect-src 'none'"
   + "; frame-src 'none'; form-action 'none'; base-uri 'none'"
 
 /**
@@ -46,6 +63,40 @@ const CONTENT_POLICY = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-e
  * no colours at all.
  */
 const THEME_ATTRIBUTE = 'data-theme'
+
+/** The class a slide deck conventionally uses for each page of the deck. */
+const DECK_SLIDE_SELECTOR = '.slide'
+
+/** Marks a local document whose slides this panel turns itself. */
+const DECK_ATTRIBUTE = 'data-figmark-deck'
+
+/** Identifies one slide inside a document this panel has prepared. */
+const SLIDE_ATTRIBUTE = 'data-figmark-slide'
+
+/** Identifies the one slide that is in front. */
+const CURRENT_SLIDE_ATTRIBUTE = 'data-figmark-slide-current'
+
+/** Marks the style element that makes the slide choice authoritative. */
+const DECK_STYLE_ATTRIBUTE = 'data-figmark-deck-style'
+
+/**
+ * The only page-turn a scriptless deck can perform.
+ *
+ * A deck normally starts with every slide in the same stacking context and lets its
+ * script switch the visible one. Scripts are deliberately off here, so its no-script
+ * fallback stacks every slide into one long sheet. Hiding all but one slide restores
+ * the page the author designed; the rules are `!important` because they have to win
+ * over both that fallback and whatever class the deck normally toggles.
+ */
+const DECK_STYLE = `
+html[${DECK_ATTRIBUTE}] [${SLIDE_ATTRIBUTE}]:not([${CURRENT_SLIDE_ATTRIBUTE}]) {
+  display: none !important;
+  visibility: hidden !important;
+}
+html[${DECK_ATTRIBUTE}] [${SLIDE_ATTRIBUTE}][${CURRENT_SLIDE_ATTRIBUTE}] {
+  visibility: visible !important;
+}
+`
 
 /** Elements that only wrap other content, so a mark on one names its container instead. */
 const WRAPPER_TAGS = [
@@ -65,6 +116,28 @@ const WRAPPER_TAGS = [
  * @returns a complete document for the frame.
  */
 export function buildRenderedDocument(source: string): string {
+  return prepareDocument(source, CONTENT_POLICY)
+}
+
+/**
+ * Prepare one self-contained document for the read-only preview.
+ *
+ * The preview follows the same base/refresh safety rules as the annotator's inert
+ * document, but allows inline scripts so a static deck can still turn its own pages.
+ * @param source - the file's own HTML text.
+ * @returns a complete document for the opaque preview frame.
+ */
+export function buildPreviewDocument(source: string): string {
+  return prepareDocument(source, PREVIEW_POLICY)
+}
+
+/**
+ * Remove document-level escapes and install one content policy.
+ * @param source - the file's own HTML text.
+ * @param contentPolicy - the CSP appropriate to the frame that will host it.
+ * @returns a complete document for that frame.
+ */
+function prepareDocument(source: string, contentPolicy: string): string {
   const parsed = new DOMParser().parseFromString(source, 'text/html')
   adoptDeclaredTheme(parsed)
   for (const element of parsed.querySelectorAll('base')) element.remove()
@@ -73,7 +146,7 @@ export function buildRenderedDocument(source: string): string {
   }
   const policy = parsed.createElement('meta')
   policy.setAttribute('http-equiv', 'Content-Security-Policy')
-  policy.setAttribute('content', CONTENT_POLICY)
+  policy.setAttribute('content', contentPolicy)
   // First in the head, so it governs every reference the document declares.
   parsed.head.prepend(policy)
   return `<!doctype html>${parsed.documentElement.outerHTML}`
@@ -138,6 +211,147 @@ export function loadFrameDocument(frame: HTMLIFrameElement | null, source: strin
   return frameDocument.documentElement
 }
 
+/** A deck this panel can turn without running the document's scripts. */
+export interface RenderedDeck {
+  /** Number of slides in the document. */
+  readonly count: number
+  /** Zero-based index of the slide initially in front. */
+  readonly index: number
+}
+
+/**
+ * Make the static fallback of a slide deck show one page at a time.
+ *
+ * The detection is intentionally narrow: repeated `.slide` elements are the one
+ * convention common enough to act on without guessing about arbitrary documents.
+ * Anything else keeps the ordinary scrolling-window behaviour. The deck's own
+ * `current`, `active`, or `aria-current` slide wins when it has one; otherwise the
+ * first slide is opened.
+ * @param root - the rendered document's root element.
+ * @returns the deck's slide count and initial slide, or undefined for a normal page.
+ */
+export function prepareDeck(root: HTMLElement): RenderedDeck | undefined {
+  const slides = [...root.querySelectorAll<HTMLElement>(DECK_SLIDE_SELECTOR)]
+  if (slides.length < 2) return undefined
+  const frameDocument = root.ownerDocument
+  root.setAttribute(DECK_ATTRIBUTE, '')
+  slides.forEach((slide, index) => {
+    slide.setAttribute(SLIDE_ATTRIBUTE, String(index))
+  })
+  const declared = slides.findIndex(slide => slide.classList.contains('current')
+    || slide.classList.contains('active')
+    || slide.getAttribute('aria-current') !== null)
+  const index = declared < 0 ? 0 : declared
+  if (frameDocument.head.querySelector(`style[${DECK_STYLE_ATTRIBUTE}]`) === null) {
+    const style = frameDocument.createElement('style')
+    style.setAttribute(DECK_STYLE_ATTRIBUTE, '')
+    style.textContent = DECK_STYLE
+    frameDocument.head.append(style)
+  }
+  showDeckSlide(root, index)
+  return { count: slides.length, index }
+}
+
+/**
+ * Put one prepared slide in front.
+ *
+ * The return value is the slide itself so the caller can measure the page it just
+ * opened. An index outside the deck is clamped, which makes keyboard repeats and a
+ * stale count harmless rather than blanking the preview.
+ * @param root - a document prepared by {@link prepareDeck}.
+ * @param index - the zero-based slide to show.
+ * @returns the slide now in front, or undefined when this is not a prepared deck.
+ */
+export function showDeckSlide(root: HTMLElement, index: number): HTMLElement | undefined {
+  const slides = [...root.querySelectorAll<HTMLElement>(`[${SLIDE_ATTRIBUTE}]`)]
+  if (slides.length === 0) return undefined
+  const selected = slides[Math.max(0, Math.min(slides.length - 1, index))]
+  /* v8 ignore next -- the clamp above always selects an existing slide. */
+  if (selected === undefined) return undefined
+  for (const slide of slides) slide.removeAttribute(CURRENT_SLIDE_ATTRIBUTE)
+  selected.setAttribute(CURRENT_SLIDE_ATTRIBUTE, '')
+  root.ownerDocument.defaultView?.scrollTo(0, 0)
+  return selected
+}
+
+/**
+ * The size of the prepared slide in front.
+ *
+ * A normal page is a scrollport and is measured by {@link measureFrameContent}. A
+ * deck is a sheet: its frame must take the slide's own size, or fitting it to the
+ * pane clips the middle of the slide instead of showing the whole page.
+ * @param root - a document prepared by {@link prepareDeck}.
+ * @returns the selected slide's laid-out size, or undefined while it has none.
+ */
+export function deckSlideSize(root: HTMLElement): FrameContentSize | undefined {
+  const selected = root.querySelector<HTMLElement>(`[${CURRENT_SLIDE_ATTRIBUTE}]`)
+  if (selected === null) return undefined
+  const rect = selected.getBoundingClientRect()
+  const width = rect.width > 0 ? rect.width : selected.offsetWidth
+  const height = rect.height > 0 ? rect.height : selected.offsetHeight
+  return width > 0 && height > 0 ? { width, height } : undefined
+}
+
+/**
+ * Which prepared slide contains one selector's element.
+ * @param root - a document prepared by {@link prepareDeck}.
+ * @param selector - the selector recorded on a mark.
+ * @returns the zero-based slide index, or undefined when the element is not in a slide.
+ */
+export function deckSlideOf(root: HTMLElement, selector: string): number | undefined {
+  const element = root.querySelector(selector)
+  const slide = element?.closest<HTMLElement>(`[${SLIDE_ATTRIBUTE}]`) ?? null
+  const raw = slide?.getAttribute(SLIDE_ATTRIBUTE)
+  if (raw === null || raw === undefined) return undefined
+  const index = Number.parseInt(raw, 10)
+  return Number.isNaN(index) ? undefined : index
+}
+
+/**
+ * Name the logical page currently in front.
+ *
+ * A static deck this panel prepared has its own marker, while a scriptless fallback
+ * may still use the author's conventional `current` or `active` class. Ordinary
+ * scrolling pages have no logical page and return undefined.
+ * @param root - the rendered document's root element.
+ * @returns a selector for the visible surface, or undefined for a normal page.
+ */
+export function currentSurfaceSelector(root: HTMLElement): string | undefined {
+  const prepared = root.querySelector<HTMLElement>(`[${CURRENT_SLIDE_ATTRIBUTE}]`)
+  const fallback = root.querySelector<HTMLElement>([
+    '.slide.current',
+    '.slide.active',
+    '.slide[aria-current="true"]',
+    '.slide[aria-current="page"]',
+  ].join(','))
+  const surface = prepared ?? fallback
+  if (surface === null) return undefined
+  const box = elementBox(surface)
+  if (box === undefined || box[2] === 0 || box[3] === 0) return undefined
+  const body = root.ownerDocument.body
+  return selectorFor(surface, body)
+}
+
+/**
+ * Whether a logical surface a mark names is the one in front.
+ *
+ * Prepared decks carry their own authoritative marker, so a selector can be compared
+ * to the current slide even before layout has measured the frame. Other documents fall
+ * back to the same visibility test the browser uses for an element.
+ * @param root - the rendered document's root element.
+ * @param selector - the selector stored on a mark's `surface` field.
+ * @returns true when that surface is being shown, or false when it is behind.
+ */
+export function surfaceIsInFront(root: HTMLElement, selector: string): boolean {
+  const element = elementAt({ root, selector })
+  const current = root.querySelector<HTMLElement>(`[${CURRENT_SLIDE_ATTRIBUTE}]`)
+  if (element !== undefined && current !== null) {
+    const slide = element.closest<HTMLElement>(`[${SLIDE_ATTRIBUTE}]`)
+    if (slide !== null) return slide === current
+  }
+  return element === undefined || elementBox(element) !== undefined
+}
+
 /** The size a rendered document lays out at, in pixels. */
 export interface FrameContentSize {
   /** Width of the document's own content. */
@@ -148,16 +362,6 @@ export interface FrameContentSize {
 
 /**
  * The size the document inside one frame lays out at.
- *
- * Read from the frame as it stands, because the frame *is* the viewport the document
- * believes it is on: the frame is one window tall and the document scrolls inside it,
- * the way a page scrolls in a browser. Nothing is written here, so what is measured is
- * what is shown — which is the whole point on a document that sizes itself against its
- * viewport: `100vh` means one windowful, and a sticky header sticks to the top of the
- * window rather than to the top of a sheet ten screens tall.
- *
- * (Collapsing the frame to measure, which is what this used to do, answered a question
- * nothing wanted any more: it measured a layout the reader never sees.)
  *
  * A document that has laid out nothing yet reports no height, which is not a size.
  * @param frame - the frame holding the document, if there is one.

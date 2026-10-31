@@ -768,17 +768,25 @@ describe('moving the whole view by hand', () => {
   it('does not start a pan when the fitted surface has nowhere to move', () => {
     const moved: [number, number][] = []
     let starts = 0
+    const onSelect = vi.fn()
     const { svg } = mount({
       tool: 'select',
       pannable: false,
       onPan: (dx, dy) => { moved.push([dx, dy]) },
       onPanStart: () => { starts += 1 },
+      onSelect,
     })
     pointer(svg, 'pointerdown', 10, 10)
     pointer(svg, 'pointermove', 80, 70)
     pointer(svg, 'pointerup', 80, 70)
     expect(moved).toEqual([])
     expect(starts).toBe(0)
+    // Leaving the fitted surface does not retain the pointer. The next press still
+    // reaches the surface instead of being rejected as a second pointer id.
+    pointer(svg, 'pointerdown', 20, 20)
+    pointer(svg, 'pointerup', 20, 20)
+    act(() => { svg.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(onSelect).toHaveBeenCalledWith(null)
   })
 })
 
@@ -1262,6 +1270,24 @@ describe('picking an element', () => {
     expect(onPickMiss).toHaveBeenCalledTimes(1)
   })
 
+  it('does not leave a missed element press owning the surface', () => {
+    // A miss creates no pending tap and may be released off the SVG, but the surface
+    // still used to keep the pointer id. The next press was then rejected as a second
+    // pointer, so element mode appeared dead until a blur reset it.
+    const onPickMiss = vi.fn()
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => undefined,
+      onPickMiss,
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    // Deliberately no pointerup: it happened outside the surface and never reached it.
+    pointer(surface.svg, 'pointerdown', 70, 60)
+    expect(onPickMiss).toHaveBeenCalledTimes(2)
+  })
+
   it('reaches the second of two marks naming the same element', () => {
     // The picker does not dedupe by selector, and deliberately so: the same curve can
     // be pointed at twice with a different sentence each time. Taking the first match
@@ -1317,27 +1343,43 @@ describe('picking an element', () => {
     expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<line id="line2d_10">')
   })
 
-  it('names an element without an id by the path that finds it', () => {
-    // A bare `<div>` names a hundred elements; the path names this one.
+  it('names an element without a title or text by its opening tag', () => {
+    // A selector is precise for the source reader, but a long CSS path floating over
+    // the page is not a name the person pointing at it recognizes.
     const placed: AnnotationMark = {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
       anchor: { tag: 'p', bbox: [40, 30, 120, 60], selector: 'body > section > p:nth-of-type(1)' },
     }
     mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
     expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent)
-      .toBe('body > section > p:nth-of-type(1)')
+      .toBe('<p>')
   })
 
-  it('keeps the ends of a path too long for the picture', () => {
+  it('keeps a long element name within the plate', () => {
+    const text = '这是页面正文里的一段很长但还可以当作名称的说明文字内容'
+    expect(text.length).toBeGreaterThan(26)
+    expect(text.length).toBeLessThanOrEqual(30)
     const placed: AnnotationMark = {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
-      anchor: { tag: 'div', bbox: [40, 30, 120, 60], selector: 'body > div:nth-of-type(3) > section:nth-of-type(2) > p' },
+      anchor: { tag: 'p', text, bbox: [40, 30, 120, 60], selector: 'body > section > p' },
     }
     mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
     const code = defined(mounted.svg.querySelector('[data-da-element-code]')).textContent ?? ''
+    expect(code).toBe(`${text.slice(0, 25)}…`)
+  })
+
+  it('elides the middle of an opening tag that is itself too long for the plate', () => {
+    const id = `line-${'x'.repeat(48)}`
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
+      anchor: { tag: 'line', id, bbox: [40, 30, 120, 60], selector: `#${id}` },
+    }
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
+    const code = defined(mounted.svg.querySelector('[data-da-element-code]')).textContent ?? ''
+    expect(code).toHaveLength(34)
     expect(code).toContain('…')
-    expect(code.startsWith('body > div')).toBe(true)
-    expect(code.endsWith('p')).toBe(true)
+    expect(code.startsWith('<line id="')).toBe(true)
+    expect(code.endsWith('">')).toBe(true)
   })
 
   it('names an element that offers neither an id nor a path by its tag', () => {

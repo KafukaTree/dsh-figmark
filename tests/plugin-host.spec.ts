@@ -36,12 +36,14 @@ function stubContext(options: { readonly omit?: readonly string[] } = {}): {
   readonly sections: StubSection[]
   readonly labels: string[]
   readonly disposed: string[]
+  readonly cleanups: (() => void)[]
 } {
   const omitted = new Set(options.omit ?? [])
   const routes: StubRoute[] = []
   const sections: StubSection[] = []
   const labels: string[] = []
   const disposed: string[] = []
+  const cleanups: (() => void)[] = []
   const services: Record<string, unknown> = {
     webServer: {
       register: (route: StubRoute) => { routes.push(route); return () => { disposed.push('route') } },
@@ -54,10 +56,12 @@ function stubContext(options: { readonly omit?: readonly string[] } = {}): {
     get: (key: string) => (omitted.has(key) ? undefined : services[key]),
     effect: (factory: () => (() => void) | undefined, label: string) => {
       labels.push(label)
-      return factory() ?? (() => {})
+      const cleanup = factory()
+      if (cleanup !== undefined) cleanups.push(cleanup)
+      return cleanup ?? (() => {})
     },
   } as unknown as Context
-  return { ctx, routes, sections, labels, disposed }
+  return { ctx, routes, sections, labels, disposed, cleanups }
 }
 
 describe('host entry', () => {
@@ -97,6 +101,13 @@ describe('host entry', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.disposed).toEqual([])
+  })
+
+  it('unregisters the route and closes any runtime when the composition is disposed', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    for (const cleanup of stub.cleanups) cleanup()
+    expect(stub.disposed).toEqual(['route', 'guidance', 'guidance'])
   })
 
   it('fails loudly when the composition provides no Web server', () => {

@@ -12,8 +12,8 @@
 import type { ReactNode } from 'react'
 import { MAX_SUMMARY_CHARS, markRows, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
-import { BoxIcon, GoalIcon, ListIcon, ToolIcon } from './icons'
-import { anchorWords } from '../../shared/mark-summary'
+import { BoxIcon, GoalIcon, ListIcon, ToolIcon, TrashIcon } from './icons'
+import { anchorDescriptor } from '../../shared/mark-summary'
 import type { RecordPlacement } from '../popover'
 import { recordStyle } from './placement'
 import { TOOL_COPY } from './tokens'
@@ -135,15 +135,16 @@ export function MarkList(props: MarkListProps): ReactNode {
       style={recordStyle(props.at)}>
       <div className="da-float-head">
         <span className="da-card-title">
-          <ListIcon />{t('marks')}
+          <ListIcon />
           {/* The panel already has a counter style, and a count that inherits the
               title's weight reads as part of the sentence — "标注清单 6" rather than a
               title with a count beside it. A class with no rule anywhere was the
               quietest kind of wrong: it looked deliberate in the markup. */}
           <span className="da-count">{props.marks.length}</span>
         </span>
-        <button type="button" className="da-btn da-btn-quiet" disabled={props.marks.length === 0}
-          onClick={() => { props.onClear() }}>{t('clear')}</button>
+        <button type="button" className="da-btn da-btn-quiet da-list-clear"
+          aria-label={t('clear')} title={t('clear')} disabled={props.marks.length === 0}
+          onClick={() => { props.onClear() }}><TrashIcon /></button>
         <button type="button" className="da-btn da-btn-quiet"
           aria-label={t('close')} title={t('close')}
           onClick={() => { props.onClose() }}>✕</button>
@@ -155,9 +156,13 @@ export function MarkList(props: MarkListProps): ReactNode {
             <div className="da-empty-title">{t('noMarks')}</div>
             <div className="da-empty-hint">{t('noMarksHint')}</div>
           </div>
-        ) : rows.map(({ mark, ordinal }) => (
-          <div className="da-mark" key={mark.id} data-selected={mark.id === props.selectedId}
-            onClick={() => { props.onReveal(mark) }}>
+        ) : rows.map(({ mark, ordinal }) => {
+          const note = mark.detail?.trim() ?? ''
+          const identity = mark.anchor === undefined ? '' : anchorDescriptor(mark.anchor)
+          const title = note !== '' ? note : identity !== '' ? identity : t(TOOL_COPY[mark.kind])
+          return (
+            <div className="da-mark" key={mark.id} data-selected={mark.id === props.selectedId}
+              onClick={() => { props.onReveal(mark) }}>
             {/* Two light strokes, one colour: the number and the shape are
                 both facts about this mark, so they are drawn the way the mark
                 itself is drawn — as a thin line in its colour, not as a slab
@@ -175,18 +180,18 @@ export function MarkList(props: MarkListProps): ReactNode {
               {ToolIcon(mark.kind)}
               {ordinal === undefined ? null : <span className="da-mark-num">{ordinal}</span>}
             </span>
-            <button type="button" className="da-mark-text"
-              onClick={(event) => { event.stopPropagation(); props.onReveal(mark) }}>
-              <span className="da-mark-title">
-                {mark.detail !== undefined && mark.detail.trim() !== '' ? mark.detail : t('emptyDetail')}
-              </span>
-              {/* The same words the message names the element with — a title or a
-                  short text, never an id: a row that printed `axes_1`'s whole label
-                  soup said less than the one line it had room for. */}
-              {mark.anchor === undefined || anchorWords(mark.anchor) === '' ? null : (
-                <span className="da-mark-meta">{anchorWords(mark.anchor)}</span>
-              )}
-            </button>
+              <button type="button" className="da-mark-text"
+                onClick={(event) => { event.stopPropagation(); props.onReveal(mark) }}>
+                <span className="da-mark-title" title={title}>{title}</span>
+              {/* A source-shaped identity first: two nearby cards are distinguishable
+                  before their comments are read. The positional selector remains the
+                  navigation link and the tooltip. */}
+                {note === '' || identity === '' ? null : (
+                  <span className="da-mark-meta" title={mark.anchor?.selector}>
+                    {identity}
+                  </span>
+                )}
+              </button>
             {/* The page at the end of the row, where a list puts the number that
                 is not part of the sentence. It used to share the second line
                 with the anchor, which stacked two short facts into a column of
@@ -196,15 +201,16 @@ export function MarkList(props: MarkListProps): ReactNode {
             )}
             {/* Only where this surface can walk the removal back; elsewhere the row
                 itself is the way to it. */}
-            {props.canRemove(mark) ? (
-              <button type="button" className="da-mark-del" aria-label={t('delete')}
-                title={t('delete')}
-                onClick={(event) => { event.stopPropagation(); props.onRemove(mark.id) }}>
-                <span className="da-mark-del-x" aria-hidden="true">✕</span>
-              </button>
-            ) : null}
-          </div>
-        ))}
+              {props.canRemove(mark) ? (
+                <button type="button" className="da-mark-del" aria-label={t('delete')}
+                  title={t('delete')}
+                  onClick={(event) => { event.stopPropagation(); props.onRemove(mark.id) }}>
+                  <span className="da-mark-del-x" aria-hidden="true">✕</span>
+                </button>
+              ) : null}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

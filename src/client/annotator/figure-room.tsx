@@ -17,7 +17,7 @@
  * @module dsh-figmark/client/annotator/figure-room
  */
 import type {
-  CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject, WheelEvent as ReactWheelEvent,
+  CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject,
 } from 'react'
 import type { Translate } from '../translate'
 import type { LoadedFigure } from './figure-source'
@@ -45,10 +45,10 @@ export interface FigureRoomProps {
   /** The surface's measurable size, or null before it is known. */
   readonly size: { readonly width: number; readonly height: number } | null
   /**
-   * The window a rendered document is shown through, in figure pixels.
+   * The window a rendered document occupies, in figure pixels.
    *
-   * A frame that has not been measured yet still gets the pane's own size, so the
-   * document's first layout is the pane's and not a placeholder's.
+   * A proxied service page gets the pane on both axes. The owner supplies the measured
+   * width as soon as the document has laid out.
    */
   readonly htmlView: { readonly width: number; readonly height: number }
   /**
@@ -59,24 +59,13 @@ export interface FigureRoomProps {
    * that page and not a copy of it.
    */
   readonly pageUrl?: string | undefined
-  /**
-   * Pointer travel that the page, rather than the panel, should take.
-   *
-   * The overlay takes every pointer event — that is what makes a click a mark — so a
-   * wheel over a rendered document has to be handed to the document. Nothing is
-   * forwarded on a figure: a picture does not scroll inside itself.
-   */
-  readonly onWheel: ((event: ReactWheelEvent<HTMLDivElement>) => void) | undefined
   /** The mark surface's own draggable area. */
   readonly stageClass: StageCursor
   /**
    * Whether the page under the overlay is the reader's to use.
    *
-   * A rendered document is a page, and a page that cannot be clicked, scrolled or
-   * played is a picture of a page. So while no mark-making tool is armed the frame
-   * takes its own pointer events and the overlay steps out of the way: a link follows,
-   * a button presses, a video plays. The marks stay on top of it — they are the one
-   * thing on this surface that is still the panel's.
+   * This is true only for a proxied live page. The page can take its own pointer events
+   * while no mark is selected, and the overlay steps out of the way.
    */
   readonly passing: boolean
   /** Right-click on the figure asks for its menu. */
@@ -118,10 +107,9 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
        the one tool whose drag has no other job; `data-panning` is the hand closed. */
     <div className="da-stage" ref={props.stageRef}
       onContextMenu={props.onContextMenu}
-      onWheel={props.onWheel}
-      /* A rendered document is a window: the page scrolls inside it, so the pane
-         around it must not scroll as well and give the reader two scrollbars. */
+      /* A served document is a window that owns its own scroll port. */
       data-html={figure?.kind === 'html' ? 'true' : undefined}
+      data-page={figure?.kind === 'html' && props.pageUrl !== undefined ? 'true' : undefined}
       data-pass={props.passing ? 'true' : undefined}
       data-hand={props.stageClass.hand ? 'true' : undefined}
       data-pannable={props.stageClass.pannable ? 'true' : undefined}
@@ -144,17 +132,8 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
                 }}
               />
             ) : figure?.kind === 'html' ? (
-              // Same origin, and the page's own scripts run: a document that cannot
-              // run its own script is not the document — a deck would show its first
-              // slide's markup and never turn a page, a player would show a poster.
-              // The policy the document is built with is what keeps that script from
-              // phoning home; the sandbox is what keeps it from navigating the panel.
-              //
-              // The frame is a browser window, not a sheet: the pane's width and the
-              // pane's height, with the document scrolling inside it. That is what
-              // lets a page lay itself out the way its author wrote it — `100vh` is a
-              // screenful, a sticky header sticks — and the frame reports its own
-              // layout pixels, which are the pixels a mark is recorded in.
+              // A proxied live page deliberately keeps its own scripts and resources
+              // for the lifetime of its one-page proxy.
               <iframe
                 // A frame pointed at another origin can never be written into again, so
                 // going back to the file remounts it rather than reusing a window the
@@ -164,7 +143,9 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
                 className="da-html"
                 title={t('htmlFrame')}
                 src={props.pageUrl}
-                sandbox="allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-presentation"
+                sandbox={props.pageUrl === undefined
+                  ? 'allow-same-origin'
+                  : 'allow-same-origin allow-scripts allow-forms allow-modals allow-popups allow-presentation'}
                 style={{ width: props.htmlView.width, height: props.htmlView.height }}
               />
             ) : null}

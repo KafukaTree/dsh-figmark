@@ -69,7 +69,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    off whichever corner the reader is working on. Dark rather than light: it sits
    on top of a white figure and a white panel, and a dark chip is what reads as
    "this is a control" instead of as one more piece of the picture. */
-.da-palette{position:absolute;z-index:13;display:flex;flex-direction:column;align-items:center;gap:2px;
+.da-palette{position:absolute;z-index:13;display:flex;flex-direction:column;align-items:center;
   padding:6px 5px;border-radius:16px;background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
   /* Dragging is direct manipulation and must not lag the pointer. The transition is
@@ -82,7 +82,9 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
      tools painted outside the clip — unclickable, and no scroll to reach them. The
      height it is given is the room on the side it grows towards (placementStyle in
      annotator/placement.ts); this turns that bound into reachable tiles, not a cut. */
-  overflow-y:auto;scrollbar-width:thin;box-sizing:border-box}
+  overflow:visible;box-sizing:border-box}
+.da-palette-scroll{display:flex;flex-direction:column;align-items:center;gap:2px;
+  width:100%;min-height:0;max-height:inherit;overflow-y:auto;scrollbar-width:thin}
 /* While it is being dragged the pointer is the grip, whatever it passes over. */
 .da-palette[data-dragging="true"]{z-index:14;opacity:.94;box-shadow:0 12px 32px rgba(10,14,24,.4),0 0 0 1px rgba(255,255,255,.14);
   transition:none}
@@ -119,6 +121,29 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-palette .da-tool[aria-pressed="true"]{background:rgba(255,255,255,.22);color:#fff}
 .da-palette .da-tool .da-tool-icon{height:auto}
 .da-palette .da-tool .da-tool-icon svg{width:17px;height:17px;stroke-width:1.7}
+/* Element mode is a compact floating chip beside the palette, not another row
+   squeezed into a 32px column. It opens toward the centre of the panel so the chip
+   never runs off the edge it is parked against. */
+.da-palette-hint{position:absolute;top:7px;display:flex;align-items:center;gap:7px;
+  height:28px;padding:0 9px;box-sizing:border-box;border-radius:9px;white-space:nowrap;
+  background:rgba(28,28,31,.94);color:rgba(255,255,255,.94);
+  box-shadow:0 6px 18px rgba(10,14,24,.24),0 0 0 1px rgba(255,255,255,.09);
+  font-size:10.5px;line-height:1;letter-spacing:.01em}
+.da-palette[data-guide="right"] .da-palette-hint{left:calc(100% + 8px)}
+.da-palette[data-guide="left"] .da-palette-hint{right:calc(100% + 8px)}
+.da-palette-hint-mode{font-weight:650;color:#fff}
+.da-palette-hint-depth{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 2px;
+  border-radius:6px;background:rgba(255,255,255,.1)}
+.da-palette-hint-step{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+  padding:0;border:0;border-radius:4px;background:transparent;color:rgba(255,255,255,.72);
+  font:10px/1 var(--dsw-font-family-mono,ui-monospace,monospace);cursor:pointer}
+.da-palette-hint-step:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff}
+.da-palette-hint-step:disabled{opacity:.28;cursor:default}
+.da-palette-hint-depth>span{min-width:24px;text-align:center;color:#fff;
+  font:10px/1 var(--dsw-font-family-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
+.da-palette-hint-keys{padding-left:1px;color:rgba(255,255,255,.55);
+  font:9.5px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  white-space:pre}
 
 /* --- the size rail ------------------------------------------------------- */
 /* A vertical rail along the left edge of the figure: how heavy the pen is, and how
@@ -308,14 +333,14 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    as more of the figure. The exported picture still gets its white fill: that one is
    looked at by someone who has no board behind it. */
 .da-paper{background:transparent}
-/* A rendered document is a window, not a sheet: the page scrolls inside its frame, and
-   the pane around it must not scroll as well — two scrollbars for one surface is two
-   answers to the same gesture. The overlay above the frame is moved with the page by
-   the same offset, and the window is what clips it, so a mark scrolled out of sight
-   leaves with the element it was drawn on instead of floating over the panel. */
+/* A rendered document is a window: a local frame scrolls inside itself and a proxied
+   page owns its own scrollport. The stage must not produce a second scrollbar for the
+   same gesture. */
 .da-stage[data-html]{overflow:hidden}
-.da-stage[data-html] .da-paper{overflow:hidden;border-radius:4px;background:var(--dsw-alias-bg-base,#fff)}
-.da-stage[data-html] .da-figure-frame{border-radius:0;box-shadow:none}
+.da-stage[data-html] .da-paper{border-radius:4px;background:var(--dsw-alias-bg-base,#fff)}
+.da-stage[data-page]{overflow:hidden}
+.da-stage[data-page] .da-paper{overflow:hidden}
+.da-stage[data-page] .da-figure-frame{border-radius:0;box-shadow:none}
 /* The figure is the sheet: white, rounded, lifted off the panel. This is the element
    that carries the paper look, which is why the margin can be see-through without the
    drawing losing its edge. */
@@ -331,17 +356,6 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    too, and not just the stage, because the overlay covers the figure and would
    otherwise keep saying what it said before the press. */
 .da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
-/* Element mode belongs to the tool that armed it, not to a banner over the document.
-   The compact footer lives inside the floating palette: it cannot collide with page
-   content, it travels when the palette is moved, and the state word is the only copy
-   the reader needs once the mode is already selected. */
-.da-palette-hint{display:flex;flex-direction:column;align-items:center;gap:1px;
-  width:100%;box-sizing:border-box;margin-top:1px;padding:4px 1px 1px;
-  border-top:1px solid rgba(255,255,255,.12);white-space:nowrap;pointer-events:none}
-.da-palette-hint-mode{font-size:9px;font-weight:700;line-height:11px;color:#a9c8ff}
-.da-palette-hint-depth{font-size:10px;font-weight:700;line-height:12px;
-  color:#fff;font-variant-numeric:tabular-nums}
-.da-palette-hint-keys{font-size:8px;line-height:10px;letter-spacing:.02em;color:rgba(255,255,255,.48)}
 /* The rendered document takes the figure's place, and while no mark-making tool is
    armed it is the reader's own page: it takes the pointer events, so a link follows,
    a button presses, a video plays. A mark on it keeps its own hit area (the overlay
@@ -362,31 +376,49 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   font:11px/16px var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-live-hit{position:absolute;z-index:1;box-sizing:border-box;border:1.5px solid var(--da-accent,#176df2);
   border-radius:3px;background:var(--da-accent-soft,rgba(23,109,242,.12));pointer-events:none}
-/* The address of what is framed, on a strip above it — a browser puts one there for
-   the same reason: the page under it may be any page, and where it came from is the
-   one thing the reader cannot see from the page itself. It is a strip rather than a
-   floating pill because it must never sit on the page it describes: a page is the
-   reader's own, and covering a corner of it is exactly the "not the page" this
-   replaced. Only HTML previews get one.
+/* The address of what is framed. At rest it is one corner icon; opening it restores
+   a strip above the page so the full path, badge and back action never cover the
+   document they describe. Only HTML previews get one.
    The field is one control, not a bare input: a document or globe icon says what kind
    of location is on screen, a quiet badge says the file format or that this is a
    proxied page, and focus rings the whole field instead of suddenly drawing a blue
    outline around a previously borderless text box. */
-.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:6px 12px 7px;
-  background:linear-gradient(180deg,var(--dsw-alias-bg-layer-1,rgba(127,127,127,.045)),
-    color-mix(in srgb,var(--dsw-alias-bg-layer-1,#fff) 45%,transparent));
-  border-bottom:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.16))}
+.da-live-bar{position:absolute;z-index:14;top:10px;
+  left:8px;display:flex;align-items:center;
+  box-sizing:border-box;width:32px;max-width:calc(100% - 16px);padding:0;
+  background:transparent;border:0;pointer-events:none;
+  transform-origin:left top;
+  transition:width .18s cubic-bezier(.2,.75,.25,1)}
+.da-live-bar[data-open="true"]{width:min(540px,max(32px,calc(100% - 70px)));gap:6px}
 .da-live-bar[hidden]{display:none}
-.da-live-field{display:flex;flex:0 1 360px;align-items:center;gap:6px;min-width:0;width:min(360px,100%);
+.da-live-field{display:flex;flex:1 1 auto;align-items:center;gap:6px;min-width:0;width:100%;
   height:31px;box-sizing:border-box;padding:0 6px 0 9px;
   border:0.5px solid color-mix(in srgb,var(--dsw-alias-border-l2,#bbb) 72%,transparent);
   border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 88%,transparent);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.4),0 1px 2px rgba(20,40,80,.035);
+  pointer-events:auto;transform-origin:left center;
   transition:border-color .15s ease,box-shadow .15s ease,background .15s ease,width .15s ease}
 .da-live-field:hover{border-color:var(--dsw-alias-border-l3,rgba(127,127,127,.46))}
 .da-live-field:focus-within{border-color:var(--da-accent,#176df2);
-  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14));background:var(--dsw-alias-bg-base,#fff);
-  flex-basis:min(480px,100%)}
+  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14));background:var(--dsw-alias-bg-base,#fff)}
+.da-live-field[data-open="false"]{flex:0 0 32px;width:32px;height:32px;padding:0;
+  justify-content:center;border-radius:9px;cursor:pointer;
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 84%,transparent);
+  box-shadow:0 1px 2px rgba(20,40,80,.08),0 0 0 0.5px var(--dsw-alias-border-l2,rgba(127,127,127,.2));
+  backdrop-filter:blur(8px)}
+.da-live-field[data-open="false"]:hover{border-color:var(--dsw-alias-border-l3,rgba(127,127,127,.42));
+  background:var(--dsw-alias-bg-base,#fff)}
+.da-live-field[data-open="false"]:focus-within{flex-basis:32px;
+  border-color:var(--da-accent,#176df2);
+  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14)),0 1px 3px rgba(20,40,80,.1)}
+.da-live-toggle{display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:24px;height:24px;padding:0;border:0;border-radius:7px;background:transparent;
+  color:inherit;cursor:pointer}
+.da-live-toggle:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
+.da-live-toggle:focus-visible{outline:1.5px solid var(--da-accent,#176df2);outline-offset:1px}
+.da-live-field[data-open="false"] .da-live-toggle{width:30px;height:30px;border-radius:9px}
+.da-live-bar[data-open="true"] .da-live-field{animation:da-live-field-in .18s cubic-bezier(.2,.75,.25,1)}
+@keyframes da-live-field-in{from{opacity:.55;transform:scaleX(.72)}to{opacity:1;transform:scaleX(1)}}
 .da-live-icon{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.55;
   stroke-linecap:round;stroke-linejoin:round;color:var(--dsw-alias-label-tertiary,inherit)}
 .da-live-field[data-live="true"] .da-live-icon{color:var(--da-accent,#176df2)}
@@ -406,6 +438,24 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
 .da-live-field[data-live="true"] .da-live-badge{background:var(--da-accent-soft,rgba(23,109,242,.14));
   color:var(--da-accent,#176df2)}
+/* A scriptless deck turns one page at a time. The pager is deliberately a small chip
+   in the opposite corner from the closed address control: it leaves the slide itself
+   clear and still gives the reader a visible way to turn a page. */
+.da-deck-pager{position:absolute;z-index:14;top:10px;right:10px;display:flex;align-items:center;
+  gap:1px;height:32px;padding:2px;box-sizing:border-box;border-radius:10px;
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 92%,transparent);
+  box-shadow:0 1px 3px rgba(20,40,80,.1),0 0 0 0.5px var(--dsw-alias-border-l2,rgba(127,127,127,.24));
+  color:var(--dsw-alias-label-secondary,inherit);
+  font:10.5px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  font-variant-numeric:tabular-nums}
+.da-deck-pager>span{min-width:43px;text-align:center;white-space:nowrap;padding:0 2px}
+.da-deck-pager>button{display:flex;align-items:center;justify-content:center;width:25px;height:26px;
+  padding:0;border:0;border-radius:7px;background:transparent;color:inherit;cursor:pointer}
+.da-deck-pager>button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12))}
+.da-deck-pager>button:focus-visible{outline:1.5px solid var(--da-accent,#176df2);outline-offset:0}
+.da-deck-pager>button:disabled{opacity:.28;cursor:default}
+.da-deck-pager svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
 .da-live-note{flex:0 0 auto;font-size:11.5px;color:var(--da-quiet,#6b6f75);white-space:nowrap}
 .da-live-note[hidden]{display:none}
 /* Going back to the file is the reader's way out, so it says so in words: a glyph
@@ -417,7 +467,12 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-live-back[hidden]{display:none}
 /* An address that did not open says why under the field, in the reader's own words:
    the Host's refusal is the most specific thing anyone can say about it. */
-.da-live-error{flex:0 0 auto;padding:0 14px 7px;font-size:12px;color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
+.da-live-error{position:absolute;z-index:15;top:48px;
+  left:8px;max-width:min(500px,calc(100% - 24px));
+  box-sizing:border-box;padding:6px 9px;border-radius:8px;font-size:11.5px;
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 94%,transparent);
+  box-shadow:0 3px 12px rgba(20,40,80,.12);
+  color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
 .da-live-error[hidden]{display:none}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-tool="select"]{cursor:inherit}
@@ -560,16 +615,21 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    them with it. Both offsets are written inline — one real, one auto — because a
    card that opens upwards and one that opens downwards differ in which side is
    fixed, and a card with no height of its own stretches if both are set. */
-.da-float-record{width:min(330px,calc(100% - 22px))}
-.da-float-list{max-height:min(58%,400px)}
+.da-float-record{width:min(340px,calc(100% - 22px))}
+.da-float-list{width:min(350px,calc(100% - 22px));gap:5px;padding:8px 9px;
+  max-height:min(58%,400px);border-radius:11px}
 .da-float-list .da-marks{overflow:auto;min-height:0}
+.da-list-clear{width:24px;height:24px;padding:0;border-radius:7px}
+.da-list-clear svg{width:13px;height:13px}
 /* The detail field is placed by arithmetic, not by the stylesheet: its left and top
    come from the mark it belongs to. It is a pill rather than a card — no head, no
    border between the field and the panel — so writing about a mark costs one line
    over the figure instead of a box that covers it. */
-.da-float-detail{width:300px;max-width:calc(100% - 16px);gap:0;padding:4px;border-radius:22px;
+.da-float-detail{width:286px;max-width:calc(100% - 16px);gap:0;padding:3px;border-radius:20px;
   flex-direction:row;align-items:flex-end;
-  box-shadow:0 8px 26px rgba(20,40,80,.2),0 0 0 1px rgba(20,40,80,.04)}
+  background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#fff) 94%,transparent);
+  box-shadow:0 5px 18px rgba(20,40,80,.14),0 0 0 0.5px rgba(20,40,80,.06);
+  backdrop-filter:blur(10px)}
 .da-float .da-comment{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;background:transparent;
   color:inherit;font:inherit;font-size:13px;line-height:1.55;padding:7px 10px;resize:none;
   /* One line until the sentence needs more, then as many as it takes: the pill is a
@@ -620,7 +680,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    sentence as the thing you press, and the sentence's own shape and anchor under it
    in smaller type. A borderless run of text would read as one paragraph of marks. */
 .da-marks{display:flex;flex-direction:column;gap:3px;min-height:0}
-.da-mark{display:flex;align-items:center;gap:9px;padding:5px 4px;border-radius:7px;
+.da-mark{display:flex;align-items:center;gap:8px;padding:5px 4px;border-radius:7px;
   border:0.5px solid transparent;min-width:0}
 .da-mark:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.08))}
 .da-mark[data-selected="true"]{border-color:var(--da-accent,#176df2);
@@ -642,9 +702,9 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   color:var(--dsw-alias-label-secondary,currentColor)}
 .da-mark-text{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;
   padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
-.da-mark-title{display:block;font-size:12px;line-height:1.35;overflow:hidden;
+.da-mark-title{display:block;font-size:11.5px;line-height:1.35;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
-.da-mark-meta{display:block;font-size:10px;line-height:1.35;
+.da-mark-meta{display:block;font-size:9.5px;line-height:1.35;
   color:var(--da-quiet,var(--dsw-alias-label-tertiary,currentColor));overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap}
 /* The page number sits at the row's end rather than under its sentence: it is not
@@ -707,6 +767,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    would cover the file/page badge and the way back to the file, so it starts below
    the bar — and below the refusal line when one is showing under that bar. */
 .da-root[data-html="true"]>.da-toasts{top:58px}
+.da-root[data-html="true"][data-live-open="false"]>.da-toasts{top:14px}
 .da-root[data-html="true"][data-live-error="true"]>.da-toasts{top:86px}
 /* A card is as wide as its sentence, up to the stack's width: a two-word note should
    not look like a dialog. Its place in the column comes from the inline transform and
@@ -994,6 +1055,89 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
    with data-message-attachments, this rule stops matching rather than breaking
    anything: the large picture simply returns and the card keeps working. */
 [data-message-attachments]:has(~ * .da-card:not([data-static])){display:none}
+
+/* --- local service browser ------------------------------------------------ */
+.da-services{--da-service-ink:var(--dsw-alias-label-primary,#1b1d20);
+  --da-service-muted:var(--dsw-alias-label-tertiary,#787d85);
+  --da-service-line:color-mix(in srgb,var(--dsw-alias-border-l2,#c9cbd0) 66%,transparent);
+  box-sizing:border-box;height:100%;overflow:auto;padding:clamp(26px,7vh,64px) 22px 40px;
+  color:var(--da-service-ink);
+  background:
+    radial-gradient(circle at 18% 0%,color-mix(in srgb,#4c8a63 8%,transparent),transparent 36%),
+    linear-gradient(180deg,color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 76%,transparent),transparent 48%)}
+.da-services-head,.da-service-search,.da-services-toolbar,.da-service-list,.da-services-error{
+  width:min(480px,100%);margin-left:auto;margin-right:auto}
+.da-services-head{padding:0 4px 18px}
+.da-services-kicker{display:block;margin-bottom:8px;color:var(--da-service-muted);
+  font:9px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  letter-spacing:.16em}
+.da-services-head h1{margin:0;font-size:clamp(25px,4.5vw,34px);font-weight:680;line-height:1.08;letter-spacing:-.035em}
+.da-services-head p{max-width:410px;margin:9px 0 0;color:var(--da-service-muted);font-size:12px;line-height:1.65}
+.da-service-search{display:flex;align-items:center;gap:9px;box-sizing:border-box;height:48px;padding:0 7px 0 14px;
+  border:1px solid var(--da-service-line);border-radius:15px;
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 92%,transparent);
+  box-shadow:0 10px 30px rgba(25,36,30,.06),inset 0 1px 0 rgba(255,255,255,.7);
+  transition:border-color .16s ease,box-shadow .16s ease}
+.da-service-search:focus-within{border-color:color-mix(in srgb,#4c8a63 70%,var(--da-service-line));
+  box-shadow:0 0 0 3px rgba(76,138,99,.12),0 12px 34px rgba(25,36,30,.08)}
+.da-service-search>svg{width:17px;height:17px;flex:0 0 auto;fill:none;stroke:var(--da-service-muted);stroke-width:1.5;
+  stroke-linecap:round}
+.da-service-search input{flex:1 1 auto;min-width:0;border:0;outline:0;background:transparent;color:inherit;
+  font:12px/1.3 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-service-search input::placeholder{color:var(--da-service-muted)}
+.da-service-search button{flex:0 0 auto;height:34px;padding:0 14px;border:0;border-radius:10px;
+  background:#245f3c;color:#fff;font:600 11px/1 inherit;cursor:pointer}
+.da-service-search button:hover:not(:disabled){background:#1d5033}
+.da-service-search button:focus-visible{outline:2px solid rgba(76,138,99,.45);outline-offset:2px}
+.da-service-search button:disabled{opacity:.42;cursor:default}
+.da-services-toolbar{display:flex;align-items:center;justify-content:space-between;padding:20px 4px 9px;
+  color:var(--da-service-muted);font:10px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  letter-spacing:.08em;text-transform:uppercase}
+.da-services-toolbar button{padding:5px 0 5px 10px;border:0;background:none;color:inherit;font:inherit;
+  letter-spacing:inherit;text-transform:inherit;cursor:pointer}
+.da-services-toolbar button:hover:not(:disabled){color:var(--da-service-ink)}
+.da-services-toolbar button:disabled{opacity:.5;cursor:default}
+.da-services-error{margin-top:10px;margin-bottom:0;padding:9px 11px;border-radius:10px;
+  background:color-mix(in srgb,var(--dsw-alias-label-error,#b42318) 8%,transparent);
+  color:var(--dsw-alias-label-error,#b42318);font-size:11.5px;line-height:1.45}
+.da-service-list{display:flex;flex-direction:column;gap:7px}
+.da-service-row{appearance:none;display:flex;align-items:center;gap:11px;box-sizing:border-box;
+  width:100%;min-height:59px;padding:10px 13px;border:1px solid var(--da-service-line);border-radius:14px;
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 76%,transparent);color:inherit;
+  text-align:left;cursor:pointer;
+  animation:da-service-rise .28s cubic-bezier(.2,.75,.25,1) both;
+  transition:transform .16s ease,border-color .16s ease,background .16s ease}
+.da-service-row:nth-child(2){animation-delay:.035s}.da-service-row:nth-child(3){animation-delay:.07s}
+.da-service-row:nth-child(4){animation-delay:.105s}.da-service-row:nth-child(n+5){animation-delay:.14s}
+.da-service-row:hover{transform:translateY(-1px);border-color:color-mix(in srgb,#4c8a63 36%,var(--da-service-line));
+  background:color-mix(in srgb,#4c8a63 5%,var(--dsw-alias-bg-base,#fff))}
+.da-service-row:focus-visible{outline:2px solid rgba(76,138,99,.5);outline-offset:2px}
+.da-service-signal{width:7px;height:7px;flex:0 0 auto;border-radius:50%;background:#4c9a67;
+  box-shadow:0 0 0 4px rgba(76,154,103,.11)}
+.da-service-copy{display:flex;flex:1 1 auto;flex-direction:column;gap:5px;min-width:0}
+.da-service-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:590;line-height:1.15}
+.da-service-copy>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--da-service-muted);
+  font:10.5px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-service-copy b{color:color-mix(in srgb,var(--da-service-ink) 76%,var(--da-service-muted));font-weight:540}
+.da-service-row>svg{width:14px;height:14px;flex:0 0 auto;fill:none;stroke:var(--da-service-muted);stroke-width:1.5;
+  stroke-linecap:round;stroke-linejoin:round}
+.da-services-empty{display:flex;flex-direction:column;align-items:center;gap:7px;padding:34px 16px;border:1px dashed var(--da-service-line);
+  border-radius:16px;color:var(--da-service-muted);text-align:center;font-size:11.5px;line-height:1.5}
+.da-services-empty strong{color:var(--da-service-ink);font-size:13px;font-weight:600}
+.da-service-live{height:100%;min-height:0}
+.da-service-live>.da-root{height:100%}
+@keyframes da-service-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+/* A static HTML file gets a window, not the annotator. Its scripts may run inside an
+   opaque sandbox, but no annotation surface, sidecar, or capture layer is mounted. */
+.da-html-preview{height:100%;min-height:0}
+.da-html-preview-frame{display:block;flex:1 1 auto;width:100%;height:100%;min-height:0;border:0;
+  background:var(--dsw-alias-bg-document-preview,#fff)}
+.da-html-preview-empty{display:grid;place-items:center;height:100%;padding:24px;box-sizing:border-box;
+  color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor));
+  font-size:12px;text-align:center}
+@media (prefers-reduced-motion:reduce){
+  .da-live-bar,.da-live-field,.da-service-row{transition:none;animation:none}
+}
 `
 
 /**

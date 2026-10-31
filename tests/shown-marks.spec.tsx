@@ -58,6 +58,35 @@ describe('reading which marks the page is showing', () => {
     expect(shown.away.size).toBe(0)
   })
 
+  it('takes a non-document root without inventing a page turn', () => {
+    const fragment = document.createDocumentFragment()
+    const shown = readShownMarks(fragment, [{ ...DRAWN, surface: '#missing' }])
+    expect(shown.boxes.size).toBe(0)
+    // The surface still has to be measured before its absence can be called a turn.
+    expect(shown.away.size).toBe(0)
+  })
+
+  it('reads a document from its root element as well as from the document', () => {
+    const { cover } = deck()
+    stubRect(cover, { left: 1, top: 2, width: 3, height: 4 })
+    const shown = readShownMarks(document.documentElement, [onElement('e1', '#cover')])
+    expect(shown.boxes.get('e1')).toEqual([1, 2, 3, 4])
+  })
+
+  it('hides a mark on the surface in front while that surface has no layout yet', () => {
+    document.body.innerHTML = '<section id="s1" data-figmark-slide="0" '
+      + 'data-figmark-slide-current><p>cover</p></section>'
+    const shown = readShownMarks(document, [{
+      ...DRAWN,
+      id: 'region',
+      kind: 'rect',
+      surface: '#s1',
+    }])
+    // The selector identifies the page in front, but its zero box means it has not
+    // been painted. Drawing the mark at its old coordinates would put it on screen.
+    expect([...shown.away]).toEqual(['region'])
+  })
+
   it('puts the marks of the slide in front on the page and the others away', () => {
     const { cover } = deck()
     stubRect(cover, { left: 5, top: 6, width: 7, height: 8 })

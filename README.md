@@ -4,7 +4,7 @@ DeepSeek Harness 插件：在右侧栏的文档预览里**直接圈画批注**�
 
 <p align="center"><img src="./icon.svg" width="72" height="72" alt="dsh-figmark icon"></p>
 
-> annotate a figure (image / SVG / PDF / HTML) in the right-sidebar preview and hand the marks to the agent as one user message. The original file is never modified: marks live in a sidecar next to it.
+> annotate a figure (image / SVG / PDF) or a locally served web page in the right-sidebar preview and hand the marks to the agent as one user message. Original files are never modified: file marks live in a sidecar next to them.
 
 ## 它解决的问题
 
@@ -23,7 +23,8 @@ dsh-figmark 把三样东西一起交给智能体：
 | 图片 | `png` `jpg` `jpeg` `gif` `webp` `bmp` `ico` | ✅ |
 | SVG | `svg` | ✅ 内联渲染，支持图元锚定 |
 | PDF | `pdf` | ✅ 整份文档一份批注：逐页画、一次保存，写回**原生 PDF 注释对象** |
-| HTML | `html` `htm` | ✅ 固定 1024px 渲染面 + 元素锚定（只写批注文件，不产出标注图） |
+| 静态 HTML | `html` `htm` | ✅ 只读预览，可运行自包含页面脚本；不加载、不写入标注侧车 |
+| 本机网页 | `http://localhost` / `127.0.0.1` / `[::1]` | ✅ 在右侧栏「本机网页」里发现并打开；真实脚本、路由、媒体与元素锚定可用 |
 | Markdown | `md` `markdown` | ✅ **编辑**而非批注：改动作为 unified diff 交给智能体，插件不落盘 |
 | Office | `doc` `docx` `ppt` `pptx` `xls` `xlsx` | ⏳ 待接入，仍由内置预览器打开 |
 
@@ -65,7 +66,7 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 
 ## 用法
 
-打开右栏的图片 / SVG / PDF / HTML，底部就是全部控件：
+打开右栏的图片 / SVG / PDF，或在「本机网页」里打开正在运行的 loopback 服务，底部就是全部控件：
 
 - **左侧浮条**：选择（鼠标指针）· 箭头 · 框选 · 圈选 · 手绘 · 单点。除「选择」外每个工具画完**自动回到选择**并选中刚画的那个，说明框随之弹出、光标已经在里面。
 - **底部浮条**：标注样式（颜色折叠面板）· 撤销 / 重做 · 总体目标 · 标注清单 · 发送给智能体 / 发送到对话框。
@@ -77,15 +78,16 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - 双击图上的标注 = 打开它的说明框；`Esc` 取消选中；`Delete`/`Backspace` 删除选中标注。
 - 编辑会**自动保存**（防抖 600ms），刷新、重开都不丢；只有点「发送」成功后才清空面板并删掉磁盘上的批注文件。
 
-### HTML：预览就是页面
+### 本机网页：只标注正在运行的服务
 
-打开 HTML 时，预览不是一张截图，而是一个真的页面：
+静态 `.html` 文件使用 Figmark 的只读预览：没有标注工具，也不读写侧车。自包含页面里的内联脚本可以运行，外部子资源、`fetch`/XHR、表单与嵌套帧被 CSP 拒绝；opaque sandbox 隔离了 DSH 应用源，但脚本仍可导航自己的预览 frame，因此预览只应打开可信 HTML。要标注正在开发的动态页面，先在右侧栏打开「本机网页」：
 
-- **浏览态**（「选择」工具）指针归页面：链接、按钮、表单、动画、音视频、页面自己的滚动都是原生的，和你在这个浏览器里打开它没差别。
-- 选了「元素」或任意绘图工具，指针才归面板：悬停给出元素名（`div.relative`），点击落一条元素标注；箭头 / 框 / 圈 / 手绘照旧叠在上面画。回到「选择」就把页面还给页面。
-- 舞台上沿那一条是地址栏：平时显示文件名，聚焦时显示地址，Enter 前往，Esc 退回文件。
-- 本地文件用同源框架载入、脚本照常执行，面板直接读它的 DOM 取名；`localhost:5173` 这类网址不能同源，改由一个只监听 `127.0.0.1`、一次一页的代理提供，页面里注入一小段 picker，靠 `postMessage` 把悬停、落点、滚动报回来——面板从不读那个页面的 DOM，所以它的脚本、媒体与跳转都照旧。
-- 网址上的批注没有侧车文件可写：地址就是消息里那份路径，元素路径照旧交付。
+- 扫描范围是有界的：最近打开过的地址、当前 workspace `package.json` 脚本里显式写出的端口，以及一小张常见开发端口表；不会扫 `1–65535`，也不会执行任意启动命令。
+- 选一项或输入 `localhost:5173` 后，Host 建立一次一页的 `127.0.0.1` live proxy。页面保持自己的路由、脚本、动画、表单、音视频和滚动；同源重定向继续留在 proxy 上，页面级 CSP meta 不会把 picker 拦掉。元素模式通过注入的 picker 取得悬停元素、层级与实时包围盒。
+- 代理在应用之外打开源；元素锚定只通过 `postMessage` 回到面板，父页不读取运行页 DOM。关闭页面或面板时监听器与连接一起销毁。
+- 元素模式下，悬停会预览将选中的元素，`↑↓` 调整层级，点击落一条可回源定位的元素标注；箭头 / 框 / 圈 / 手绘仍叠在页面上。标注清单会显示 `<tag#id.class = "text">`，点击后先让页面定位，页面确认可见才选中。
+- 左上地址抽屉默认收成一个图标，展开只从原位置向右生长；Enter 打开地址，Esc 恢复当前页地址，打开或返回后自动收起。
+- 服务页的批注没有侧车文件可写：页面地址就是消息里的路径，元素 `selector` 是回源定位的主锚点。
 
 ### 两个发送按钮
 
@@ -105,7 +107,8 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 | `<名>.<后缀>.annot.json` | 批注文档：图信息（绝对路径、sha256，PDF 另有 `pageCount`）、`marks[]`（kind/color/points/rotation/page/anchor/detail）、总体目标 |
 | `<名>.<后缀>.annotated.png` | 图片/SVG：原图 + 批注的合成图（最高 2× 分辨率），作为图片附件随消息发送 |
 | `<名>.<后缀>.annotated.pdf` | PDF：原件副本，批注写成**原生 PDF 注释对象**，作为附件随消息发送 |
-| —— | HTML：只有批注文件（浏览器无法把渲染好的文档栅格化）；定位靠 `anchor.selector` |
+| —— | 本机服务页：**不留文件**；消息携带页面地址与每条 `anchor.selector` |
+| —— | 静态 HTML：只读预览，不产生任何文件或消息 |
 | —— | Markdown：**不留任何文件**，改动以 unified diff 进会话 |
 
 名字**带着被批注文件自己的扩展名**（`fig1.svg` → `fig1.svg.annot.json`），所以同目录下同主名不同后缀的两份文件各有各的批注、绝不会互相读错。
@@ -128,7 +131,8 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - **栅格图没有元素锚定**：PNG/JPEG 只有像素坐标，锚定信息仅 SVG 与 HTML 有。
 - **PDF 只写原生注释对象**：不做「把标记烧进页面内容」的副本。好处是标记在阅读器里仍可编辑删除；代价是只看页面内容、不渲染注释的流程看不到标记（那种场合用消息里附的每页图片）。
 - **PDF 一次一页**，无文本层、无连续滚动。
-- **HTML 预览会执行页面脚本**：这是它的本意——预览要能点、能播、能滚。代价与边界都写在框架的策略里：本地文件的 CSP 放行内联脚本与样式、`data:`/`blob:` 的图与音视频，`connect-src`/`frame-src`/`form-action` 全关，所以页面出不了网；代价是**相对引用的同目录资源仍取不到**（`./x.js`、`./img/a.png` 不会随页面一起进来）。网址只代理 loopback 的 `http:`，其它地址拒开并给出可读原因。
+- **本机网页必须有正在运行的 loopback 服务**：静态文件只有 Figmark 的只读预览；Figmark 不替用户扫描全部端口，也不执行任意 workspace 命令。
+- **服务页标注没有快照附件**：浏览器不能把任意运行页稳定栅格化成一份可交付副本，所以消息只带页面地址、元素 selector、坐标与文字。
 - **Markdown 的差异基线是「你打开时的那一版」**，不是 git HEAD。
 - **Markdown 没有语法高亮**：编辑框是原生 `<textarea>`（插件因此至今零新增运行时依赖）。
 - **Office 尚未接入。**

@@ -35,11 +35,40 @@ describe('the annotator stylesheet', () => {
     // 14px covers the file/page badge and the back action; reserve the bar, and the
     // extra refusal line when one is present.
     expect(STYLES).toContain('.da-root[data-html="true"]>.da-toasts{top:58px}')
+    expect(STYLES).toContain('.da-root[data-html="true"][data-live-open="false"]>.da-toasts{top:14px}')
     expect(STYLES).toContain('.da-root[data-html="true"][data-live-error="true"]>.da-toasts{top:86px}')
   })
 
-  it('puts the element-mode legend inside the palette rather than over the page', () => {
-    expect(STYLES).toContain('.da-palette-hint{display:flex;flex-direction:column;')
+  it('opens the address drawer in place, growing only to the right', () => {
+    // The compact icon and the full field share one absolute origin. Opening changes
+    // width, not flow position: the field grows rightward from the icon the reader
+    // pressed instead of jumping to the top of the pane.
+    const bar = /\.da-live-bar\{[^}]*\}/u.exec(STYLES)?.[0] ?? ''
+    expect(bar).toContain('position:absolute')
+    expect(bar).toContain('top:10px')
+    expect(bar).toContain('left:8px')
+    expect(bar).toContain('transform-origin:left top')
+    expect(STYLES).toContain('.da-live-bar[data-open="true"]{width:min(540px,max(32px,calc(100% - 70px)))')
+    expect(STYLES).not.toMatch(/\.da-live-bar\[data-open="true"\]\{[^}]*left:/u)
+  })
+
+  it('keeps the HTML-only address drawer hidden on every other document', () => {
+    // The drawer is always absolutely positioned. `hidden` must still win so the
+    // HTML-only control never floats over a PDF or SVG preview.
+    const absolute = STYLES.indexOf('.da-live-bar{position:absolute')
+    const hidden = STYLES.indexOf('.da-live-bar[hidden]{display:none}', absolute)
+    expect(absolute).toBeGreaterThan(-1)
+    expect(hidden).toBeGreaterThan(absolute)
+  })
+
+  it('opens the element-mode legend from the palette toward the panel centre', () => {
+    expect(STYLES).toContain('.da-palette-hint{position:absolute')
+    expect(STYLES).toContain('white-space:nowrap')
+    expect(STYLES).toContain('.da-palette[data-guide="right"] .da-palette-hint{left:calc(100% + 8px)}')
+    expect(STYLES).toContain('.da-palette[data-guide="left"] .da-palette-hint{right:calc(100% + 8px)}')
+    expect(STYLES).toContain('.da-palette-hint-step{display:inline-flex')
+    expect(STYLES.match(/(?:^|\n)\.da-palette-hint\{/gu)).toHaveLength(1)
+    expect(STYLES).not.toContain('.da-palette-hint{display:flex;flex-direction:column;')
     expect(STYLES).not.toContain('.da-pick-guide{position:absolute;')
   })
 

@@ -42,6 +42,32 @@ const TARGET = createServer((req, res) => {
     res.end(`<html><body>${'x'.repeat(9 * 1024 * 1024)}</body></html>`)
     return
   }
+  if (path === '/meta-csp') {
+    res.writeHead(200, { 'content-type': 'text/html' })
+    res.end([
+      '<!doctype html><html><head>',
+      '<meta content="kept" name="description">',
+      '<meta HTTP-EQUIV = "Content-Security-Policy" content="script-src \'none\'">',
+      '<meta http-equiv=content-security-policy-report-only content="default-src \'none\'">',
+      '</head><body><h1>live</h1></body></html>',
+    ].join(''))
+    return
+  }
+  if (path === '/redirect') {
+    res.writeHead(302, { location: `${targetOrigin}/page?from=redirect` })
+    res.end()
+    return
+  }
+  if (path === '/redirect-away') {
+    res.writeHead(302, { location: 'http://example.com/elsewhere' })
+    res.end()
+    return
+  }
+  if (path === '/redirect-broken') {
+    res.writeHead(302, { location: 'http://[' })
+    res.end()
+    return
+  }
   if (path === '/echo') {
     const parts: Buffer[] = []
     req.on('data', (chunk: Buffer) => { parts.push(chunk) })
@@ -145,6 +171,37 @@ describe('serving a page', () => {
     const proxy = await proxyOn('/no-body')
     const body = await (await fetch(proxy.url)).text()
     expect(body.endsWith('<script src="/__dsh_figmark_picker.js"></script>')).toBe(true)
+  })
+
+  it('keeps a same-origin redirect on the proxy so the picker survives it', async () => {
+    const proxy = await proxyOn('/redirect')
+    const response = await fetch(proxy.url, { redirect: 'manual' })
+    expect(response.status).toBe(302)
+    const location = response.headers.get('location')
+    expect(location).toBe(`${new URL(proxy.url).origin}/page?from=redirect`)
+    const body = await (await fetch(location ?? '')).text()
+    expect(body).toContain('<script src="/__dsh_figmark_picker.js"></script>')
+  })
+
+  it('leaves a redirect to another origin for the page to follow', async () => {
+    const proxy = await proxyOn('/redirect-away')
+    const response = await fetch(proxy.url, { redirect: 'manual' })
+    expect(response.headers.get('location')).toBe('http://example.com/elsewhere')
+  })
+
+  it('does not turn a malformed redirect into an exception', async () => {
+    const proxy = await proxyOn('/redirect-broken')
+    const response = await fetch(proxy.url, { redirect: 'manual' })
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe('http://[')
+  })
+
+  it('removes document-level CSP meta tags before injecting the picker', async () => {
+    const proxy = await proxyOn('/meta-csp')
+    const body = await (await fetch(proxy.url)).text()
+    expect(body).toContain('<meta content="kept" name="description">')
+    expect(body).not.toMatch(/http-equiv\s*=\s*["']?content-security-policy/iu)
+    expect(body).toContain('<script src="/__dsh_figmark_picker.js"></script>')
   })
 
   it('serves the picker itself from the proxy', async () => {

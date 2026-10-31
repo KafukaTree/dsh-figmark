@@ -13,6 +13,7 @@ import type { RemoteLike } from './host-actions'
 import { fallbackTranslate } from './locales'
 import type { SessionsLike } from './session'
 import type { Translate, TranslateVars } from './translate'
+import type { LivePage } from './live-page'
 
 /**
  * The translator vocabulary, re-exported here because this module is where the
@@ -214,6 +215,16 @@ export interface AnnotatorBodyProps {
   readonly onModeChange?: ((mode: 'view' | 'annotate') => void) | undefined
   /** The tab's `dsh-resource://file/…` address. */
   readonly resourceAddress?: string | undefined
+  /**
+   * A loopback service page this body opens directly.
+   *
+   * Static HTML files use the shell's own preview. The annotator only claims a page
+   * that is already being served, so its body receives the proxy address here rather
+   * than reading bytes from a file address that does not exist.
+   */
+  readonly livePage?: LivePage | undefined
+  /** Leaves a service page that was opened without a file behind it. */
+  readonly onLiveBack?: (() => void) | undefined
   /**
    * Each mark's number in the whole document, for a body that shows one page of it.
    *

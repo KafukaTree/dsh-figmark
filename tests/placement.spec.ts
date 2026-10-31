@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_PALETTE, boxesOverlap, clampedSpot, draggedSpot, placementStyle, recordStyle, settledSpot,
-  separatedSpot, spotOfBox,
+  paletteRoomBeforeBar, separatedSpot, spotOfBox,
 } from '../src/client/annotator/placement'
 
 describe('whether a parked strip covers the figure', () => {
@@ -27,6 +27,43 @@ describe('whether a parked strip covers the figure', () => {
   it('does not mistake an unmeasured box for an overlap', () => {
     expect(boxesOverlap({ left: 0, top: 0, width: 0, height: 0 }, figure, 8)).toBe(false)
     expect(boxesOverlap(figure, { left: 0, top: 0, width: 10, height: 0 }, 8)).toBe(false)
+  })
+})
+
+describe('keeping a tall strip above a lower one in a short panel', () => {
+  const bar = { left: 100, top: 252, width: 382, height: 36 }
+
+  it('bounds the tool strip where its lane reaches the bar', () => {
+    expect(paletteRoomBeforeBar(
+      { left: 343, top: 122, width: 42, height: 280 },
+      bar,
+    )).toBe(122)
+    expect(paletteRoomBeforeBar(
+      { left: 343, top: 230, width: 42, height: 40 },
+      bar,
+    )).toBe(32)
+  })
+
+  it('does not spend the bar lane on a strip beside it or already below it', () => {
+    expect(paletteRoomBeforeBar(
+      { left: 520, top: 122, width: 42, height: 280 },
+      bar,
+    )).toBeUndefined()
+    expect(paletteRoomBeforeBar(
+      { left: 343, top: 252, width: 42, height: 40 },
+      bar,
+    )).toBeUndefined()
+  })
+
+  it('treats an unmeasured box as having no vertical bound', () => {
+    expect(paletteRoomBeforeBar(
+      { left: 343, top: 122, width: 0, height: 280 },
+      bar,
+    )).toBeUndefined()
+    expect(paletteRoomBeforeBar(
+      { left: 343, top: 122, width: 42, height: 280 },
+      { left: 100, top: 252, width: 382, height: 0 },
+    )).toBeUndefined()
   })
 })
 

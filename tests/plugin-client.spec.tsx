@@ -3,11 +3,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
-import { BODY_ID, HTML_BODY_ID, MD_BODY_ID, PDF_BODY_ID, apply, inject, name } from '../src/client/index'
+import {
+  BODY_ID, HTML_BODY_ID, MD_BODY_ID, PDF_BODY_ID, SERVICE_BODY_ID, SERVICE_KIND, apply, inject, name,
+} from '../src/client/index'
+import { HtmlPreviewBody } from '../src/client/html-preview'
 import { RULE_ID, annotationRule } from '../src/client/annotation-rule'
 import { AnnotationCard } from '../src/client/annotation-card'
 import { MarkdownBody } from '../src/client/markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from '../src/client/locales'
+import { ServiceBrowser } from '../src/client/ServiceBrowser'
 import { missingService } from '../src/missing-service'
 import { defined } from './dom'
 
@@ -28,6 +32,20 @@ interface StubSlot {
   readonly component: unknown
 }
 
+/** One right-sidebar tab definition the stub registry was asked to add. */
+interface StubSidebarTab {
+  readonly id: string
+  readonly kind: string
+  readonly priority?: string
+  readonly title: () => string
+  readonly guide?: readonly {
+    readonly id: string
+    readonly order?: number
+    readonly title: () => string
+    readonly description?: () => string
+  }[]
+}
+
 /** A client context stub that records the three registrations. */
 function stubContext(options: {
   readonly omit?: readonly string[]
@@ -39,6 +57,7 @@ function stubContext(options: {
   readonly ctx: Context
   readonly definitions: StubDefinition[]
   readonly slots: StubSlot[]
+  readonly sidebarTabs: StubSidebarTab[]
   readonly dictionaries: Record<string, unknown>[]
   readonly injectedKeys: string[]
   readonly disposed: string[]
@@ -49,6 +68,7 @@ function stubContext(options: {
   const omitted = new Set(options.omit ?? [])
   const definitions: StubDefinition[] = []
   const slots: StubSlot[] = []
+  const sidebarTabs: StubSidebarTab[] = []
   const dictionaries: Record<string, unknown>[] = []
   const injectedKeys: string[] = []
   const disposed: string[] = []
@@ -69,6 +89,12 @@ function stubContext(options: {
       register: (definition: StubDefinition) => {
         definitions.push(definition)
         return () => { disposed.push('renderer') }
+      },
+    },
+    sidebarRightTabs: {
+      register: (definition: StubSidebarTab) => {
+        sidebarTabs.push(definition)
+        return () => { disposed.push('sidebar-tab') }
       },
     },
     slots: {
@@ -108,16 +134,18 @@ function stubContext(options: {
     if (last === undefined) throw new Error('nothing was injected')
     last.run()
   }
-  return { ctx, definitions, slots, dictionaries, injectedKeys, disposed, rules, effects, redeclare }
+  return {
+    ctx, definitions, slots, sidebarTabs, dictionaries, injectedKeys, disposed, rules, effects, redeclare,
+  }
 }
 
 describe('browser entry', () => {
-  it('is named after the package and declares its three hard services', () => {
+  it('is named after the package and declares its four hard services', () => {
     expect(name).toBe('dsh-figmark-client')
-    expect(inject).toEqual(['slots', 'locale', 'documentPreviews'])
+    expect(inject).toEqual(['slots', 'locale', 'documentPreviews', 'sidebarRightTabs'])
   })
 
-  it('registers both dictionaries, every renderer kind, and every body', () => {
+  it('registers both dictionaries, the file renderer kinds, and every body', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.dictionaries).toEqual([{ namespace: NAMESPACE, zh, en }])
@@ -151,8 +179,8 @@ describe('browser entry', () => {
       loading: 'text-pages',
       wrap: true,
     })
-    // A rendered document is annotatable at the same rank as the rest: the shell's
-    // read-only HTML preview stays available as the fallback in the dropdown.
+    // HTML keeps its inline preview without entering the annotator: only a page
+    // already served over loopback gets the tools, through the local-pages tab.
     expect(stub.definitions[3]).toMatchObject({
       id: HTML_BODY_ID,
       extensions: ['html', 'htm'],
@@ -160,36 +188,63 @@ describe('browser entry', () => {
       loading: 'bytes-complete',
       wrap: false,
     })
+    expect(stub.definitions[3]?.binaryExtensions).toBeUndefined()
     expect(stub.injectedKeys).toEqual([
-      'sidebar.right.tab.document', 'sidebar.right.tab.document',
-      'sidebar.right.tab.document', 'sidebar.right.tab.document',
+      'sidebar.right.tab.document',
+      'sidebar.right.pane.tab',
+      'sidebar.right.tab.document',
+      'sidebar.right.tab.document',
+      'sidebar.right.tab.document',
       'conversation.user.text.node',
       'conversation.input.dock',
     ])
-    expect(stub.slots[2]?.options).toMatchObject({
+    expect(stub.slots[3]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: MD_BODY_ID,
       locale: NAMESPACE,
     })
-    expect(stub.slots[2]?.component).toBe(MarkdownBody)
+    expect(stub.slots[3]?.component).toBe(MarkdownBody)
     expect(stub.slots[0]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: BODY_ID,
       locale: NAMESPACE,
     })
     expect(stub.slots[0]?.component).toBe(AnnotatorBody)
-    expect(stub.slots[1]?.options).toMatchObject({
+    expect(stub.slots[2]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: PDF_BODY_ID,
       locale: NAMESPACE,
     })
-    expect(stub.slots[1]?.component).toBe(LazyPdfBody)
-    expect(stub.slots[3]?.options).toMatchObject({
+    expect(stub.slots[2]?.component).toBe(LazyPdfBody)
+    expect(stub.slots[1]?.options).toMatchObject({
+      name: 'sidebar.right.pane.tab',
+      key: SERVICE_BODY_ID,
+      locale: NAMESPACE,
+    })
+    expect(stub.slots[1]?.component).toBe(ServiceBrowser)
+    expect(stub.slots[4]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
       key: HTML_BODY_ID,
       locale: NAMESPACE,
     })
-    expect(stub.slots[3]?.component).toBe(AnnotatorBody)
+    expect(stub.slots[4]?.component).toBe(HtmlPreviewBody)
+  })
+
+  it('offers local pages as a first-class right-sidebar tab', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    expect(stub.sidebarTabs).toHaveLength(1)
+    expect(stub.sidebarTabs[0]).toMatchObject({
+      id: SERVICE_BODY_ID,
+      kind: SERVICE_KIND,
+      priority: 'extension',
+    })
+    expect(stub.sidebarTabs[0]?.title()).toBe(`${NAMESPACE}.serviceTitle`)
+    const guide = defined(stub.sidebarTabs[0]?.guide?.[0])
+    expect(guide.id).toBe('services')
+    expect(guide.order).toBe(20)
+    expect(guide.title()).toBe(`${NAMESPACE}.serviceTitle`)
+    expect(guide.description?.()).toBe(`${NAMESPACE}.serviceHint`)
   })
 
   it('lets the registry ask for each renderer title in the active locale', () => {
@@ -208,17 +263,38 @@ describe('browser entry', () => {
     const factory = stub.slots[0]?.options['inject']
     expect(typeof factory).toBe('function')
     const injected = (factory as (id: unknown) => unknown)(123)
-    expect(injected).toEqual({ sessions, sessionId: '123', localeId: 'en-US' })
+    expect(injected).toEqual({
+      sessions, sessionId: '123', localeId: 'en-US', conversation: undefined, remote: undefined,
+    })
+    const htmlFactory = stub.slots[4]?.options['inject'] as (id: unknown) => unknown
+    expect(htmlFactory(123)).toEqual({
+      sessions: undefined,
+      conversation: undefined,
+      sessionId: '123',
+      localeId: 'en-US',
+      remote: undefined,
+    })
   })
 
-  it('hands the HTML body its session face and nothing it does not read', () => {
+  it('uses the product language for the static preview when the shell reports none', () => {
+    const stub = stubContext()
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => unknown
+    expect(factory('s1')).toMatchObject({ localeId: 'zh' })
+  })
+
+  it('hands the service browser the same delivery faces as every annotator body', () => {
     const sessions = { scope: () => undefined }
     const stub = stubContext({ sessions })
     apply(stub.ctx)
-    const factory = stub.slots[3]?.options['inject'] as (id: unknown) => unknown
-    // One surface, one marks file: the body reads, writes and delivers it itself,
-    // so it needs neither the upload service nor a page owner's seat.
-    expect(factory('s1')).toEqual({ sessions, sessionId: 's1', localeId: 'zh' })
+    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => unknown
+    expect(factory('s1')).toEqual({
+      sessions,
+      conversation: undefined,
+      remote: undefined,
+      sessionId: 's1',
+      localeId: 'zh',
+    })
   })
 
   it('hands the Markdown editor the upload service a long difference needs', () => {
@@ -226,21 +302,34 @@ describe('browser entry', () => {
     const fileUpload = { upload: () => undefined }
     const stub = stubContext({ sessions, fileUpload })
     apply(stub.ctx)
-    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => unknown
+    const factory = stub.slots[3]?.options['inject'] as (id: unknown) => unknown
     expect(factory(7)).toEqual({ sessions, fileUpload, sessionId: '7', localeId: 'zh' })
   })
 
   it('leaves the Markdown editor without an upload service the composition omits', () => {
     const stub = stubContext()
     apply(stub.ctx)
-    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => { fileUpload: unknown }
+    const factory = stub.slots[3]?.options['inject'] as (id: unknown) => { fileUpload: unknown }
     expect(factory('s1').fileUpload).toBeUndefined()
+  })
+
+  it('hands the static HTML preview no annotation or delivery seat', () => {
+    const stub = stubContext({ localeId: 'en-US' })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => unknown
+    expect(factory('s1')).toEqual({
+      sessions: undefined,
+      conversation: undefined,
+      remote: undefined,
+      sessionId: 's1',
+      localeId: 'en-US',
+    })
   })
 
   it('hands the PDF chunk the seats it cannot import from this bundle', () => {
     const stub = stubContext()
     apply(stub.ctx)
-    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { AnnotatorBody: unknown; seat: Record<string, unknown> }
+    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => { AnnotatorBody: unknown; seat: Record<string, unknown> }
     // The chunk cannot import its own package's entry bundle, so the component it
     // mounts per page, and the seat that reads, writes and delivers the document,
     // arrive through the injection rather than through an import.
@@ -262,7 +351,7 @@ describe('browser entry', () => {
     }
     const stub = stubContext({ localeId: 'en-GB', sessions })
     apply(stub.ctx)
-    const factory = stub.slots[1]?.options['inject'] as (id: unknown) => { seat: { send: (input: unknown, saved: unknown, pages: unknown) => Promise<readonly string[]> } }
+    const factory = stub.slots[2]?.options['inject'] as (id: unknown) => { seat: { send: (input: unknown, saved: unknown, pages: unknown) => Promise<readonly string[]> } }
     const seat = factory('s1').seat
     const document_ = {
       figure: { address: 'a', path: '/w/report.pdf', mediaType: 'application/pdf', sha256: 'a'.repeat(64), pageCount: 2 },
@@ -300,7 +389,7 @@ describe('browser entry', () => {
     // The rule is what finds the block in a message; the slot entry is what draws it,
     // keyed by the same id so the transcript's entry key resolves to this renderer.
     expect(stub.rules).toEqual([annotationRule])
-    const card = stub.slots[4]
+    const card = stub.slots[5]
     expect(card?.options).toMatchObject({
       name: 'conversation.user.text.node',
       key: RULE_ID,
@@ -328,7 +417,7 @@ describe('browser entry', () => {
   it('hands the card the Session it draws in and nothing it does not read', () => {
     const stub = stubContext({ localeId: 'en-US' })
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => {
       readonly sessionId: string
       readonly localeId: string
       readonly open: (path: string) => void
@@ -342,13 +431,13 @@ describe('browser entry', () => {
   it('hands the parked card the session it sits above, and nothing to open', () => {
     const stub = stubContext({ localeId: 'en-US' })
     apply(stub.ctx)
-    expect(stub.slots[5]?.options).toMatchObject({
+    expect(stub.slots[6]?.options).toMatchObject({
       name: 'conversation.input.dock',
       id: RULE_ID,
       order: 40,
       locale: NAMESPACE,
     })
-    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => {
+    const factory = stub.slots[6]?.options['inject'] as (id: unknown) => {
       readonly sessionId: string
       readonly localeId: string
     }
@@ -362,7 +451,7 @@ describe('browser entry', () => {
     // the one its dictionaries are written in first.
     const quiet = stubContext()
     apply(quiet.ctx)
-    const zhFactory = quiet.slots[5]?.options['inject'] as (id: unknown) => { readonly localeId: string }
+    const zhFactory = quiet.slots[6]?.options['inject'] as (id: unknown) => { readonly localeId: string }
     expect(zhFactory('s7').localeId).toBe('zh')
   })
 
@@ -370,7 +459,7 @@ describe('browser entry', () => {
     const opened: string[] = []
     const stub = stubContext({ sidebarRight: { openResource: (address: string) => { opened.push(address) } } })
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
     factory('s1').open('/w/fig.svg')
     // A Session-relative address, because that is the only kind the document panel
     // resolves: an absolute one is refused before it can be placed in a column.
@@ -380,7 +469,7 @@ describe('browser entry', () => {
   it('shows the card without a Sidebar rather than failing the bubble', () => {
     const stub = stubContext()
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
     // Nothing to click through to is not an error: the card still says what it is.
     expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
   })
@@ -389,7 +478,7 @@ describe('browser entry', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const stub = stubContext({ sidebarRight: { openResource: () => { throw new Error('no mounted session') } } })
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    const factory = stub.slots[5]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
     expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
@@ -402,11 +491,12 @@ describe('browser entry', () => {
     // simply stays text, which is what a message with no rule renders as.
     expect(stub.rules).toEqual([])
     // The parked card is not the transcript's: it sits in the composer's dock, so
-    // the four figure renderers and that one entry are all this plugin asks for.
-    expect(stub.slots).toHaveLength(5)
+    // The four file renderers, the local-pages tab and the input dock are all
+    // this plugin asks for.
+    expect(stub.slots).toHaveLength(6)
   })
 
-  it.each(['locale', 'documentPreviews', 'slots'])('fails loudly without the %s service', (service) => {
+  it.each(['locale', 'documentPreviews', 'slots', 'sidebarRightTabs'])('fails loudly without the %s service', (service) => {
     const stub = stubContext({ omit: [service] })
     expect(() => { apply(stub.ctx) }).toThrow(missingService(service))
   })

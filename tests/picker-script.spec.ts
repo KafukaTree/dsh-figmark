@@ -12,6 +12,15 @@ interface Page {
   arm(on: boolean): void
   /** Move the page's scroll offset, since jsdom has no layout to scroll. */
   scrollTo(x: number, y: number): void
+  /** Send the panel's watch list into the page. */
+  watch(selectors: readonly string[]): void
+  /** Ask the picker to bring a saved mark into view. */
+  reveal(request: {
+    readonly requestId: string
+    readonly selector: string | null
+    readonly surface?: string | null
+    readonly bbox?: readonly [number, number, number, number]
+  }): void
 }
 
 /** A page with the picker loaded, in its own window. */
@@ -49,6 +58,22 @@ function live(html = '<main><h2 id="title">Head</h2><p class="lead">Some <em>tex
     scrollTo(x, y) {
       left = x
       top = y
+    },
+    watch(selectors) {
+      window.dispatchEvent(new window.MessageEvent('message', {
+        data: { figmark: LIVE_MESSAGE, kind: 'watch', selectors },
+      }))
+    },
+    reveal(request) {
+      window.dispatchEvent(new window.MessageEvent('message', {
+        data: {
+          figmark: LIVE_MESSAGE,
+          kind: 'reveal',
+          bbox: [0, 0, 0, 0],
+          surface: null,
+          ...request,
+        },
+      }))
     },
   }
 }
@@ -114,6 +139,8 @@ describe('while annotation is armed', () => {
       bbox: [0, 120, 0, 0],
       scroll: [0, 120],
       text: 'text',
+      level: 1,
+      count: 4,
     })
   })
 
@@ -149,6 +176,19 @@ describe('while annotation is armed', () => {
     })
   })
 
+  it('reports Escape even when no element is currently under the pointer', () => {
+    const page = live()
+    page.arm(true)
+    const escape = new page.window.KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+      cancelable: true,
+    })
+    page.window.document.dispatchEvent(escape)
+    expect(escape.defaultPrevented).toBe(true)
+    expect(page.said.filter(told => told['kind'] === 'cancel')).toHaveLength(1)
+  })
+
   it('says so when the pointer leaves the page, so the name can go with it', () => {
     const page = live()
     page.arm(true)
@@ -164,9 +204,143 @@ describe('while annotation is armed', () => {
     expect(click.defaultPrevented).toBe(false)
     expect(page.said.filter(told => told['kind'] === 'pick')).toHaveLength(0)
   })
+
+  it('climbs the ancestor ladder with the arrows and picks the chosen rung', () => {
+    const page = live()
+    page.arm(true)
+    fire(page.window, at(page.window, 'em'), 'pointermove')
+    page.window.document.dispatchEvent(new page.window.KeyboardEvent('keydown', {
+      key: 'ArrowUp', bubbles: true, cancelable: true,
+    }))
+    expect(page.said.filter(told => told['kind'] === 'hover').at(-1)).toMatchObject({
+      kind: 'hover',
+      tag: 'p',
+      level: 2,
+      count: 4,
+    })
+    fire(page.window, at(page.window, 'em'), 'click')
+    expect(page.said.filter(told => told['kind'] === 'pick').at(-1)).toMatchObject({
+      kind: 'pick',
+      tag: 'p',
+      level: 2,
+    })
+  })
+
+  it('climbs the same ladder when the panel forwards a keyboard step', () => {
+    const page = live()
+    page.arm(true)
+    fire(page.window, at(page.window, 'em'), 'pointermove')
+    page.window.dispatchEvent(new page.window.MessageEvent('message', {
+      data: { figmark: LIVE_MESSAGE, kind: 'depth', delta: 1 },
+    }))
+    expect(page.said.filter(told => told['kind'] === 'hover').at(-1)).toMatchObject({
+      kind: 'hover',
+      tag: 'p',
+      level: 2,
+      count: 4,
+    })
+  })
+
+  it('reports Escape so the panel can dismiss the comment layer', () => {
+    const page = live()
+    page.arm(true)
+    fire(page.window, at(page.window, 'p'), 'pointermove')
+    page.window.document.dispatchEvent(new page.window.KeyboardEvent('keydown', {
+      key: 'Escape', bubbles: true, cancelable: true,
+    }))
+    expect(page.said.filter(told => told['kind'] === 'cancel')).toHaveLength(1)
+  })
 })
 
 describe('the page moving', () => {
+  it('reports the visible slide, then none when the deck has no current page', () => {
+    const page = live(
+      '<section class="slide current" id="one"></section>'
+      + '<section class="slide" id="two"></section>',
+    )
+    const one = at(page.window, '#one')
+    const two = at(page.window, '#two')
+    const visible = (): DOMRect => ({
+      x: 0, y: 0, width: 640, height: 360, top: 0, right: 640, bottom: 360, left: 0,
+      toJSON: () => ({}),
+    })
+    Object.defineProperty(one, 'getBoundingClientRect', { configurable: true, value: visible })
+    Object.defineProperty(two, 'getBoundingClientRect', { configurable: true, value: visible })
+    page.window.dispatchEvent(new page.window.Event('resize'))
+    expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'surface',
+      selector: 'section:nth-of-type(1)',
+    })
+    one.classList.remove('current')
+    two.classList.add('current')
+    page.window.dispatchEvent(new page.window.Event('resize'))
+    expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toMatchObject({
+      selector: 'section:nth-of-type(2)',
+    })
+    two.classList.remove('current')
+    page.window.dispatchEvent(new page.window.Event('resize'))
+    expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'surface',
+      selector: null,
+    })
+  })
+
+  it('scrolls a saved element into view and answers that it did', async () => {
+    const page = live()
+    const title = at(page.window, '#title')
+    let scrolled = 0
+    Object.defineProperty(title, 'scrollIntoView', {
+      configurable: true,
+      value: () => { scrolled += 1 },
+    })
+    Object.defineProperty(title, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+        toJSON: () => ({}),
+      }),
+    })
+    page.reveal({ requestId: 'r1', selector: '#title' })
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    expect(scrolled).toBe(1)
+    expect(page.said.find(told => told['kind'] === 'reveal-result')).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'revealed',
+    })
+  })
+
+  it('refuses to claim an element was revealed when it remains outside the viewport', async () => {
+    const page = live()
+    const title = at(page.window, '#title')
+    Object.defineProperty(title, 'scrollIntoView', { configurable: true, value: () => {} })
+    Object.defineProperty(title, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 1200, y: 20, width: 100, height: 30, top: 20, right: 1300, bottom: 50, left: 1200,
+        toJSON: () => ({}),
+      }),
+    })
+    page.reveal({ requestId: 'offscreen', selector: '#title' })
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'offscreen'))
+      .toMatchObject({ status: 'hidden' })
+  })
+
+  it('distinguishes a missing selector from a surface that cannot be reached', async () => {
+    const page = live()
+    page.reveal({ requestId: 'missing', selector: '#not-there' })
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'missing'))
+      .toMatchObject({ status: 'missing' })
+    page.reveal({ requestId: 'surface', selector: '#title', surface: '#not-a-slide' })
+    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'surface'))
+      .toMatchObject({ status: 'wrong-surface' })
+  })
+
   it('reports a scroll once, and again only when it has actually moved', () => {
     const page = live()
     const target = page.window.document.documentElement
@@ -198,6 +372,20 @@ describe('the page moving', () => {
     }))
     fire(page.window, at(page.window, 'p'), 'click')
     expect(page.said.map(told => told['kind'])).toEqual(['ready'])
+  })
+
+  it('watches saved selectors and reports their live boxes', () => {
+    const page = live()
+    page.watch(['#title', '[data-missing]', '#title'])
+    const bounds = page.said.find(told => told['kind'] === 'bounds')
+    expect(bounds).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [
+        { selector: '#title', bbox: [0, 0, 0, 0], visible: true },
+        { selector: '[data-missing]', bbox: [0, 0, 0, 0], visible: false },
+      ],
+    })
   })
 })
 

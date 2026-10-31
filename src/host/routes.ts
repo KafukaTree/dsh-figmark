@@ -27,10 +27,16 @@ import type {
 } from '../shared/http'
 import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
 import { LIVE_ROUTE, type LiveOpenAnswer } from '../shared/live'
+import {
+  SERVICE_DISCOVER_ROUTE,
+  type ServiceDiscoverAnswer,
+  type ServiceDiscoverRequest,
+} from '../shared/services'
 import { resolveTarget, type FigureTarget } from './figure-target'
 import { openLive, type LiveProxy } from './live-proxy'
 import { guarded, readBody, sendFailure, sendJson } from './route-http'
 import { readReview } from './review-payload'
+import { discoverServices } from './service-discovery'
 import {
   MAX_REVIEW_BYTES,
   fileDigest,
@@ -44,6 +50,8 @@ export { GUARD_HEADER, ROUTE_PREFIX }
 
 /** The route a live page is opened and closed on. */
 const LIVE_PATH = `${ROUTE_PREFIX}${LIVE_ROUTE}`
+/** The route that probes bounded loopback candidates. */
+const SERVICES_PATH = `${ROUTE_PREFIX}${SERVICE_DISCOVER_ROUTE}`
 
 /** What closing a live page answers: nothing beyond success. */
 interface LiveCloseAnswer {
@@ -59,6 +67,12 @@ export interface RouteDeps {
    * @returns the absolute directory, or undefined when the Session is unknown.
    */
   readonly sessionCwd: (sessionId: string) => Promise<string | undefined>
+}
+
+/** The live-page operation a route composition uses. */
+export interface RouteLiveRuntime {
+  /** Open one loopback page and return the listener that serves it. */
+  readonly open: (url: URL) => Promise<LiveProxy>
 }
 
 /** One handler's answer: either the body to send, or a refusal with its status. */
@@ -147,10 +161,16 @@ async function removeAnswer(target: FigureTarget): Promise<AnnotationRemoveBody>
 /**
  * Build the route handlers this plugin registers.
  * @param deps - Session lookup.
+ * @param liveRuntime - live-page operation, replaceable at the listener boundary in tests.
  * @returns one handler per route path.
  */
-export function createHandlers(deps: RouteDeps): {
+export function createHandlers(
+  deps: RouteDeps,
+  liveRuntime: RouteLiveRuntime = { open: openLive },
+): {
   readonly annotation: (req: IncomingMessage, res: ServerResponse) => Promise<void>
+  /** Close every runtime this composition still owns. */
+  readonly close: () => void
 } {
   /**
    * The page being served to the panel, when one is.
@@ -160,28 +180,67 @@ export function createHandlers(deps: RouteDeps): {
    * per composition, so two hosts in one process never share a frame.
    */
   let live: LiveProxy | undefined
+  /** The latest open request admitted, even while its listener is still starting. */
+  let liveOpenSequence = 0
 
   /**
    * Open the page one request names, or close whatever page is open.
    * @param req - the request naming the operation.
+   * @param requestUrl - the already parsed request target.
    * @returns the answer to send.
    */
-  const liveAnswer = async (req: IncomingMessage): Promise<Answer<LiveOpenAnswer | LiveCloseAnswer>> => {
+  const liveAnswer = async (
+    req: IncomingMessage,
+    requestUrl: URL,
+  ): Promise<Answer<LiveOpenAnswer | LiveCloseAnswer>> => {
     if (req.method === 'POST') {
+      const sequence = liveOpenSequence + 1
+      liveOpenSequence = sequence
       const body = JSON.parse(await readBody(req)) as Record<string, unknown>
       // Opened before the old page closes: an address that turns out not to be a
       // loopback page leaves the frame the reader was looking at where it was.
-      const proxy = await openLive(new URL(typeof body['url'] === 'string' ? body['url'] : ''))
+      const proxy = await liveRuntime.open(new URL(typeof body['url'] === 'string' ? body['url'] : ''))
+      if (sequence !== liveOpenSequence) {
+        // A newer open arrived while this listener was starting. Installing this one
+        // would leave the newer frame pointing at a proxy the older answer replaced.
+        proxy.close()
+        return { ok: false, status: 409, error: 'a newer local page superseded this one' }
+      }
       live?.close()
       live = proxy
       return { ok: true, body: { ok: true, url: proxy.url } }
     }
     if (req.method === 'DELETE') {
-      live?.close()
-      live = undefined
+      const expected = requestUrl.searchParams.get('url')
+      // A global close also cancels any open still starting. A close tied to the
+      // current proxy must not cancel a newer open that is replacing it.
+      if (expected === null) liveOpenSequence += 1
+      if (live !== undefined && (expected === null || expected === live.url)) {
+        live.close()
+        live = undefined
+      }
       return { ok: true, body: { ok: true } }
     }
     return { ok: false, status: 405, error: `method ${String(req.method)} is not allowed` }
+  }
+
+  /**
+   * Scan the bounded local candidates the browser asked about.
+   * @param req - a POST carrying a session and optional recent URLs.
+   * @returns reachable services, or a method refusal.
+   */
+  const serviceAnswer = async (req: IncomingMessage): Promise<Answer<ServiceDiscoverAnswer>> => {
+    if (req.method !== 'POST') {
+      return { ok: false, status: 405, error: `method ${String(req.method)} is not allowed` }
+    }
+    const raw = JSON.parse(await readBody(req)) as Record<string, unknown>
+    const sessionId = typeof raw['sessionId'] === 'string' ? raw['sessionId'] : ''
+    if (sessionId === '') return { ok: false, status: 400, error: 'service discovery needs a session' }
+    const recent = Array.isArray(raw['recent'])
+      ? raw['recent'].filter((value): value is string => typeof value === 'string').slice(0, 16)
+      : undefined
+    const request: ServiceDiscoverRequest = { sessionId, ...(recent === undefined ? {} : { recent }) }
+    return { ok: true, body: { ok: true, services: await discoverServices(request, deps.sessionCwd) } }
   }
 
   const annotation = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -196,7 +255,9 @@ export function createHandlers(deps: RouteDeps): {
       // rather than rejects, so that refusal is this handler's 400 to write.
       const url = new URL(req.url ?? '/', 'http://localhost')
       const answer = url.pathname === LIVE_PATH
-        ? await liveAnswer(req)
+        ? await liveAnswer(req, url)
+        : url.pathname === SERVICES_PATH
+          ? await serviceAnswer(req)
         : await route(req, url, deps)
       if (answer.ok) {
         sendJson(res, 200, answer.body)
@@ -209,7 +270,16 @@ export function createHandlers(deps: RouteDeps): {
       sendFailure(res, 400, error instanceof Error ? error.message : String(error))
     }
   }
-  return { annotation }
+  return {
+    annotation,
+    close(): void {
+      // A request still starting belongs to this composition too. Advancing the
+      // sequence makes it close itself instead of installing after teardown.
+      liveOpenSequence += 1
+      live?.close()
+      live = undefined
+    },
+  }
 }
 
 /**

@@ -411,7 +411,14 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       // area takes its presses first, so reaching here on the surface means the
       // pointer is over the table rather than over anything on it. Pushing the
       // table moves the view, which is the only way to reach a zoomed-in corner.
-      if (props.onPan === undefined || props.pannable === false) return
+      if (props.onPan === undefined || props.pannable === false) {
+        // There is no pan to capture. Keeping the claimed pointer would leave it
+        // owned until a release that may happen outside the SVG, making the next
+        // press look like an unrelated second pointer. A fitted sheet has no drag
+        // to finish, so the claim ends with the decision.
+        active.current = null
+        return
+      }
       panning.current = { x: event.clientX, y: event.clientY }
       panned.current = false
       // The browser's own capture is what keeps a drag alive past the edge of the
@@ -435,6 +442,10 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       const choices = choicesFor(event, point)
       if (choices === undefined) {
         props.onPickMiss?.()
+        // A miss creates no pending mark, so there is nothing to follow outside the
+        // SVG. Releasing the claim now lets the next press work even when the reader
+        // drags this miss off the figure and releases it elsewhere.
+        active.current = null
         return
       }
       const offset = picked !== null && sameChoiceElements(picked.choices, choices)

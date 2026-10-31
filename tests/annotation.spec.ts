@@ -18,7 +18,9 @@ import {
   isWeight,
   pageFileSuffix,
 } from '../src/shared/annotation'
-import { describeFigureScope, describeMark, describeMarks } from '../src/shared/mark-summary'
+import {
+  anchorDescriptor, anchorWords, describeFigureScope, describeMark, describeMarks,
+} from '../src/shared/mark-summary'
 import { readAnnotation, readAnnotationDocument, removeAnnotation, writeAnnotation } from '../src/host/store'
 import { defined } from './dom'
 
@@ -215,6 +217,59 @@ describe('document validation', () => {
     const capped = readAnnotationDocument(withAnchor({ tag: 'p', bbox: [0, 0, 10, 10], selector: long }))
     expect(defined(capped.marks[0]).anchor?.selector).toHaveLength(400)
     expect(long.startsWith(defined(capped.marks[0]).anchor?.selector ?? '')).toBe(true)
+  })
+
+  it('carries a capped class signature for the annotation list', () => {
+    const parsed = readAnnotationDocument({
+      ...document_,
+      marks: [{
+        id: 'x',
+        kind: 'element',
+        color: '#000',
+        points: [[0, 0], [10, 10]],
+        anchor: { tag: 'button', bbox: [0, 0, 10, 10], class: 'primary wide disabled' },
+      }],
+    })
+    expect(defined(parsed.marks[0]).anchor?.class).toBe('primary wide disabled')
+    const capped = readAnnotationDocument({
+      ...document_,
+      marks: [{
+        id: 'x',
+        kind: 'element',
+        color: '#000',
+        points: [[0, 0], [10, 10]],
+        anchor: { tag: 'div', bbox: [0, 0, 10, 10], class: 'x'.repeat(200) },
+      }],
+    })
+    expect(defined(capped.marks[0]).anchor?.class).toHaveLength(160)
+  })
+
+  it('carries the logical surface a region was drawn on', () => {
+    const parsed = readAnnotationDocument({
+      ...document_,
+      marks: [{
+        id: 'x',
+        kind: 'rect',
+        color: '#000',
+        points: [[0, 0], [10, 10]],
+        surface: '#slide-5',
+      }],
+    })
+    expect(defined(parsed.marks[0]).surface).toBe('#slide-5')
+    // The selector is part of the same boundary as an element anchor and is capped
+    // rather than allowed to grow a sidecar without a limit.
+    const long = `#${'x'.repeat(500)}`
+    const capped = readAnnotationDocument({
+      ...document_,
+      marks: [{
+        id: 'x',
+        kind: 'rect',
+        color: '#000',
+        points: [[0, 0], [10, 10]],
+        surface: long,
+      }],
+    })
+    expect(defined(capped.marks[0]).surface).toHaveLength(400)
   })
 
   it('fills the timestamps a partial document omits and drops an empty summary', () => {
@@ -829,6 +884,35 @@ describe('model-facing summary', () => {
     expect(describeMark(one, 1, 'zh')).toBe('元素1（<path id="line2d_10">），批注：这条线要加粗')
   })
 
+  it('prints a compact source-shaped signature in the annotation list', () => {
+    expect(anchorDescriptor({
+      tag: 'SECTION',
+      id: 'lead',
+      class: 'hero wide noisy fourth',
+      bbox: [0, 0, 10, 10],
+      title: 'Quarterly "revenue"',
+    })).toBe('<section#lead.hero.wide.noisy = "Quarterly \'revenue\'">')
+    expect(anchorDescriptor({
+      tag: 'BUTTON',
+      class: '  primary   compact ',
+      bbox: [0, 0, 10, 10],
+      text: 'Save changes now',
+    })).toBe('<button.primary.compact = "Save changes now">')
+    expect(anchorDescriptor({
+      tag: 'DIV',
+      bbox: [0, 0, 10, 10],
+      text: 'A sentence long enough to need an ellipsis in the list',
+    })).toBe('<div = "A sentence long enough to need an e…">')
+    expect(anchorDescriptor({ tag: 'DIV', bbox: [0, 0, 10, 10] })).toBe('<div>')
+    expect(anchorDescriptor({
+      tag: 'P',
+      id: '',
+      class: '   ',
+      bbox: [0, 0, 10, 10],
+      title: '   ',
+    })).toBe('<p>')
+  })
+
   it('keeps an anchor to the names that still say something', () => {
     // An axes group on a matplotlib SVG holds every label under it, so its text is the
     // tick values, both axis titles and the legend run together. That is a passage, not
@@ -907,6 +991,7 @@ describe('model-facing summary', () => {
       describeMark({ id: 'a', kind: 'rect', color: '#000', points: [[0, 0], [1, 1]], ...(anchor === undefined ? {} : { anchor }) }, 1, 'zh')
     // A title is the name the source uses (Graphviz writes its node names here).
     expect(withAnchor({ tag: 'g', title: '102', bbox: [0, 0, 1, 1] })).toContain('（元素标题「102」）')
+    expect(withAnchor({ tag: 'g', title: '', text: '短名', bbox: [0, 0, 1, 1] })).toContain('（元素文字「短名」）')
     // The element's own words are a name when they are short enough to be one.
     expect(withAnchor({ tag: 'text', text: '导柱', bbox: [0, 0, 1, 1] })).toContain('（元素文字「导柱」）')
     // An id, or a selector that is an id with a `#`, names nothing the source can use.
@@ -916,6 +1001,9 @@ describe('model-facing summary', () => {
     // And a tag on its own is not a name either.
     expect(withAnchor({ tag: 'g', bbox: [0, 0, 1, 1] })).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
     expect(withAnchor(undefined)).toBe('矩形1 (0,0)-(1,1)，（未写说明）')
+    expect(anchorWords({ tag: 'g', bbox: [0, 0, 1, 1] })).toBe('')
+    expect(anchorWords({ tag: 'g', title: '', bbox: [0, 0, 1, 1] })).toBe('')
+    expect(anchorWords({ tag: 'g', title: '102', bbox: [0, 0, 1, 1] })).toBe('102')
   })
 
   it('names an element mark by the tag the source shows, id and all', () => {

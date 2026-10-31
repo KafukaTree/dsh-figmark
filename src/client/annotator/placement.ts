@@ -54,6 +54,32 @@ export function boxesOverlap(a: ScreenBox, b: ScreenBox, gap = 0): boolean {
 }
 
 /**
+ * How tall the tool palette may remain before it reaches one below it.
+ *
+ * A short panel cannot always separate a wide bottom bar from a tall tool strip by
+ * moving either one: the bar is wider than the panel's free side lanes and the tools
+ * are taller than the gap above it. In that one case the palette keeps its corner and
+ * scrolls inside a height that stops at the bar's upper gutter. Returning undefined
+ * means the boxes do not share a horizontal lane, or the obstacle is not below.
+ * The grip remains usable even when the arithmetic leaves less than its own height.
+ * @param strip - the strip whose height is being bounded.
+ * @param obstacle - the lower strip that must remain reachable.
+ * @returns the available pixel height, or undefined when no vertical bound applies.
+ */
+export function paletteRoomBeforeBar(
+  strip: ScreenBox,
+  obstacle: ScreenBox,
+): number | undefined {
+  if (strip.width <= 0 || strip.height <= 0 || obstacle.width <= 0 || obstacle.height <= 0) {
+    return undefined
+  }
+  const sharesLane = strip.left < obstacle.left + obstacle.width + STRIP_EDGE
+    && strip.left + strip.width + STRIP_EDGE > obstacle.left
+  if (!sharesLane || strip.top >= obstacle.top - STRIP_EDGE) return undefined
+  return Math.max(32, Math.floor(obstacle.top - STRIP_EDGE - strip.top))
+}
+
+/**
  * Where a strip ends up when the pointer dragging it is at a client coordinate.
  *
  * The origin is the strip's position when the press started and the offset is

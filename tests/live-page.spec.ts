@@ -1,7 +1,9 @@
 /** Opening a live page from the panel: the typed address, the ask, and the anchor. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
+  anchorOfPick, closeLivePage, discoverLiveServices, liveAddressOf, loopbackAddressOf,
+  openLivePage, pickName,
+  shownAddress, type LivePage,
 } from '../src/client/live-page'
 import { AnnotatorHostError } from '../src/client/host-api'
 import { GUARD_HEADER } from '../src/shared/http'
@@ -69,6 +71,15 @@ describe('the address a reader types', () => {
     expect(liveAddressOf('http://')).toBeUndefined()
     expect(liveAddressOf('http://[::1')).toBeUndefined()
   })
+
+  it('recognizes loopback HTTP input as an explicit page, not a title query', () => {
+    expect(loopbackAddressOf('localhost:5173')).toBe('http://localhost:5173/')
+    expect(loopbackAddressOf('127.0.0.1:8000/docs?a=1')).toBe('http://127.0.0.1:8000/docs?a=1')
+    expect(loopbackAddressOf('[::1]:4173')).toBe('http://[::1]:4173/')
+    expect(loopbackAddressOf('deck')).toBeUndefined()
+    expect(loopbackAddressOf('https://localhost:5173/')).toBeUndefined()
+    expect(loopbackAddressOf('http://example.com/')).toBeUndefined()
+  })
 })
 
 describe('opening a page', () => {
@@ -99,12 +110,58 @@ describe('opening a page', () => {
   })
 })
 
+describe('finding local pages', () => {
+  it('posts the session and remembered addresses, then returns the bounded answer', async () => {
+    const calls = stubFetch({
+      body: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'recent' }],
+      },
+    })
+    const services = await discoverLiveServices('s1', ['http://127.0.0.1:5173/'])
+    expect(services).toEqual([
+      { url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'recent' },
+    ])
+    const call = calls[0]
+    expect(call?.url).toContain('/services')
+    expect(call?.init?.method).toBe('POST')
+    expect(guardOf(call)).toBe('1')
+    expect(call?.init?.body).toBe(JSON.stringify({
+      sessionId: 's1',
+      recent: ['http://127.0.0.1:5173/'],
+    }))
+  })
+
+  it("carries the Host's refusal or names the failed status", async () => {
+    stubFetch({ status: 403, body: { error: 'scan refused' } })
+    await expect(discoverLiveServices('s1', [])).rejects.toThrow('scan refused')
+    stubFetch({ status: 502, body: {} })
+    await expect(discoverLiveServices('s1', [])).rejects.toThrow('service discovery failed with status 502')
+    stubFetch({ status: 409, body: { ok: false, error: 7 } })
+    await expect(discoverLiveServices('s1', [])).rejects.toThrow('service discovery failed with status 409')
+  })
+
+  it('refuses a service list with any entry it cannot render', async () => {
+    for (const services of [
+      [null],
+      [{ url: '', source: 'common' }],
+      [{ url: 'http://127.0.0.1:5173/', source: 'elsewhere' }],
+      [{ url: 'http://127.0.0.1:5173/', source: 'common', title: 7 }],
+      Array.from({ length: 65 }, () => ({ url: 'http://127.0.0.1:5173/', source: 'common' })),
+    ]) {
+      stubFetch({ body: { ok: true, services } })
+      await expect(discoverLiveServices('s1', [])).rejects.toThrow('service discovery failed with status 200')
+    }
+  })
+})
+
 describe('closing a page', () => {
   it('tells the Host to stop serving it', async () => {
     const calls = stubFetch({ body: { ok: true } })
-    await closeLivePage()
+    await closeLivePage('http://127.0.0.1:9444/__dsh_figmark_live/proxy/docs')
     expect(calls[0]?.init?.method).toBe('DELETE')
     expect(guardOf(calls[0])).toBe('1')
+    expect(calls[0]?.url).toContain('/live?url=http%3A%2F%2F127.0.0.1%3A9444%2F__dsh_figmark_live%2Fproxy%2Fdocs')
   })
 
   it("refuses in the Host's words when the close did not happen", async () => {
@@ -119,14 +176,21 @@ describe('closing a page', () => {
 })
 
 describe('turning a pick into mark material', () => {
-  it('keeps what a locator needs and drops what a restyle renames', () => {
+  it('keeps the locator and a capped human class signature', () => {
     expect(anchorOfPick(PICKED)).toEqual({
       tag: 'DIV',
       id: 'hero',
+      class: 'relative flex',
       text: 'Hello',
       selector: 'body > div:nth-of-type(1)',
       bbox: [10, 20, 300, 40],
     })
+  })
+
+  it('keeps at most three classes and leaves an empty class list out', () => {
+    expect(anchorOfPick({ ...PICKED, id: undefined, class: 'one two three four five' }))
+      .toMatchObject({ class: 'one two three' })
+    expect(anchorOfPick({ ...PICKED, id: undefined, class: '   ' })).not.toHaveProperty('class')
   })
 
   it('leaves out an id and a text the element does not have', () => {

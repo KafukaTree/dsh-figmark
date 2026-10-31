@@ -1538,6 +1538,7 @@ describe('a row of the list that names another page', () => {
     // Selected at the same moment as the turn, so the page that arrives carries the
     // comment pill already: selecting after the remount would need a second render.
     expect(currentProps().selectedId).toBe('m1')
+    expect(currentProps().openPanel).toBeNull()
   })
 
   it('stays put for a mark that names no page', async () => {

@@ -29,18 +29,20 @@ import type { RemoteLike } from './host-actions'
 import type { ComposerLike } from './composer'
 import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
+import { HtmlPreviewBody } from './html-preview'
 import { MarkdownBody, type MarkdownInjected } from './markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
 import { PendingCard } from './pending-card'
+import { ServiceBrowser, type ServiceBrowserInjected } from './ServiceBrowser'
 import type { FileUploadLike, SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
 export const name = 'dsh-figmark-client'
 
 /** Client services this plugin waits for before it mounts anything. */
-export const inject = ['slots', 'locale', 'documentPreviews']
+export const inject = ['slots', 'locale', 'documentPreviews', 'sidebarRightTabs']
 
 /** Implementation identity of the image renderer, shared by its metadata and its slot entry. */
 export const BODY_ID = 'dsh-figmark/image'
@@ -51,8 +53,14 @@ export const PDF_BODY_ID = 'dsh-figmark/pdf'
 /** Implementation identity of the Markdown editor, shared by its metadata and its slot entry. */
 export const MD_BODY_ID = 'dsh-figmark/markdown'
 
-/** Implementation identity of the HTML annotator, shared by its metadata and its slot entry. */
-export const HTML_BODY_ID = 'dsh-figmark/html'
+/** Implementation identity of the read-only static HTML preview. */
+export const HTML_BODY_ID = 'dsh-figmark/html-preview'
+
+/** Identity of the right-sidebar service browser. */
+export const SERVICE_BODY_ID = 'dsh-figmark/services'
+
+/** Page kind the service browser occupies. */
+export const SERVICE_KIND = 'dsh-figmark-services'
 
 /** Suffixes the Markdown editor claims for whole-file text documents. */
 const MD_EXTENSIONS = ['md', 'markdown'] as const
@@ -66,7 +74,7 @@ const BINARY_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as
 /** Suffix the PDF renderer claims, ranking above the shell's read-only PDF preview. */
 const PDF_EXTENSIONS = ['pdf'] as const
 
-/** Suffixes the HTML annotator claims, ranking above the shell's read-only HTML preview. */
+/** Suffixes the preview-only renderer keeps readable inside the panel. */
 const HTML_EXTENSIONS = ['html', 'htm'] as const
 
 /** Document renderer registry slice this plugin registers into. */
@@ -79,6 +87,23 @@ interface DocumentPreviewsLike {
     title: () => string
     loading: 'text-pages' | 'bytes-complete' | 'renderer'
     wrap?: boolean
+  }): () => void
+}
+
+/** Sidebar tab-type registry, as far as this plugin needs it. */
+interface SidebarRightTabsLike {
+  register(definition: {
+    id: string
+    kind: string
+    priority?: 'builtin' | 'extension' | 'fallback'
+    title: (address: string) => string
+    guide?: readonly {
+      id: string
+      order?: number
+      title: () => string
+      description?: () => string
+      icon?: unknown
+    }[]
   }): () => void
 }
 
@@ -158,9 +183,11 @@ export function apply(ctx: Context): void {
   const locale = ctx.get('locale') as LocaleLike | undefined
   const previews = ctx.get('documentPreviews') as DocumentPreviewsLike | undefined
   const slots = ctx.get('slots') as SlotsLike | undefined
+  const sidebarTabs = ctx.get('sidebarRightTabs') as SidebarRightTabsLike | undefined
   if (locale === undefined) throw new Error(missingService('locale'))
   if (previews === undefined) throw new Error(missingService('documentPreviews'))
   if (slots === undefined) throw new Error(missingService('slots'))
+  if (sidebarTabs === undefined) throw new Error(missingService('sidebarRightTabs'))
   ctx.effect(
     () => locale.register(NAMESPACE, { zh, en }),
     'dsh-figmark: dictionaries',
@@ -186,6 +213,30 @@ export function apply(ctx: Context): void {
       remote: ctx.get('remote') as RemoteLike | undefined,
     }),
   }, AnnotatorBody)), 'dsh-figmark: document body')
+  ctx.effect(() => sidebarTabs.register({
+    id: SERVICE_BODY_ID,
+    kind: SERVICE_KIND,
+    priority: 'extension',
+    title: () => locale.bind(NAMESPACE)('serviceTitle'),
+    guide: [{
+      id: 'services',
+      order: 20,
+      title: () => locale.bind(NAMESPACE)('serviceTitle'),
+      description: () => locale.bind(NAMESPACE)('serviceHint'),
+    }],
+  }), 'dsh-figmark: service browser tab')
+  ctx.effect(() => slots.inject('sidebar.right.pane.tab', () => slots.register({
+    name: 'sidebar.right.pane.tab',
+    key: SERVICE_BODY_ID,
+    locale: NAMESPACE,
+    inject: (sessionId: unknown): ServiceBrowserInjected => ({
+      sessionId: String(sessionId),
+      localeId: locale.getLocale().locale ?? 'zh',
+      sessions: ctx.get('sessions') as SessionsLike | undefined,
+      conversation: ctx.get('conversation') as ComposerLike | undefined,
+      remote: ctx.get('remote') as RemoteLike | undefined,
+    }),
+  }, ServiceBrowser)), 'dsh-figmark: service browser body')
   ctx.effect(() => previews.register({
     id: PDF_BODY_ID,
     extensions: PDF_EXTENSIONS,
@@ -247,21 +298,21 @@ export function apply(ctx: Context): void {
     title: () => locale.bind(NAMESPACE)('htmlTitle'),
     loading: 'bytes-complete',
     wrap: false,
-  }), 'dsh-figmark: html renderer metadata')
+  }), 'dsh-figmark: html preview metadata')
   ctx.effect(() => slots.inject('sidebar.right.tab.document', () => slots.register({
     name: 'sidebar.right.tab.document',
     key: HTML_BODY_ID,
     locale: NAMESPACE,
-    // A rendered document is one surface with one marks file, so the body reads,
-    // writes and delivers it itself — there is no page owner above it.
+    // A static file is preview-only. It has no annotation seat, no sidecar read and
+    // no delivery action; only a loopback service page enters the annotator.
     inject: (sessionId: unknown): BodyInjected => ({
-      sessions: ctx.get('sessions') as SessionsLike | undefined,
-      conversation: ctx.get('conversation') as ComposerLike | undefined,
+      sessions: undefined,
+      conversation: undefined,
       sessionId: String(sessionId),
       localeId: locale.getLocale().locale ?? 'zh',
-      remote: ctx.get('remote') as RemoteLike | undefined,
+      remote: undefined,
     }),
-  }, AnnotatorBody)), 'dsh-figmark: html document body')
+  }, HtmlPreviewBody)), 'dsh-figmark: html preview body')
   // The block a reader's own message carries, drawn as a card instead of as the
   // lines the model reads. Both halves are optional: without the conversation
   // package a figure is still annotatable, it just says what it says as text.

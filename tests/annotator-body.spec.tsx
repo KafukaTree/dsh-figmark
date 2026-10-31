@@ -18,6 +18,7 @@ import { STROKE_WIDTH } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
 import { reviewSize } from '../src/client/export'
 import { STYLES } from '../src/client/styles'
+import { RENDER_WIDTH } from '../src/client/html-dom'
 import { LIVE_MESSAGE } from '../src/shared/live'
 import { defined, stubRasterizer, stubRect } from './dom'
 
@@ -95,6 +96,8 @@ interface HostAnswers {
   readonly annotation?: AnnotationDocument | null
   readonly sha256?: string
   readonly readError?: string
+  /** Hold the annotation read until this settles. */
+  readonly readHold?: Promise<void>
   readonly saveError?: string
   /** Make the write reject with something that is not an Error. */
   readonly saveThrows?: unknown
@@ -911,7 +914,9 @@ describe('editing marks', () => {
     mounted = await svgBody({ annotation: anchored })
     await openList(document.body)
     const entries = [...document.querySelectorAll('.da-mark-text')].map(element => element.textContent ?? '')
-    expect(entries[0]).toContain(zh.emptyDetail)
+    // A mark with no sentence still says what it is. Spending the only visible
+    // line on "no note" made a list of otherwise different marks look identical.
+    expect(entries[0]).toContain(zh.toolRect)
     expect(entries[1]).toContain('102')
     // A row is numbered in the mark's own colour, so the list and the picture
     // are matched by one glance.
@@ -2316,6 +2321,51 @@ describe('the floating strips', () => {
     // The tools occupy the 8px-breathing-room box through y=438. The bar is nearest
     // to their lower edge, so it keeps its x and moves only to the first free y.
     expect(readPreferences().bar).toEqual({ x: 0.35, y: 438 / 600 })
+  })
+
+  it('caps the tools above a default bar in a short panel, then restores their height', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ palette: { x: 343 / 600, y: 122 / 300 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const palette = defined(document.querySelector('.da-palette')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 600, height: 300 })
+    stubRect(bar, { left: 109, top: 252, width: 382, height: 36 })
+    stubRect(palette, { left: 343, top: 122, width: 42, height: 280 })
+    stubRect(defined(document.querySelector('.da-figure-frame')) as HTMLElement,
+      { left: 0, top: 0, width: 0, height: 0 })
+    width = 600
+    height = 300
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    // The bar spans the whole lower lane, so moving the palette cannot clear it.
+    // Keep the reader's parked corner and scroll the tools above the bar instead.
+    expect(bar.getAttribute('data-parked')).toBeNull()
+    expect(palette.style.maxHeight).toBe('122px')
+    expect(palette.style.overflowY).toBe('')
+    expect(STYLES).toContain('overflow-y:auto;scrollbar-width:thin')
+
+    stubRect(root, { left: 0, top: 0, width: 600, height: 600 })
+    stubRect(bar, { left: 109, top: 552, width: 382, height: 36 })
+    width = 600
+    height = 600
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(palette.style.maxHeight).toMatch(/^max\(0px, calc\(/u)
   })
 
   it('puts the tools back in their default corner when a tiny panel cannot separate them', async () => {
@@ -3734,10 +3784,10 @@ describe('a rendered document', () => {
   }> {
     const calls: Call[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      calls.push({ url, init })
       const respond = (body: unknown, status = 200): { readonly json: () => Promise<unknown>; readonly status: number } =>
         ({ json: async () => body, status })
-      if (url.endsWith('/dsh-figmark/live')) {
+      calls.push({ url, init })
+      if (url.includes('/dsh-figmark/live')) {
         if (init?.method === 'DELETE') return respond({ ok: true })
         if (answers.liveHold !== undefined) await answers.liveHold
         if (answers.liveThrows !== undefined) throw answers.liveThrows
@@ -3752,6 +3802,7 @@ describe('a rendered document', () => {
         if (answers.saveError !== undefined) return respond({ ok: false, error: answers.saveError }, 400)
         return respond({ ok: true, annotationPath: `${HTML_PATH}.annot.json`, reviewPath: null })
       }
+      if (answers.readHold !== undefined) await answers.readHold
       if (answers.readError !== undefined) return respond({ ok: false, error: answers.readError }, 404)
       return respond(htmlPayload(answers))
     }))
@@ -3768,10 +3819,7 @@ describe('a rendered document', () => {
     return defined(document.querySelector('iframe.da-html')) as HTMLIFrameElement
   }
 
-  /** The window a rendered document is shown through in this spec, in figure pixels. */
-  // The bottom inset is larger than the other three: the floating bar lives in that
-  // strip, and an HTML window extending under it would make the reader's viewport
-  // disagree with the part of the page they can actually read.
+  /** The pane a proxied live page is shown through in this spec, in figure pixels. */
   const WINDOW = { width: 800 - 28, height: 600 - 14 - 56 }
 
   /** Report one layout pass for the frame: the length and width of its document. */
@@ -3784,15 +3832,6 @@ describe('a rendered document', () => {
     await act(async () => {
       for (const callback of resizeCallbacks) callback()
     })
-  }
-
-  /** Scroll the document inside its window, the way a reader's wheel would. */
-  async function scrollDocument(by: { readonly x: number; readonly y: number }): Promise<void> {
-    const view = frame().contentWindow
-    if (view === null) throw new Error('the frame has no window')
-    Object.defineProperty(view, 'scrollX', { configurable: true, value: by.x })
-    Object.defineProperty(view, 'scrollY', { configurable: true, value: by.y })
-    await act(async () => { view.dispatchEvent(new Event('scroll')) })
   }
 
   /** Draw one arrow on the document, in the frame's own pixels. */
@@ -3840,24 +3879,21 @@ describe('a rendered document', () => {
     })
   })
 
-  it('renders the document into a frame that runs its own script but cannot reach out', async () => {
+  it('renders the document into an inert same-origin window at the contracted width', async () => {
     mounted = await htmlBody()
     const element = frame()
-    // The page runs: a deck turns its pages, a player plays. What it cannot do is
-    // leave the file — the policy the document was built with has that covered.
-    expect(element.getAttribute('sandbox')).toContain('allow-scripts')
-    expect(element.getAttribute('sandbox')).toContain('allow-same-origin')
+    // A file is arbitrary local markup. The browser sandbox, not a sanitizer, is
+    // what guarantees its scripts and inline handlers do not run in the app origin.
+    expect(element.getAttribute('sandbox')).toBe('allow-same-origin')
     const frameDocument = defined(element.contentDocument)
     expect(frameDocument.querySelector('#lead')?.textContent).toBe('第一段')
     expect(frameDocument.querySelector('meta[http-equiv="Content-Security-Policy"]')).not.toBeNull()
-    // The frame is the window: the pane wide and the pane tall from the first frame,
-    // so the document lays out at the width the reader is actually looking at.
-    expect(element.style.width).toBe(`${WINDOW.width}px`)
+    // The window always starts at the same layout width. Its height is one pane even
+    // when the document is much taller, so the page scrolls instead of becoming a strip.
+    expect(element.style.width).toBe(`${RENDER_WIDTH}px`)
     expect(element.style.height).toBe(`${WINDOW.height}px`)
-    // A page longer than its window scrolls inside it; the window does not stretch to
-    // the page, or the reader would have to scroll the panel to read a scrollbar.
-    await reportLayout(WINDOW.width, 1843)
-    expect(element.style.width).toBe(`${WINDOW.width}px`)
+    await reportLayout(RENDER_WIDTH, 1843)
+    expect(element.style.width).toBe(`${RENDER_WIDTH}px`)
     expect(element.style.height).toBe(`${WINDOW.height}px`)
     expect(element.getAttribute('title')).toBe(zh.htmlFrame)
   })
@@ -3882,8 +3918,6 @@ describe('a rendered document', () => {
     })
     // Shown at the width it was written for, rather than cut off at the pane's.
     expect(element.style.width).toBe('1920px')
-    // The height is still the window's: a deck written 1080 tall is read by scrolling
-    // it, which is what a browser would do with it too.
     expect(element.style.height).toBe(`${WINDOW.height}px`)
     // A later pass that reports a narrower stage keeps the room it already asked for.
     Object.defineProperty(root, 'scrollWidth', { configurable: true, get: () => 1600 })
@@ -3910,13 +3944,22 @@ describe('a rendered document', () => {
     const { sessions } = stubSessions()
     const result = await htmlBody({}, { sessions })
     mounted = result
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     stubRect(defined(frameDocument.querySelector('#s')), { left: 0, top: 0, width: 1024, height: 800 })
     stubRect(defined(frameDocument.querySelector('#lead')), { left: 0, top: 0, width: 1024, height: 200 })
+    Object.defineProperty(frameDocument, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [
+        defined(frameDocument.querySelector('#lead')),
+        defined(frameDocument.querySelector('#s')),
+      ],
+    })
     await drawOnDocument(document.body)
     await openList(document.body)
-    expect(document.querySelector('.da-mark-meta')?.textContent).toContain('第一段')
+    // With no note yet, the source identity itself is the row's main line rather
+    // than a second, quieter line under a placeholder.
+    expect(document.querySelector('.da-mark-title')?.textContent).toContain('第一段')
     await click(button(document.body, zh.sendToAgent))
     const post = result.calls.find(call => call.init?.method === 'POST')
     const body = postBody(post) as {
@@ -3928,11 +3971,10 @@ describe('a rendered document', () => {
     // the whole artifact and the locator inside it is what a source reader uses.
     expect(body.reviewImage).toBeUndefined()
     expect(body.annotatedPdf).toBeUndefined()
-    // The figure records the window the marks were drawn in: those coordinates only
-    // mean anything at the size the reader saw, and that is what the window is.
+    // The figure records the fixed-layout window the marks were drawn through.
     expect(body.annotation?.figure).toMatchObject({
       mediaType: 'text/html',
-      width: WINDOW.width,
+      width: RENDER_WIDTH,
       height: WINDOW.height,
     })
     expect(body.annotation?.marks[0]?.anchor).toEqual({
@@ -3947,9 +3989,35 @@ describe('a rendered document', () => {
     expect(handoff()).toBe(zh.toastSentAgent)
   })
 
+  it('scrolls to the element a list row names, then gets the list out of the way', async () => {
+    const marks: AnnotationDocument = {
+      ...savedHtml,
+      marks: [{
+        id: 'lead', kind: 'element', color: '#1971c2', points: [[0, 0], [240, 60]],
+        detail: '这一段要改', anchor: {
+          tag: 'p', id: 'lead', selector: '#lead', text: '第一段', bbox: [0, 1200, 240, 60],
+        },
+      }],
+    }
+    mounted = await htmlBody({ annotation: marks })
+    await reportLayout(RENDER_WIDTH, 1843)
+    const lead = defined(frame().contentDocument?.querySelector('#lead'))
+    let scrolled = 0
+    Object.defineProperty(lead, 'scrollIntoView', {
+      configurable: true,
+      value: () => { scrolled += 1 },
+    })
+    await openList(document.body)
+    await click(defined(document.querySelector('.da-mark-text')))
+    expect(scrolled).toBe(1)
+    expect(document.querySelector('.da-float-list')).toBeNull()
+    expect(defined(document.querySelector('.da-comment') as HTMLTextAreaElement | null).value)
+      .toBe('这一段要改')
+  })
+
   it('picks an element from the live document without covering the page', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const lead = defined(frameDocument.querySelector('#lead'))
     stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
@@ -3978,9 +4046,9 @@ describe('a rendered document', () => {
     pageActions.length = 0
     await click(button(document.body, zh.toolElement))
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
-    // The document keeps native links, scrolling and its own scripts. The parent
-    // listens in the document's capture phase and only names the pressed element.
-    expect(stage.getAttribute('data-pass')).toBe('true')
+    // A local document is an inert sheet: its overlay keeps the pointer. The frame
+    // listener still names the element under the press without letting the page act.
+    expect(stage.getAttribute('data-pass')).toBeNull()
     const press = new MouseEvent('pointerdown', {
       bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 50,
     })
@@ -4005,7 +4073,7 @@ describe('a rendered document', () => {
 
   it('says when the live document has nothing to pick', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     Object.defineProperty(frameDocument, 'elementsFromPoint', {
       configurable: true,
@@ -4025,7 +4093,7 @@ describe('a rendered document', () => {
 
   it('ignores a non-primary page press and can read a frame without a view', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const lead = defined(frameDocument.querySelector('#lead'))
     stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
@@ -4057,7 +4125,7 @@ describe('a rendered document', () => {
 
   it('selects an existing element instead of duplicating it, and lets a blank page press close it', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const lead = defined(frameDocument.querySelector('#lead'))
     const second = defined(frameDocument.querySelectorAll('p')[1])
@@ -4107,7 +4175,7 @@ describe('a rendered document', () => {
 
   it('lets a blank press in the page close a selected element mark', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const lead = defined(frameDocument.querySelector('#lead'))
     stubRect(lead, { left: 20, top: 30, width: 240, height: 60 })
@@ -4119,7 +4187,7 @@ describe('a rendered document', () => {
       for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
     })
     expect(document.querySelector('.da-float-detail')).not.toBeNull()
-    stubRect(frameDocument.body, { left: 0, top: 100, width: WINDOW.width, height: 400 })
+    stubRect(frameDocument.body, { left: 0, top: 100, width: RENDER_WIDTH, height: 400 })
     await act(async () => {
       frameDocument.body.dispatchEvent(new MouseEvent('pointerdown', {
         bubbles: true, cancelable: true, button: 0, clientX: 600, clientY: 350,
@@ -4127,13 +4195,13 @@ describe('a rendered document', () => {
       for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
     })
     expect(document.querySelector('.da-float-detail')).toBeNull()
-    expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
+    expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBeNull()
   })
 
   it('sends the marks with no picture attached and the document wording in the message', async () => {
     const { sessions, prompts } = stubSessions()
     mounted = await htmlBody({ annotation: savedHtml }, { sessions })
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     await click(button(document.body, zh.sendToAgent))
     expect(prompts).toHaveLength(1)
     const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
@@ -4141,7 +4209,7 @@ describe('a rendered document', () => {
     expect(parts).toHaveLength(1)
     expect(parts[0]?.type).toBe('text')
     expect(parts[0]?.text).toContain('【HTML 标注】')
-    expect(parts[0]?.text).toContain(`渲染面 ${WINDOW.width}×${WINDOW.height}`)
+    expect(parts[0]?.text).toContain(`渲染面 ${RENDER_WIDTH}×${WINDOW.height}`)
     // The hash named a file state no reader of the message can act on; it was in
     // every header and is gone.
     expect(parts[0]?.text).not.toContain('sha256')
@@ -4149,14 +4217,11 @@ describe('a rendered document', () => {
     expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
   })
 
-  it('refuses to save a surface the pane never gave a height to', async () => {
-    // The document can lay out all the length it likes; without a window there is no
-    // surface, because there is nothing the reader could be looking through.
-    const result = await htmlBody({}, {}, { width: 800, height: 0 })
+  it('does not save a local document until its window has laid out', async () => {
+    const result = await htmlBody()
     mounted = result
-    expect(frame().style.height).toBe('0px')
-    await reportLayout(WINDOW.width, 1843)
-    expect(frame().style.height).toBe('0px')
+    expect(frame().style.height).toBe(`${WINDOW.height}px`)
+    expect(document.querySelector('svg.da-overlay')).toBeNull()
     await click(button(document.body, zh.sendToAgent))
     expect(result.calls.filter(call => call.init?.method === 'POST')).toHaveLength(0)
   })
@@ -4172,39 +4237,30 @@ describe('a rendered document', () => {
     expect(frame().style.height).toBe(`${WINDOW.height}px`)
   })
 
-  it('scrolls the document, not the panel around it, when the wheel turns', async () => {
+  it('magnifies a local document with the ordinary Ctrl-wheel gesture', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const stage = defined(document.querySelector('.da-stage')) as HTMLElement
-    stage.scrollTop = 0
-    const calls: (readonly [number, number])[] = []
-    const view = defined(frame().contentWindow)
-    Object.defineProperty(view, 'scrollBy', {
-      configurable: true,
-      value: (x: number, y: number) => { calls.push([x, y]) },
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    const before = Number.parseFloat(surface.style.width)
+    const event = new WheelEvent('wheel', {
+      bubbles: true, cancelable: true, deltaY: -40, ctrlKey: true, clientX: 60, clientY: 50,
     })
     await act(async () => {
-      stage.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaX: 0, deltaY: 120 }))
+      stage.dispatchEvent(event)
     })
-    // The page is what moves. The pane stays put, or one gesture would have two
-    // answers and the window would drift out of the panel.
-    expect(calls).toEqual([[0, 120]])
-    expect(stage.scrollTop).toBe(0)
+    expect(event.defaultPrevented).toBe(true)
+    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(before)
   })
 
-  it('pans a document with two fingers without magnifying its fixed layout', async () => {
-    mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+  it('pinches a local document instead of changing the frame scrollport', async () => {
+    mounted = await htmlBody({}, { zoom: 1.5 })
+    await reportLayout(RENDER_WIDTH, 1843)
     const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
-    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
-    const width = surface.style.width
-    const calls: (readonly [number, number])[] = []
-    const view = defined(frame().contentWindow)
-    Object.defineProperty(view, 'scrollBy', {
-      configurable: true,
-      value: (x: number, y: number) => { calls.push([x, y]) },
-    })
+    stubRect(overlay, { left: 0, top: 0, width: RENDER_WIDTH, height: 1843 })
+    const before = Number.parseFloat(surface.style.width)
     const touch = (type: string, x: number, y: number, id: number, primary: boolean): void => {
       const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y })
       Object.defineProperties(event, {
@@ -4219,41 +4275,41 @@ describe('a rendered document', () => {
       touch('pointerdown', 100, 100, 2, false)
       touch('pointermove', 190, 100, 2, false)
     })
-    // Two fingers scroll the framed document, but the fixed-width paper beneath it
-    // is not a zoomable picture: changing its factor would detach every mark.
-    expect(surface.style.width).toBe(width)
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.[0]).toBe(-45)
-    expect(Math.abs(calls[0]?.[1] ?? 1)).toBe(0)
+    expect(Number.parseFloat(surface.style.width)).toBeGreaterThan(before)
   })
 
-  it('drags the page under the marks, so a mark stays on the element it was drawn on', async () => {
+  it('keeps the local document and overlay aligned while its window scrolls', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
-    await scrollDocument({ x: 0, y: 300 })
-    // The marks hold document coordinates and move up with the document. The event
-    // catching svg stays over the window: moving it up used to leave the lower half
-    // of a long page with no annotator over it at all.
+    await reportLayout(RENDER_WIDTH, 1843)
+    // The document is taller than its frame, but the frame remains one viewport.
+    expect(frame().style.height).toBe(`${WINDOW.height}px`)
+    const view = defined(frame().contentWindow)
+    Object.defineProperty(view, 'scrollX', { configurable: true, value: 0 })
+    Object.defineProperty(view, 'scrollY', { configurable: true, value: 300 })
+    await act(async () => {
+      view.dispatchEvent(new Event('scroll'))
+    })
     const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
     expect(overlay.style.transform).toBe('')
+    // Marks keep document pixels; the group is moved by the frame's own scroll offset.
     expect(overlay.firstElementChild?.getAttribute('transform')).toBe('translate(0 -300)')
   })
 
-  it('drags the page rather than the pane when the empty canvas is pushed', async () => {
-    mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
-    const calls: (readonly [number, number])[] = []
+  it('pans the local document by scrolling its own window', async () => {
+    mounted = await htmlBody({}, { zoom: 1.5 })
+    await reportLayout(RENDER_WIDTH, 1843)
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    stubRect(stage, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    stage.scrollLeft = 100
+    stage.scrollTop = 100
     const view = defined(frame().contentWindow)
+    const scrolled: [number, number][] = []
     Object.defineProperty(view, 'scrollBy', {
       configurable: true,
-      value: (x: number, y: number) => { calls.push([x, y]) },
+      value: (x: number, y: number) => { scrolled.push([x, y]) },
     })
-    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
-    stage.scrollTop = 0
-    // Pushing the page right and down scrolls it left and up, the same way the pane
-    // is scrolled for a picture — one gesture, whichever surface is underneath.
     const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
-    stubRect(overlay, { left: 0, top: 0, width: WINDOW.width, height: WINDOW.height })
+    stubRect(overlay, { left: 0, top: 0, width: RENDER_WIDTH, height: 1843 })
     for (const [type, x, y] of [
       ['pointerdown', 100, 100], ['pointermove', 140, 130], ['pointerup', 140, 130],
     ] as const) {
@@ -4261,13 +4317,233 @@ describe('a rendered document', () => {
         overlay.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y }))
       })
     }
-    expect(calls).toEqual([[-40, -30]])
-    expect(stage.scrollTop).toBe(0)
+    expect(scrolled).toEqual([[-40, -30]])
+    // The outer stage is not a second scrollport for the same document.
+    expect(stage.scrollLeft).toBe(100)
+    expect(stage.scrollTop).toBe(100)
+  })
+
+  it('keeps a deck in one window instead of growing it to ten slides tall', async () => {
+    mounted = await htmlBody()
+    await reportLayout(RENDER_WIDTH, 10800)
+    const element = frame()
+    // A deck's content is ten screens long, but its window remains one screen and the
+    // deck scrolls inside it. This is the regression that turned the preview into a
+    // long strip.
+    expect(element.style.height).toBe(`${WINDOW.height}px`)
+    const view = defined(element.contentWindow)
+    const scrolled: [number, number][] = []
+    Object.defineProperty(view, 'scrollBy', {
+      configurable: true,
+      value: (x: number, y: number) => { scrolled.push([x, y]) },
+    })
+    const stage = defined(document.querySelector('.da-stage')) as HTMLElement
+    const wheel = new WheelEvent('wheel', {
+      bubbles: true, cancelable: true, deltaX: 0, deltaY: 360,
+    })
+    await act(async () => {
+      stage.dispatchEvent(wheel)
+    })
+    expect(wheel.defaultPrevented).toBe(true)
+    Object.defineProperty(stage, 'clientHeight', { configurable: true, value: WINDOW.height })
+    const lineWheel = new WheelEvent('wheel', {
+      bubbles: true, cancelable: true, deltaMode: 1, deltaX: 0, deltaY: 2,
+    })
+    const pageWheel = new WheelEvent('wheel', {
+      bubbles: true, cancelable: true, deltaMode: 2, deltaX: 0, deltaY: 1,
+    })
+    const shiftedWheel = new WheelEvent('wheel', {
+      bubbles: true, cancelable: true, deltaX: 2, deltaY: 5, shiftKey: true,
+    })
+    await act(async () => {
+      stage.dispatchEvent(lineWheel)
+      stage.dispatchEvent(pageWheel)
+      stage.dispatchEvent(shiftedWheel)
+    })
+    expect([lineWheel.defaultPrevented, pageWheel.defaultPrevented, shiftedWheel.defaultPrevented])
+      .toEqual([true, true, true])
+    expect(scrolled).toEqual([[0, 360], [0, 32], [0, WINDOW.height], [7, 0]])
+    Object.defineProperty(view, 'scrollX', { configurable: true, value: 0 })
+    Object.defineProperty(view, 'scrollY', { configurable: true, value: 360 })
+    await act(async () => {
+      view.dispatchEvent(new Event('scroll'))
+    })
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    expect(overlay.firstElementChild?.getAttribute('transform')).toBe('translate(0 -360)')
+    expect(element.style.height).toBe(`${WINDOW.height}px`)
+  })
+
+  it('draws a mark while the local frame has lost its document', async () => {
+    mounted = await htmlBody()
+    await reportLayout(RENDER_WIDTH, 1843)
+    Object.defineProperty(frame(), 'contentDocument', {
+      configurable: true,
+      value: null,
+    })
+    try {
+      await drawOnDocument(document.body)
+      // With no document there is no logical surface to name, but the reader's press
+      // still becomes a mark instead of being swallowed by a disappearing frame.
+      expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    } finally {
+      Reflect.deleteProperty(frame(), 'contentDocument')
+    }
+  })
+
+  it('turns a scriptless deck one whole slide at a time', async () => {
+    const deck = '<!doctype html><html><head><title>Deck</title></head><body>'
+      + '<main class="stage"><section class="slide" id="one"><h1>One</h1></section>'
+      + '<section class="slide" id="two"><h1>Two</h1></section></main></body></html>'
+    mounted = await htmlBody(
+      {}, {}, { width: 800, height: 600 }, new TextEncoder().encode(deck),
+    )
+    const frameDocument = defined(frame().contentDocument)
+    const one = defined(frameDocument.querySelector<HTMLElement>('#one'))
+    const two = defined(frameDocument.querySelector<HTMLElement>('#two'))
+    stubRect(one, { left: 0, top: 0, width: 1920, height: 1080 })
+    stubRect(two, { left: 0, top: 0, width: 1600, height: 900 })
+    await reportLayout(RENDER_WIDTH, 10800)
+
+    // The frame is a slide, not a ten-slide strip or a window cropped through the
+    // middle of the first page.
+    expect(frame().style.width).toBe('1920px')
+    expect(frame().style.height).toBe('1080px')
+    expect(one.hasAttribute('data-figmark-slide-current')).toBe(true)
+    expect(two.hasAttribute('data-figmark-slide-current')).toBe(false)
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+
+    await click(button(document.body, zh.nextPage))
+    expect(one.hasAttribute('data-figmark-slide-current')).toBe(false)
+    expect(two.hasAttribute('data-figmark-slide-current')).toBe(true)
+    expect(frame().style.width).toBe('1600px')
+    expect(frame().style.height).toBe('900px')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
+
+    // Both pager arrows work, and keyboard paging uses the arrow/page convention.
+    const key = async (target: EventTarget, value: string): Promise<KeyboardEvent> => {
+      const event = new KeyboardEvent('keydown', {
+        key: value, bubbles: true, cancelable: true,
+      })
+      await act(async () => { target.dispatchEvent(event) })
+      return event
+    }
+    await click(button(document.body, zh.previousPage))
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+    expect((await key(window, 'PageDown')).defaultPrevented).toBe(true)
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
+    await key(window, 'PageDown')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
+    await key(window, 'PageUp')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+    await key(window, 'ArrowRight')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
+    await key(window, 'End')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
+    await key(window, 'Home')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+    const input = frameDocument.createElement('input')
+    const textarea = frameDocument.createElement('textarea')
+    const select = frameDocument.createElement('select')
+    const editable = frameDocument.createElement('div')
+    Object.defineProperty(editable, 'isContentEditable', { configurable: true, value: true })
+    frameDocument.body.append(input, textarea, select, editable)
+    for (const field of [input, textarea, select, editable]) {
+      expect((await key(field, 'ArrowRight')).defaultPrevented).toBe(false)
+    }
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+    expect(defined(frameDocument.querySelector('#one h1')).textContent).toBe('One')
+
+    // A frame that has gone away, or a DOM someone changed under the pager, is not a
+    // reason to move the panel to an index that no longer means a slide.
+    Object.defineProperty(frame(), 'contentDocument', { configurable: true, value: null })
+    expect((await key(window, 'ArrowRight')).defaultPrevented).toBe(true)
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+    Reflect.deleteProperty(frame(), 'contentDocument')
+    for (const slide of frameDocument.querySelectorAll('[data-figmark-slide]')) {
+      slide.removeAttribute('data-figmark-slide')
+    }
+    await key(window, 'ArrowRight')
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('1 / 2')
+  })
+
+  it('keeps a prepared deck visible while its first slide has no box', async () => {
+    const deck = '<!doctype html><html><head><title>Deck</title></head><body>'
+      + '<section class="slide" id="one"><h1>One</h1></section>'
+      + '<section class="slide" id="two"><h1>Two</h1></section></body></html>'
+    mounted = await htmlBody(
+      {}, {}, { width: 800, height: 600 }, new TextEncoder().encode(deck),
+    )
+    // jsdom lays neither slide out. The document still reports its own height, and
+    // using it is better than leaving a prepared deck as a zero-height window.
+    await reportLayout(RENDER_WIDTH, 900)
+    expect(frame().style.height).toBe('900px')
+  })
+
+  it('does not turn a document that has only one static slide', async () => {
+    const one = '<!doctype html><html><body><section class="slide"><h1 id="only">Only</h1></section></body></html>'
+    const mark: AnnotationDocument = {
+      ...savedHtml,
+      marks: [{
+        id: 'only', kind: 'element', color: '#1971c2', points: [[0, 0], [40, 20]],
+        detail: '唯一一页', anchor: {
+          tag: 'h1', id: 'only', selector: '#only', text: 'Only', bbox: [0, 0, 40, 20],
+        },
+      }],
+    }
+    mounted = await htmlBody(
+      { annotation: mark }, {}, { width: 800, height: 600 }, new TextEncoder().encode(one),
+    )
+    await reportLayout(RENDER_WIDTH, 1080)
+    await runFrames()
+    expect(document.querySelector('.da-deck-pager')).toBeNull()
+    await openList(document.body)
+    await click(defined(document.querySelector('.da-mark-text')))
+    expect(document.querySelector('.da-deck-pager')).toBeNull()
+  })
+
+  it('turns to the deck slide named by a mark in the list', async () => {
+    const deck = '<!doctype html><html><head><title>Deck</title></head><body>'
+      + '<section class="slide" id="one"><h1 id="cover">One</h1></section>'
+      + '<section class="slide" id="two"><p id="lead">Two</p></section></body></html>'
+    const marks: AnnotationDocument = {
+      ...savedHtml,
+      marks: [
+        { id: 'region', kind: 'rect', color: '#e03131', points: [[10, 10], [80, 40]], detail: '区域' },
+        {
+          id: 'second', kind: 'element', color: '#1971c2', points: [[0, 0], [40, 20]],
+          detail: '第二页', anchor: {
+            tag: 'p', id: 'lead', selector: '#lead', text: 'Two', bbox: [0, 0, 40, 20],
+          },
+        },
+      ],
+    }
+    mounted = await htmlBody(
+      { annotation: marks }, {}, { width: 800, height: 600 }, new TextEncoder().encode(deck),
+    )
+    const frameDocument = defined(frame().contentDocument)
+    const one = defined(frameDocument.querySelector<HTMLElement>('#one'))
+    const two = defined(frameDocument.querySelector<HTMLElement>('#two'))
+    stubRect(one, { left: 0, top: 0, width: 1920, height: 1080 })
+    stubRect(two, { left: 0, top: 0, width: 1920, height: 1080 })
+    await reportLayout(RENDER_WIDTH, 1080)
+    await runFrames()
+    await openList(document.body)
+    const rows = [...document.querySelectorAll<HTMLElement>('.da-mark-text')]
+    // A region has no selector: selecting it leaves the current slide alone.
+    await click(defined(rows[0]))
+    expect(one.hasAttribute('data-figmark-slide-current')).toBe(true)
+    // An element mark names its slide, so choosing its row turns the deck first.
+    // Revealing gets the list out of the way; reopen it for the second row.
+    await openList(document.body)
+    await click(defined(document.querySelectorAll<HTMLElement>('.da-mark-text')[1]))
+    expect(two.hasAttribute('data-figmark-slide-current')).toBe(true)
+    expect(one.hasAttribute('data-figmark-slide-current')).toBe(false)
+    expect(document.querySelector('.da-deck-pager')?.textContent).toBe('2 / 2')
   })
 
   it('names the element under the pointer in the words of the page itself', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const card = frameDocument.createElement('div')
     card.className = 'relative'
@@ -4290,11 +4566,10 @@ describe('a rendered document', () => {
     // An element with an id is named by the id, which is the name the page itself uses.
     await moveOver([defined(frameDocument.querySelector('#lead'))])
     expect(chip.textContent).toBe('p#lead')
-    // The name travels with the page: the box is in document pixels, and the window
-    // has moved 300px down the document.
+    // The whole local sheet scrolls outside a frame as tall as the document, so the
+    // name stays in the same document pixel instead of acquiring a scroll offset.
     await moveOver([card])
-    await scrollDocument({ x: 0, y: 300 })
-    expect(chip.style.top).toBe('-296px')
+    expect(chip.style.top).toBe('4px')
     // A pointer that names nothing says nothing, rather than leaving an old name up.
     await moveOver([])
     expect(document.querySelector('.da-name')).toBeNull()
@@ -4303,7 +4578,7 @@ describe('a rendered document', () => {
 
   it('keeps the element depth chosen under the pointer when hover and click agree', async () => {
     mounted = await htmlBody()
-    await reportLayout(WINDOW.width, 1843)
+    await reportLayout(RENDER_WIDTH, 1843)
     const frameDocument = defined(frame().contentDocument)
     const lead = defined(frameDocument.querySelector('#lead'))
     const field = frameDocument.createElement('input')
@@ -4515,18 +4790,29 @@ describe('a rendered document', () => {
           id: 'back', kind: 'element', color: '#1971c2', points: [[0, 0], [1024, 120]], detail: '第二页要改',
           anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第二页', bbox: [0, 0, 1024, 120] },
         },
-        // An arrow carries the element its tip landed on, so its page can be told; a
-        // region does not, because a region is about the area rather than a thing.
+        // An arrow carries the element its tip landed on. A region has no element,
+        // so it carries the logical surface it was drawn on instead.
         {
           id: 'arrow', kind: 'arrow', color: '#e03131', points: [[10, 10], [40, 60]], weight: 2,
           anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第二页', bbox: [0, 0, 1024, 120] },
         },
-        { id: 'region', kind: 'rect', color: '#e03131', points: [[10, 10], [40, 60]], weight: 2 },
+        {
+          id: 'region', kind: 'rect', color: '#e03131', points: [[10, 10], [40, 60]],
+          weight: 2, surface: '#s1',
+        },
       ],
     }
     mounted = await htmlBody(
       { annotation: paged }, {}, { width: 800, height: 600 }, new TextEncoder().encode(deck),
     )
+    // jsdom has no layout. Give each prepared slide the size a real browser would,
+    // so the zero-size guard is tested as a pending layout rather than as this deck.
+    stubRect(defined(frame().contentDocument?.querySelector('#s1')), {
+      left: 0, top: 0, width: 1024, height: 600,
+    })
+    stubRect(defined(frame().contentDocument?.querySelector('#s2')), {
+      left: 0, top: 0, width: 1024, height: 600,
+    })
     await reportLayout(WINDOW.width, 1843)
     // Until the first frame nothing has been read, so both marks are drawn as recorded.
     expect(boxedIds()).toEqual(['cover', 'back'])
@@ -4536,18 +4822,17 @@ describe('a rendered document', () => {
     // The mark on the page behind its box too: a box left over from another slide is
     // the same claim as a chip left over from it.
     expect(document.querySelector('[data-da-element-box="back"]')).toBeNull()
-    // The arrow on the other slide goes with it, because its tip named an element
-    // there. The region stays: it records an area of the page, not a thing on it.
+    // The arrow names an element on the slide behind. The region was drawn on the
+    // cover, so it belongs to the slide in front and stays until the reader turns it.
     expect(document.querySelector('[data-da-mark="arrow"]')).toBeNull()
     expect(document.querySelector('[data-da-mark="region"]')).not.toBeNull()
-    // The reader turns the page the way the deck does it: one class off, one on.
-    const slides = [...defined(frame().contentDocument).querySelectorAll('section')]
-    slides[0]?.classList.remove('current')
-    slides[1]?.classList.add('current')
+    // The reader turns the page with the scriptless deck's own pager.
+    await click(button(document.body, zh.nextPage))
     await runFrames()
     expect(boxedIds()).toEqual(['back'])
     expect(document.querySelector('[data-da-element-box="cover"]')).toBeNull()
     expect(document.querySelector('[data-da-mark="arrow"]')).not.toBeNull()
+    expect(document.querySelector('[data-da-mark="region"]')).toBeNull()
     // And the mark is drawn at the element's live box, not the box it had when it was
     // picked: a deck that rescales itself keeps the name on the thing it names.
     stubRect(defined(defined(frame().contentDocument).querySelector('#lead')), { left: 0, top: 402, width: 700, height: 60 })
@@ -4601,12 +4886,22 @@ describe('a rendered document', () => {
       return defined(document.querySelector('input.da-live-addr')) as HTMLInputElement
     }
 
+    /** Open the address drawer and return the field it revealed. */
+    async function revealAddress(): Promise<HTMLInputElement> {
+      const field = defined(document.querySelector('.da-live-field')) as HTMLElement
+      if (field.dataset['open'] === 'false') {
+        await click(defined(field.querySelector('.da-live-toggle')) as HTMLElement)
+      }
+      return address()
+    }
+
     /** One message the page reported, arriving from the page's own origin. */
     async function report(data: Record<string, unknown>, origin: string = LIVE_ORIGIN): Promise<void> {
       await act(async () => {
         window.dispatchEvent(new MessageEvent('message', {
           data: { figmark: LIVE_MESSAGE, ...data },
           origin,
+          source: frame().contentWindow,
         }))
         for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
       })
@@ -4624,9 +4919,10 @@ describe('a rendered document', () => {
 
     /** Go where the reader typed, the way a browser would: Enter. */
     async function go(text: string): Promise<void> {
-      await type(address(), text)
+      const field = await revealAddress()
+      await type(field, text)
       await act(async () => {
-        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
         for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
       })
     }
@@ -4645,24 +4941,43 @@ describe('a rendered document', () => {
       const result = await htmlBody({ annotation: savedHtml, liveUrl: LIVE_URL })
       mounted = result
       await reportLayout(WINDOW.width, 1843)
+      // The address spends no room on a filename until the reader asks for it.
+      const compact = defined(document.querySelector('.da-live-field')) as HTMLElement
+      expect(compact.dataset['open']).toBe('false')
+      expect(document.querySelector('input.da-live-addr')).toBeNull()
+      expect((defined(document.querySelector('.da-live-toggle')) as HTMLElement)
+        .getAttribute('aria-expanded')).toBe('false')
       // The field names the file while the file is what is framed.
-      expect(address().value).toBe('report.html')
+      expect((await revealAddress()).value).toBe('report.html')
       // At rest it is a document field, not a bare text box: its badge says the format.
       const field = defined(document.querySelector('.da-live-field')) as HTMLElement
+      expect(field.dataset['open']).toBe('true')
       expect(field.dataset['live']).toBe('false')
       expect(document.querySelector('.da-live-badge')?.textContent).toBe('HTML')
       expect(document.querySelector('.da-live-icon path')).not.toBeNull()
       expect(document.querySelector('.da-live-parent')?.textContent).toBe('.../w/')
+      expect(document.activeElement).toBe(address())
+      await click(defined(field.querySelector('.da-live-toggle')) as HTMLElement)
+      expect(field.dataset['open']).toBe('false')
+      expect(document.querySelector('input.da-live-addr')).toBeNull()
+      expect((defined(field.querySelector('.da-live-toggle')) as HTMLElement)
+        .getAttribute('aria-expanded')).toBe('false')
+      await revealAddress()
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
       await go('localhost:5173')
-      const opened = result.calls.find(call => call.url.endsWith('/dsh-figmark/live'))
+      const opened = result.calls.find(call =>
+        call.url.includes('/dsh-figmark/live') && call.init?.method === 'POST')
       // What the reader typed is the address the Host is asked for: only the scheme
       // is added, because that is the one part a person does not write down.
       expect(postBody(opened)).toEqual({ url: 'http://localhost:5173/' })
       // The frame is the page the Host answered with, not the file whose preview the
       // panel started from.
       expect(frame().getAttribute('src')).toBe(LIVE_URL)
+      // Opening an address puts the drawer away again, leaving the page its full size.
+      expect(field.dataset['open']).toBe('false')
+      expect(document.querySelector('input.da-live-addr')).toBeNull()
+      await revealAddress()
       // A proxied page keeps the same field but changes its icon and badge.
       expect(field.dataset['live']).toBe('true')
       expect(document.querySelector('.da-live-badge')?.textContent).toBe(zh.livePage)
@@ -4675,7 +4990,28 @@ describe('a rendered document', () => {
 
     it('omits the breadcrumb when the file has no parent directory', async () => {
       mounted = await htmlBody({ path: '/report.html' })
+      await revealAddress()
       expect((defined(document.querySelector('.da-live-parent')) as HTMLElement).hidden).toBe(true)
+    })
+
+    it('opens the drawer while the annotation read is still in flight', async () => {
+      let release = (): void => {}
+      const hold = new Promise<void>((resolve) => { release = resolve })
+      mounted = await htmlBody({ readHold: hold })
+      await revealAddress()
+      expect(address().value).toBe('')
+      release()
+      await act(async () => {
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+      expect(address().value).toBe('report.html')
+    })
+
+    it('gives a live page the pane width even before its height is measured', async () => {
+      mounted = await htmlBody({ liveUrl: LIVE_URL }, {}, { width: 800, height: 0 })
+      await go('localhost:5173')
+      expect(frame().style.width).toBe(`${WINDOW.width}px`)
+      expect(frame().style.height).toBe('0px')
     })
 
     it('hands back an address that is not one, without asking the Host', async () => {
@@ -4685,7 +5021,7 @@ describe('a rendered document', () => {
       // The field is where the reader wrote the address, so it is where the refusal
       // belongs: nothing was sent, and the document is still in the frame.
       expect(document.querySelector('.da-live-error')?.textContent).toBe(zh.liveBadAddress)
-      expect(result.calls.filter(call => call.url.endsWith('/dsh-figmark/live'))).toHaveLength(0)
+      expect(result.calls.filter(call => call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
       expect(frame().getAttribute('src')).toBeNull()
       // Escape gives the field back; the refusal must go with the bad value rather
       // than staying under the restored filename as if that file had failed.
@@ -4714,9 +5050,10 @@ describe('a rendered document', () => {
       const hold = new Promise<void>((resolve) => { release = resolve })
       const result = await htmlBody({ liveUrl: LIVE_URL, liveHold: hold })
       mounted = result
-      await type(address(), 'localhost:5173')
+      const field = await revealAddress()
+      await type(field, 'localhost:5173')
       await act(async () => {
-        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
         for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
       })
       const note = defined(document.querySelector('.da-live-note')) as HTMLElement
@@ -4726,8 +5063,52 @@ describe('a rendered document', () => {
       await act(async () => {
         for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
       })
-      expect(note.hidden).toBe(true)
+      expect(document.querySelector('.da-live-note')).toBeNull()
+      expect(document.querySelector('.da-live-field')).toHaveProperty('dataset.open', 'false')
       expect(frame().getAttribute('src')).toBe(LIVE_URL)
+    })
+
+    it('coalesces repeated Enter presses into one open request', async () => {
+      let release = (): void => {}
+      const hold = new Promise<void>((resolve) => { release = resolve })
+      const result = await htmlBody({ liveUrl: LIVE_URL, liveHold: hold })
+      mounted = result
+      const field = await revealAddress()
+      await type(field, 'localhost:5173')
+      await act(async () => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      expect(result.calls.filter(call =>
+        call.url.includes('/dsh-figmark/live') && call.init?.method === 'POST')).toHaveLength(1)
+      release()
+      await act(async () => {
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+    })
+
+    it('closes a proxy whose open answer arrives after the body unmounts', async () => {
+      let release = (): void => {}
+      const hold = new Promise<void>((resolve) => { release = resolve })
+      const result = await htmlBody({ liveUrl: LIVE_URL, liveHold: hold })
+      const field = await revealAddress()
+      await type(field, 'localhost:5173')
+      await act(async () => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      await act(async () => {
+        result.root.unmount()
+        await Promise.resolve()
+      })
+      mounted = undefined
+      release()
+      await act(async () => {
+        for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      })
+      expect(result.calls.some(call =>
+        call.url.includes('/dsh-figmark/live?url=') && call.init?.method === 'DELETE')).toBe(true)
     })
 
     it('names the element the page reports, and moves the name with the page', async () => {
@@ -4772,7 +5153,8 @@ describe('a rendered document', () => {
       const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
       // A page has no sidecar: its address may not be a file at all, so the marks
       // travel in the message and the message names the page it is about.
-      expect(result.calls.filter(call => call.init?.method === 'POST' && !call.url.endsWith('/live'))).toHaveLength(0)
+      expect(result.calls.filter(call =>
+        call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
       expect(parts[0]?.text).toContain('http://localhost:5173/')
       expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
     })
@@ -4823,7 +5205,8 @@ describe('a rendered document', () => {
       await report({ kind: 'pick', ...PICKED })
       await click(button(document.body, zh.sendToAgent))
       // Nothing was written: what the reader marked is a page, not a file beside it.
-      expect(result.calls.filter(call => call.init?.method === 'POST' && !call.url.endsWith('/live'))).toHaveLength(0)
+      expect(result.calls.filter(call =>
+        call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
       // The delivery is a promise of its own, so it is given more than the press's turn.
       await act(async () => {
         for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
@@ -4873,7 +5256,8 @@ describe('a rendered document', () => {
       // A frame that was still loading when the mode was sent had nothing to hear it
       // with, so the page's own report is the moment the mode is said again.
       await report({ kind: 'ready', scroll: [0, 240] })
-      expect(posted.at(-1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: true })
+      expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: true })
+      expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'watch', selectors: [] })
     })
 
     it('ignores a report it cannot make sense of', async () => {
@@ -4891,6 +5275,7 @@ describe('a rendered document', () => {
     it('gives the field back on Escape, leaving the page where it is', async () => {
       mounted = await htmlBody({ liveUrl: LIVE_URL })
       await go('localhost:5173')
+      await revealAddress()
       await type(address(), 'localhost:9999')
       await act(async () => {
         address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
@@ -4903,8 +5288,10 @@ describe('a rendered document', () => {
     it('fills the field with the address of the page on focus, not the file', async () => {
       mounted = await htmlBody({ liveUrl: LIVE_URL })
       await go('localhost:5173')
+      await revealAddress()
       await type(address(), 'half typed')
       await act(async () => {
+        address().blur()
         address().focus()
         for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
       })
@@ -4923,18 +5310,28 @@ describe('a rendered document', () => {
 
     it('does nothing when there is no frame to tell', async () => {
       mounted = await htmlBody({ liveUrl: LIVE_URL })
-      const proto = HTMLIFrameElement.prototype
-      const original = Object.getOwnPropertyDescriptor(proto, 'contentWindow')
-      Object.defineProperty(proto, 'contentWindow', { configurable: true, get: () => null })
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'ready', scroll: [0, 0] })
+      await report({ kind: 'hover', ...PICKED, level: 1, count: 2 })
+      const framed = frame()
+      const original = Object.getOwnPropertyDescriptor(framed, 'contentWindow')
       try {
-        await go('localhost:5173')
+        // jsdom puts the window on the frame instance; replacing the prototype getter
+        // would leave that own property in place and never exercise the teardown.
+        Object.defineProperty(framed, 'contentWindow', { configurable: true, value: null })
         // Without a window there is nobody to tell, and that is not a failure: the
         // page is still framed and the field still opened it.
+        await click(defined(document.querySelector('.da-palette-hint-step')))
+        // The same teardown can catch the two settled effects: changing the tool asks
+        // the absent page to change mode, and drawing changes the selectors it watches.
+        await click(button(document.body, zh.toolArrow))
         await click(button(document.body, zh.toolElement))
-        await report({ kind: 'ready', scroll: [0, 0] })
+        await drawOnDocument(document.body)
         expect(frame().getAttribute('src')).toBe(LIVE_URL)
       } finally {
-        if (original !== undefined) Object.defineProperty(proto, 'contentWindow', original)
+        if (original === undefined) Reflect.deleteProperty(framed, 'contentWindow')
+        else Object.defineProperty(framed, 'contentWindow', original)
       }
     })
 
@@ -4942,11 +5339,14 @@ describe('a rendered document', () => {
       const result = await htmlBody({ liveUrl: LIVE_URL })
       mounted = result
       await go('localhost:5173')
+      await revealAddress()
       await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
       // A port still answering on the reader's machine for a page nobody is framing
       // is a leftover, so going back closes it.
-      expect(result.calls.filter(call => call.init?.method === 'DELETE' && call.url.endsWith('/live'))).toHaveLength(1)
+      expect(result.calls.filter(call =>
+        call.init?.method === 'DELETE' && call.url.includes('/live?url='))).toHaveLength(1)
       expect(frame().getAttribute('src')).toBeNull()
+      await revealAddress()
       expect(address().value).toBe('report.html')
     })
 
@@ -4955,6 +5355,7 @@ describe('a rendered document', () => {
       mounted = result
       // The control's `hidden` state is a visual hint. Its handler still has to be
       // safe when a test or integrating shell dispatches the action directly.
+      await revealAddress()
       await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
       expect(result.calls.filter(call => call.init?.method === 'DELETE')).toHaveLength(0)
       await openList(document.body)
@@ -4972,7 +5373,8 @@ describe('a rendered document', () => {
         await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20))
       })
       expect(result.calls.filter(call =>
-        call.init?.method === 'DELETE' && !call.url.endsWith('/live'))).toHaveLength(0)
+        call.init?.method === 'DELETE' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
+      await revealAddress()
       await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
       // Coming back restores the file's own marks and figure note, rather than
       // leaving the reader with the blank surface that belonged to the page.
@@ -4984,7 +5386,361 @@ describe('a rendered document', () => {
         await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20))
       })
       expect(result.calls.filter(call =>
-        call.init?.method === 'DELETE' && !call.url.endsWith('/live'))).toHaveLength(0)
+        call.init?.method === 'DELETE' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
+    })
+  })
+
+  describe('a service page opened directly', () => {
+    const SERVICE_ADDRESS = 'http://localhost:5173/'
+    const SERVICE_ORIGIN = 'http://127.0.0.1:4321'
+    const SERVICE_URL = `${SERVICE_ORIGIN}/__dsh_figmark_live/proxy/`
+    const PICKED = {
+      tag: 'p',
+      id: 'lead',
+      class: 'lead intro',
+      text: '第一段',
+      selector: '#lead',
+      bbox: [20, 30, 240, 60],
+      scroll: [0, 0],
+      level: 1,
+      count: 3,
+    }
+
+    /** Mount a body that came from the local-pages tab, without a file behind it. */
+    async function serviceBody(
+      props: Partial<AnnotatorBodyProps> = {},
+    ): Promise<{ readonly host: HTMLElement; readonly root: Root; readonly calls: Call[] }> {
+      const calls = stubFetch()
+      const result = await mountBody({
+        livePage: { address: SERVICE_ADDRESS, url: SERVICE_URL },
+        sessionId: 's1',
+        onLiveBack: () => {},
+        ...props,
+      }, { stageWidth: 800, stageHeight: 600 })
+      return { ...result, calls }
+    }
+
+    /** Report one picker message as the proxied frame would send it. */
+    async function report(data: Record<string, unknown>): Promise<void> {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: { figmark: LIVE_MESSAGE, ...data },
+          origin: SERVICE_ORIGIN,
+          source: frame().contentWindow,
+        }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+    }
+
+    /** Open the address drawer so its direct-service back action is visible. */
+    async function revealAddress(): Promise<void> {
+      await click(defined(document.querySelector('.da-live-toggle')) as HTMLElement)
+    }
+
+    it('frames the running page without reading or writing a file sidecar', async () => {
+      const result = await serviceBody()
+      mounted = result
+      expect(frame().getAttribute('src')).toBe(SERVICE_URL)
+      expect(frame().getAttribute('sandbox')).toContain('allow-scripts')
+      expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
+      expect(result.calls.some(call => call.url.includes('/dsh-figmark/annotation'))).toBe(false)
+      await revealAddress()
+      expect(document.querySelector('.da-live-back')?.textContent).toBe(zh.liveBackServices)
+    })
+
+    it('picks an element, lists its source signature, and sends without a sidecar write', async () => {
+      const { sessions, prompts } = stubSessions()
+      const result = await serviceBody({ sessions })
+      mounted = result
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'hover', ...PICKED })
+      expect(document.querySelector('.da-name')?.textContent).toBe('p#lead')
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      expect(document.querySelector('.da-mark-title')?.textContent).toBe('<p#lead.lead.intro = "第一段">')
+      await click(button(document.body, zh.sendToAgent))
+      expect(result.calls.filter(call =>
+        call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
+      const parts = defined(prompts[0]) as { readonly text?: string }[]
+      expect(parts[0]?.text).toContain(SERVICE_ADDRESS)
+    })
+
+    it('asks the page to reveal a mark and selects it only after the page agrees', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await report({
+        kind: 'pick',
+        ...PICKED,
+        id: 'other',
+        selector: '#other',
+        text: '第二段',
+        bbox: [20, 100, 240, 60],
+      })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      const rows = [...document.querySelectorAll<HTMLElement>('.da-mark')]
+      expect(rows).toHaveLength(2)
+      await click(defined(document.querySelectorAll<HTMLElement>('.da-mark-text')[0]))
+      const request = posted.find(message => message['kind'] === 'reveal')
+      expect(request).toMatchObject({
+        figmark: LIVE_MESSAGE,
+        kind: 'reveal',
+        selector: '#lead',
+        surface: null,
+        bbox: [20, 30, 240, 60],
+      })
+      expect(rows[0]?.getAttribute('data-selected')).toBe('false')
+      expect(rows[1]?.getAttribute('data-selected')).toBe('true')
+      await report({
+        kind: 'reveal-result',
+        requestId: request?.['requestId'],
+        status: 'revealed',
+      })
+      // A successful reveal closes the map so it no longer covers the destination.
+      expect(document.querySelector('.da-float-list')).toBeNull()
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')[0]?.getAttribute('data-selected')).toBe('true')
+      expect(document.querySelectorAll('.da-mark')[1]?.getAttribute('data-selected')).toBe('false')
+    })
+
+    it('ignores stale reveal answers, clears a rejected reveal, and dismisses on cancel', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await report({
+        kind: 'pick',
+        ...PICKED,
+        id: 'other',
+        selector: '#other',
+        text: '第二段',
+        bbox: [20, 100, 240, 60],
+      })
+      await openList(document.body)
+      const rows = [...document.querySelectorAll<HTMLElement>('.da-mark')]
+      const first = defined(rows[0])
+      const second = defined(rows[1])
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(first)
+      const request = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({ kind: 'reveal-result', requestId: 'stale-request', status: 'revealed' })
+      expect(second.getAttribute('data-selected')).toBe('true')
+      await report({ kind: 'reveal-result', requestId: request['requestId'], status: 'missing' })
+      expect(document.querySelector('.da-toast[data-kind="note"]')?.getAttribute('data-text'))
+        .toBe(zh.reveal_missing)
+      expect(document.querySelectorAll('.da-mark')[0]?.getAttribute('data-selected')).toBe('false')
+      expect(document.querySelectorAll('.da-mark')[1]?.getAttribute('data-selected')).toBe('false')
+      await click(first)
+      await report({ kind: 'hover', ...PICKED })
+      expect(document.querySelector('.da-name')).not.toBeNull()
+      await report({ kind: 'cancel' })
+      expect(document.querySelector('.da-name')).toBeNull()
+      expect(document.querySelector('.da-palette-hint-depth')).toBeNull()
+      expect(document.querySelectorAll('.da-mark[data-selected="true"]')).toHaveLength(0)
+      expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('false')
+      expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('moves the picker ladder down from the palette and expires an unanswered reveal', async () => {
+      vi.useFakeTimers()
+      try {
+        mounted = await serviceBody()
+        await click(button(document.body, zh.toolElement))
+        await report({ kind: 'hover', ...PICKED, level: 2, count: 3 })
+        const view = defined(frame().contentWindow)
+        const posted: Record<string, unknown>[] = []
+        Object.defineProperty(view, 'postMessage', {
+          configurable: true,
+          value: (message: Record<string, unknown>) => { posted.push(message) },
+        })
+        await click(defined(document.querySelectorAll('.da-palette-hint-step')[1]))
+        expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: -1 })
+        const input = document.createElement('input')
+        const textarea = document.createElement('textarea')
+        const select = document.createElement('select')
+        const editable = document.createElement('div')
+        editable.contentEditable = 'true'
+        document.body.append(input, textarea, select, editable)
+        for (const target of [input, textarea, select, editable]) {
+          await act(async () => {
+            target.dispatchEvent(new KeyboardEvent('keydown', {
+              key: 'ArrowUp', bubbles: true, cancelable: true,
+            }))
+          })
+        }
+        await act(async () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Enter', bubbles: true, cancelable: true,
+          }))
+        })
+        await act(async () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowUp', bubbles: true, cancelable: true,
+          }))
+        })
+        expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: 1 })
+        await act(async () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'ArrowDown', bubbles: true, cancelable: true,
+          }))
+        })
+        expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: -1 })
+        await report({ kind: 'pick', ...PICKED })
+        await openList(document.body)
+        await click(defined(document.querySelector('.da-mark-text')))
+        expect(document.querySelector('.da-mark')?.getAttribute('data-selected')).toBe('true')
+        await act(async () => {
+          vi.advanceTimersByTime(1600)
+          for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+        })
+        expect(document.querySelector('.da-toast[data-kind="note"]')?.getAttribute('data-text'))
+          .toBe(zh.reveal_timeout)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('reveals geometric marks without points and replaces a pending reveal', async () => {
+      mounted = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'surface-mark', kind: 'rect', color: '#e03131', points: [], detail: '整页区域',
+              surface: 'body > section:nth-of-type(2)',
+            },
+            {
+              id: 'point-mark', kind: 'rect', color: '#2f9e44', points: [[12, 34]], detail: '一个点',
+            },
+            {
+              id: 'element-mark', kind: 'element', color: '#1971c2', points: [[20, 30], [240, 60]],
+              detail: '元素', anchor: { tag: 'p', id: 'lead', selector: '#lead', bbox: [20, 30, 220, 30] },
+            },
+          ],
+        },
+      })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      const rows = [...document.querySelectorAll<HTMLElement>('.da-mark')]
+      await click(defined(rows[0]))
+      expect(posted.at(-1)).toMatchObject({
+        kind: 'reveal',
+        selector: null,
+        surface: 'body > section:nth-of-type(2)',
+        bbox: [0, 0, 0, 0],
+      })
+      await click(defined(rows[1]))
+      expect(posted.at(-1)).toMatchObject({
+        kind: 'reveal',
+        selector: null,
+        surface: null,
+        bbox: [12, 34, 0, 0],
+      })
+      await click(defined(rows[2]))
+      expect(posted.at(-1)).toMatchObject({
+        kind: 'reveal',
+        selector: '#lead',
+        surface: null,
+        bbox: [20, 30, 220, 30],
+      })
+    })
+
+    it('keeps a drawn region on its reported surface and drops its selection on a turn', async () => {
+      mounted = await serviceBody()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(5)' })
+      await drawOnDocument(document.body)
+      expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(6)' })
+      expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(0)
+      expect(document.querySelector('.da-float-detail')).toBeNull()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(5)' })
+      expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    })
+
+    it('follows live element bounds and closes the proxy when the body unmounts', async () => {
+      const result = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'live-element', kind: 'element', color: '#1971c2', points: [[0, 0], [10, 10]],
+              detail: '跟着页面走',
+              anchor: { tag: 'p', id: 'lead', selector: '#lead', bbox: [0, 0, 10, 10] },
+            },
+          ],
+        },
+      })
+      mounted = result
+      await report({
+        kind: 'bounds',
+        bounds: [{ selector: '#lead', bbox: [40, 70, 200, 50], visible: true }],
+      })
+      const plate = defined(document.querySelector('[data-da-element-box="live-element"]')) as SVGRectElement
+      expect(Number(plate.getAttribute('x'))).toBe(40)
+      expect(Number(plate.getAttribute('y'))).toBe(70)
+      await report({
+        kind: 'bounds',
+        bounds: [{ selector: '#lead', bbox: [40, 70, 200, 50], visible: false }],
+      })
+      expect(document.querySelector('[data-da-element-box="live-element"]')).toBeNull()
+      await act(async () => {
+        result.root.unmount()
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      mounted = undefined
+      expect(result.calls.some(call =>
+        call.url.includes('/dsh-figmark/live?url=') && call.init?.method === 'DELETE')).toBe(true)
+    })
+
+    it('tolerates untracked or unlocated bounds and keeps an unchanged layer', async () => {
+      mounted = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'no-selector', kind: 'rect', color: '#e03131', points: [[0, 0], [10, 10]], detail: '区域',
+            },
+            {
+              id: 'live-element', kind: 'element', color: '#1971c2', points: [[0, 0], [10, 10]],
+              detail: '跟着页面走',
+              anchor: { tag: 'p', id: 'lead', selector: '#lead', bbox: [0, 0, 10, 10] },
+            },
+          ],
+        },
+      })
+      await report({
+        kind: 'bounds',
+        bounds: [
+          { selector: '#not-marked', bbox: [0, 0, 10, 10], visible: true },
+          { selector: '#lead', bbox: [40, 70, 200, 50], visible: true },
+        ],
+      })
+      const plate = defined(document.querySelector('[data-da-element-box="live-element"]')) as SVGRectElement
+      expect(plate.getAttribute('x')).toBe('40')
+      await report({
+        kind: 'bounds',
+        bounds: [{ selector: '#lead', bbox: [40, 70, 200, 50], visible: true }],
+      })
+      expect(document.querySelector('[data-da-element-box="live-element"]')).not.toBeNull()
+      await report({
+        kind: 'bounds',
+        bounds: [{ selector: '#lead', bbox: [0, 0, 0, 0], visible: true }],
+      })
+      expect(document.querySelector('[data-da-element-box="live-element"]')).toBeNull()
     })
   })
 

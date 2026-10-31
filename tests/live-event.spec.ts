@@ -1,6 +1,8 @@
 /** The vocabulary a rendered page and the panel share, and the fence around it. */
 import { describe, expect, it } from 'vitest'
-import { LIVE_MESSAGE, liveModeMessage, parseLiveEvent } from '../src/shared/live'
+import {
+  LIVE_MESSAGE, liveDepthMessage, liveModeMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
+} from '../src/shared/live'
 
 /** A pick exactly as the injected script reports one. */
 const PICK = {
@@ -20,6 +22,30 @@ describe('the mode message', () => {
     expect(liveModeMessage(true)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: true })
     expect(liveModeMessage(false)).toEqual({ figmark: LIVE_MESSAGE, kind: 'mode', armed: false })
   })
+
+  it('names the selectors the page should keep measuring', () => {
+    expect(liveWatchMessage(['#one', 'body > p:nth-of-type(1)'])).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'watch',
+      selectors: ['#one', 'body > p:nth-of-type(1)'],
+    })
+  })
+
+  it('moves the element ladder without taking keyboard focus from the panel', () => {
+    expect(liveDepthMessage(1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: 1 })
+    expect(liveDepthMessage(-1)).toEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: -1 })
+  })
+
+  it('asks for one saved mark with its locator, surface and fallback box', () => {
+    expect(liveRevealMessage('r1', '#lead', '#slide-5', [10, 20, 30, 40])).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal',
+      requestId: 'r1',
+      selector: '#lead',
+      surface: '#slide-5',
+      bbox: [10, 20, 30, 40],
+    })
+  })
 })
 
 describe('parsing what a page reports', () => {
@@ -34,6 +60,16 @@ describe('parsing what a page reports', () => {
       bbox: [10, 20, 300, 40],
       scroll: [0, 120],
     })
+  })
+
+  it('keeps the element ladder depth when the picker reports one', () => {
+    expect(parseLiveEvent({ ...PICK, level: 2, count: 4 })).toMatchObject({
+      kind: 'pick',
+      level: 2,
+      count: 4,
+    })
+    expect(parseLiveEvent({ ...PICK, level: 5, count: 4 })).not.toHaveProperty('level')
+    expect(parseLiveEvent({ ...PICK, level: 1.5, count: 4 })).not.toHaveProperty('level')
   })
 
   it('leaves out the optional fields a page did not report', () => {
@@ -59,6 +95,66 @@ describe('parsing what a page reports', () => {
 
   it('reads a leave, which carries nothing at all', () => {
     expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'leave' })).toEqual({ kind: 'leave' })
+    expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'cancel' })).toEqual({ kind: 'cancel' })
+  })
+
+  it('reads every honest outcome of a locate request', () => {
+    for (const status of ['revealed', 'missing', 'hidden', 'wrong-surface'] as const) {
+      expect(parseLiveEvent({
+        figmark: LIVE_MESSAGE,
+        kind: 'reveal-result',
+        requestId: 'r1',
+        status,
+      })).toEqual({ kind: 'reveal-result', requestId: 'r1', status })
+    }
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: '',
+      status: 'revealed',
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'x'.repeat(129),
+      status: 'revealed',
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'elsewhere',
+    })).toBeUndefined()
+  })
+
+  it('reads the logical surface in front, and the absence of one', () => {
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'surface',
+      selector: 'body > section:nth-of-type(5)',
+    })).toEqual({ kind: 'surface', selector: 'body > section:nth-of-type(5)' })
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'surface',
+      selector: null,
+    })).toEqual({ kind: 'surface', selector: null })
+  })
+
+  it('reads the live boxes of the elements saved marks name', () => {
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [
+        { selector: '#one', bbox: [1, 2, 3, 4], visible: true },
+        { selector: '#two', bbox: [0, 0, 0, 0], visible: false },
+      ],
+    })).toEqual({
+      kind: 'bounds',
+      bounds: [
+        { selector: '#one', bbox: [1, 2, 3, 4], visible: true },
+        { selector: '#two', bbox: [0, 0, 0, 0], visible: false },
+      ],
+    })
   })
 
   it('refuses anything that is not one of its own messages', () => {
@@ -84,5 +180,35 @@ describe('parsing what a page reports', () => {
     expect(parseLiveEvent({ ...PICK, tag: 7 })).toBeUndefined()
     expect(parseLiveEvent({ ...PICK, selector: undefined })).toBeUndefined()
     expect(parseLiveEvent({ ...PICK, bbox: undefined })).toBeUndefined()
+    expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'bounds', bounds: 'x' })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [{ selector: '', bbox: [1, 2, 3, 4], visible: true }],
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [{ selector: '#one', bbox: [1, 2, 3], visible: true }],
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [{ selector: '#one', bbox: [1, 2, 3, 4], visible: 'yes' }],
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: [null],
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'bounds',
+      bounds: Array.from({ length: 257 }, () => ({
+        selector: '#one', bbox: [1, 2, 3, 4], visible: true,
+      })),
+    })).toBeUndefined()
+    expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'surface', selector: '' })).toBeUndefined()
+    expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'surface', selector: 'x'.repeat(2049) })).toBeUndefined()
   })
 })

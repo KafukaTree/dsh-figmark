@@ -90,6 +90,8 @@ export interface MarkAnchor {
   readonly tag: string
   /** That element's `id`, when it declares one. */
   readonly id?: string
+  /** That element's capped class attribute, for a compact list signature. */
+  readonly class?: string
   /** That element's `<title>` text, when it declares one (Graphviz names its nodes here). */
   readonly title?: string
   /** That element's own text content, trimmed and capped. */
@@ -135,6 +137,16 @@ export interface AnnotationMark {
   readonly detail?: string
   /** 1-based page this mark sits on, for a figure that has pages. */
   readonly page?: number
+  /**
+   * Selector for the logical surface this mark was drawn on.
+   *
+   * A scrolling HTML page has one surface and coordinates plus scroll are enough.
+   * A deck keeps many pages in one document, so a region drawn on one slide would
+   * otherwise remain on top of every later slide. The selector names the visible
+   * slide (or equivalent surface) at draw time; it changes only where that mark is
+   * shown, never the geometry inside the surface.
+   */
+  readonly surface?: string
   /**
    * Clockwise rotation of the mark, in degrees around its own centre.
    *

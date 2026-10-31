@@ -28,6 +28,8 @@ import {
 
 /** Longest element selector one anchor may carry. */
 const MAX_SELECTOR_CHARS = 400
+/** Longest class list one anchor may carry. */
+const MAX_ANCHOR_CLASS_CHARS = 160
 
 /**
  * A note as it is stored: trimmed, and refused when it is longer than a paragraph.
@@ -88,6 +90,7 @@ function readAnchor(value: unknown): MarkAnchor | undefined {
     tag: raw['tag'],
     bbox: raw['bbox'],
     ...(typeof raw['id'] === 'string' ? { id: raw['id'] } : {}),
+    ...(typeof raw['class'] === 'string' ? { class: raw['class'].slice(0, MAX_ANCHOR_CLASS_CHARS) } : {}),
     ...(typeof raw['title'] === 'string' ? { title: raw['title'] } : {}),
     ...(typeof raw['text'] === 'string' ? { text: raw['text'] } : {}),
     // A selector is a path into a document the browser read, so it is capped like
@@ -195,6 +198,9 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
     throw new Error(`annotation mark ${index} is on page ${page} of a ${figure.pageCount}-page document`)
   }
   const anchor = readAnchor(raw['anchor'])
+  const surface = typeof raw['surface'] === 'string'
+    ? raw['surface'].slice(0, MAX_SELECTOR_CHARS)
+    : undefined
   const rotation = readRotation(raw['rotation'])
   const weight = readWeight(raw['weight'])
   const detail = readNote(raw['detail'], 'mark note', MAX_DETAIL_CHARS)
@@ -205,6 +211,7 @@ function readMark(value: unknown, index: number, figure: { readonly width?: numb
     points,
     ...(detail === undefined ? {} : { detail }),
     ...(page === undefined ? {} : { page }),
+    ...(surface === undefined ? {} : { surface }),
     ...(rotation === undefined ? {} : { rotation }),
     ...(weight === undefined ? {} : { weight }),
     ...(anchor === undefined ? {} : { anchor }),

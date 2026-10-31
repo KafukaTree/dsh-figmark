@@ -51,9 +51,42 @@ export const PICKER_SCRIPT: string = `(function () {
   var armed = false
   var pending = 0
   var latest = null
+  var latestKey = ''
+  var depth = 0
   var lastScroll = ''
+  var watched = []
+  var lastBounds = ''
+  var boundsScheduled = 0
+  var lastHover = ''
+  var lastSurface
+  var surfaceScheduled = 0
+
+  // The common spellings presentation frameworks use for the one page in front.
+  // This is deliberately a small convention rather than "the largest element":
+  // marking an arbitrary large container as a page would hide valid annotations.
+  var SURFACE_QUERY = [
+    '[data-slide-current="true"]',
+    '[data-slide-active="true"]',
+    '.slide.current',
+    '.slide.active',
+    '.slide[aria-current="true"]',
+    '.slide[aria-current="page"]',
+    '.page.current',
+    '.page.active',
+    '.swiper-slide-active',
+    '.carousel-item.active',
+    '.reveal .slides section.present',
+    '.remark-visible',
+    '.step.active',
+    '[role="tabpanel"]:not([hidden])',
+    '[role="tabpanel"][aria-hidden="false"]'
+  ].join(',')
 
   doc.documentElement.setAttribute('data-dsh-figmark', 'live')
+  var cursorStyle = doc.createElement('style')
+  cursorStyle.setAttribute('data-dsh-figmark-style', '')
+  cursorStyle.textContent = 'html[data-dsh-figmark-armed="true"] *{cursor:crosshair!important}'
+  ;(doc.head || doc.documentElement).appendChild(cursorStyle)
 
   function pathOf(el) {
     if (el === doc.body) return 'body'
@@ -68,6 +101,20 @@ export const PICKER_SCRIPT: string = `(function () {
     return steps.join(' > ')
   }
 
+  function ladderOf(el) {
+    var answer = []
+    for (var node = el; node && node !== doc.documentElement; node = node.parentElement) {
+      answer.push(node)
+    }
+    return answer
+  }
+
+  function keyOf(ladder) {
+    var parts = []
+    for (var i = 0; i < ladder.length; i += 1) parts.push(pathOf(ladder[i]))
+    return parts.join('|')
+  }
+
   function scrollOf() {
     return [window.scrollX || 0, window.scrollY || 0]
   }
@@ -78,16 +125,25 @@ export const PICKER_SCRIPT: string = `(function () {
     try { parent.postMessage(message, '*') } catch (error) { return }
   }
 
-  function report(kind, el) {
+  function report(kind, el, ladder, index) {
     var rect = el.getBoundingClientRect()
     var scroll = scrollOf()
+    var selector = pathOf(el)
+    var hoverKey = selector + '|' + scroll[0] + ',' + scroll[1] + '|'
+      + rect.left + ',' + rect.top + ',' + rect.width + ',' + rect.height
+    if (kind === 'hover') {
+      if (hoverKey === lastHover) return
+      lastHover = hoverKey
+    }
     var message = {
       figmark: MARKER,
       kind: kind,
       tag: el.tagName.toLowerCase(),
-      selector: pathOf(el),
+      selector: selector,
       bbox: [rect.left + scroll[0], rect.top + scroll[1], rect.width, rect.height],
-      scroll: scroll
+      scroll: scroll,
+      level: index + 1,
+      count: ladder.length
     }
     var text = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80)
     if (text) message.text = text
@@ -97,29 +153,232 @@ export const PICKER_SCRIPT: string = `(function () {
     send(message)
   }
 
+  function choose(ladder) {
+    var key = keyOf(ladder)
+    if (key !== latestKey) {
+      latestKey = key
+      depth = 0
+    }
+    depth = Math.max(0, Math.min(depth, ladder.length - 1))
+    return depth
+  }
+
   function under(event) {
     var el = event.target
     if (!el || el.nodeType !== 1) return null
     return el === doc.documentElement ? null : el
   }
 
+  function measure(selector) {
+    var el = null
+    try { el = doc.querySelector(selector) } catch (error) { el = null }
+    if (!el) return { selector: selector, bbox: [0, 0, 0, 0], visible: false }
+    var rect = el.getBoundingClientRect()
+    var scroll = scrollOf()
+    var style = window.getComputedStyle(el)
+    var visible = style.display !== 'none' && style.visibility !== 'hidden'
+    if (typeof el.checkVisibility === 'function') {
+      try {
+        visible = el.checkVisibility({
+          checkVisibilityCSS: true,
+          visibilityProperty: true,
+          contentVisibilityAuto: true
+        })
+      } catch (error) {
+        visible = style.display !== 'none' && style.visibility !== 'hidden'
+      }
+    }
+    return {
+      selector: selector,
+      bbox: [rect.left + scroll[0], rect.top + scroll[1], rect.width, rect.height],
+      visible: visible
+    }
+  }
+
+  function shown(el) {
+    if (!el) return false
+    var rect = el.getBoundingClientRect()
+    var style = window.getComputedStyle(el)
+    if (rect.width <= 0 || rect.height <= 0
+      || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
+    var viewportWidth = window.innerWidth || doc.documentElement.clientWidth || 0
+    var viewportHeight = window.innerHeight || doc.documentElement.clientHeight || 0
+    if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= viewportWidth || rect.top >= viewportHeight) {
+      return false
+    }
+    if (typeof el.checkVisibility === 'function') {
+      try {
+        return el.checkVisibility({
+          checkVisibilityCSS: true,
+          visibilityProperty: true,
+          contentVisibilityAuto: true
+        })
+      } catch (error) {
+        return true
+      }
+    }
+    return true
+  }
+
+  function delay(ms) {
+    return new Promise(function (resolve) { window.setTimeout(resolve, ms) })
+  }
+
+  function turnToward(target) {
+    var surfaces = []
+    try { surfaces = Array.prototype.slice.call(doc.querySelectorAll(SURFACE_QUERY)) } catch (error) { return Promise.resolve(false) }
+    var wanted = surfaces.indexOf(target)
+    var current = visibleSurface()
+    var from = current ? surfaces.indexOf(current) : -1
+    if (wanted < 0 || from < 0 || wanted === from) return Promise.resolve(shown(target))
+    var key = wanted > from ? 'ArrowRight' : 'ArrowLeft'
+    var steps = Math.min(32, Math.abs(wanted - from) + 2)
+    function next(remaining) {
+      if (remaining <= 0 || shown(target)) return Promise.resolve(shown(target))
+      var node = doc.activeElement || doc.body || doc.documentElement
+      var event = new KeyboardEvent('keydown', {
+        key: key,
+        code: key,
+        keyCode: key === 'ArrowRight' ? 39 : 37,
+        which: key === 'ArrowRight' ? 39 : 37,
+        bubbles: true,
+        cancelable: true
+      })
+      node.dispatchEvent(event)
+      return delay(45).then(function () { return next(remaining - 1) })
+    }
+    return next(steps)
+  }
+
+  function reveal(requestId, selector, surface, bbox) {
+    var surfaceEl = null
+    if (surface) {
+      try { surfaceEl = doc.querySelector(surface) } catch (error) { surfaceEl = null }
+      if (!surfaceEl) {
+        send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'wrong-surface' })
+        return
+      }
+    }
+    var ready = shown(surfaceEl) ? Promise.resolve(true) : surfaceEl ? turnToward(surfaceEl) : Promise.resolve(true)
+    ready.then(function (surfaceReady) {
+      if (!surfaceReady) {
+        send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'wrong-surface' })
+        return
+      }
+      if (selector) {
+        var el = null
+        try { el = doc.querySelector(selector) } catch (error) { el = null }
+        if (!el) {
+          send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'missing' })
+          return
+        }
+        try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'auto' }) } catch (error) { el.scrollIntoView() }
+        delay(0).then(function () {
+          sendScroll()
+          send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: shown(el) ? 'revealed' : 'hidden' })
+        })
+        return
+      }
+      var x = bbox && typeof bbox[0] === 'number' ? bbox[0] : 0
+      var y = bbox && typeof bbox[1] === 'number' ? bbox[1] : 0
+      window.scrollTo({
+        left: Math.max(0, x - (window.innerWidth || 0) / 2),
+        top: Math.max(0, y - (window.innerHeight || 0) / 2),
+        behavior: 'auto'
+      })
+      delay(0).then(function () {
+        sendScroll()
+        var width = bbox && typeof bbox[2] === 'number' ? bbox[2] : 0
+        var height = bbox && typeof bbox[3] === 'number' ? bbox[3] : 0
+        var visible = width <= 0 || height <= 0
+          || (x + width > window.scrollX && x < window.scrollX + (window.innerWidth || 0)
+            && y + height > window.scrollY && y < window.scrollY + (window.innerHeight || 0))
+        send({
+          figmark: MARKER,
+          kind: 'reveal-result',
+          requestId: requestId,
+          status: visible ? 'revealed' : 'hidden'
+        })
+      })
+    })
+  }
+
+  function sendBounds(force) {
+    boundsScheduled = 0
+    if (watched.length === 0) return
+    var bounds = []
+    for (var i = 0; i < watched.length; i += 1) bounds.push(measure(watched[i]))
+    var key = JSON.stringify(bounds)
+    if (!force && key === lastBounds) return
+    lastBounds = key
+    send({ figmark: MARKER, kind: 'bounds', bounds: bounds })
+  }
+
+  function scheduleBounds() {
+    if (watched.length === 0 || boundsScheduled) return
+    // Do not store the request handle here: a test clock may run the callback before
+    // requestAnimationFrame returns, which would assign a truthy handle after the
+    // callback had already cleared the flag.
+    boundsScheduled = 1
+    window.requestAnimationFrame(function () { sendBounds(false) })
+  }
+
   function sendScroll() {
     var scroll = scrollOf()
     var key = scroll[0] + ',' + scroll[1]
-    if (key === lastScroll) return
-    lastScroll = key
-    send({ figmark: MARKER, kind: 'scroll', scroll: scroll })
+    if (key !== lastScroll) {
+      lastScroll = key
+      send({ figmark: MARKER, kind: 'scroll', scroll: scroll })
+    }
+    scheduleBounds()
+    scheduleSurface()
+  }
+
+  function visibleSurface() {
+    var candidates
+    try { candidates = doc.querySelectorAll(SURFACE_QUERY) } catch (error) { return null }
+    for (var i = 0; i < candidates.length; i += 1) {
+      var el = candidates[i]
+      var rect = el.getBoundingClientRect()
+      var style = window.getComputedStyle(el)
+      if (rect.width > 0 && rect.height > 0
+        && style.display !== 'none' && style.visibility !== 'hidden'
+        && style.opacity !== '0') return el
+    }
+    return null
+  }
+
+  function sendSurface(force) {
+    surfaceScheduled = 0
+    var el = visibleSurface()
+    var selector = el ? pathOf(el) : null
+    var key = selector === null ? '\\u0000none' : selector
+    if (selector === null && lastSurface === undefined) return
+    if (!force && key === lastSurface) return
+    lastSurface = key
+    send({ figmark: MARKER, kind: 'surface', selector: selector })
+  }
+
+  function scheduleSurface() {
+    if (surfaceScheduled) return
+    surfaceScheduled = 1
+    window.requestAnimationFrame(function () { sendSurface(false) })
   }
 
   doc.addEventListener('pointermove', function (event) {
     if (!armed) return
     var el = under(event)
     if (!el) return
-    latest = el
+    var ladder = ladderOf(el)
+    if (ladder.length === 0) return
+    var index = choose(ladder)
+    latest = { ladder: ladder, index: index }
     if (pending) return
-    pending = window.requestAnimationFrame(function () {
+    pending = 1
+    window.requestAnimationFrame(function () {
       pending = 0
-      if (latest) report('hover', latest)
+      if (!latest) return
+      report('hover', latest.ladder[latest.index], latest.ladder, latest.index)
     })
   }, true)
 
@@ -128,6 +387,7 @@ export const PICKER_SCRIPT: string = `(function () {
   doc.documentElement.addEventListener('pointerleave', function () {
     if (!armed) return
     latest = null
+    lastHover = ''
     send({ figmark: MARKER, kind: 'leave' })
   })
 
@@ -135,9 +395,36 @@ export const PICKER_SCRIPT: string = `(function () {
     if (!armed) return
     var el = under(event)
     if (!el) return
+    var ladder = ladderOf(el)
+    if (ladder.length === 0) return
+    var index = choose(ladder)
     event.preventDefault()
-    event.stopPropagation()
-    report('pick', el)
+    event.stopImmediatePropagation()
+    report('pick', ladder[index], ladder, index)
+  }, true)
+
+  // Arrow keys climb the same ladder the hover box is promising. Escape dismisses
+  // the panel's current comment layer; both belong to the frame because that is
+  // where the keyboard focus is once the reader points into the page.
+  doc.addEventListener('keydown', function (event) {
+    if (!armed) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      latest = null
+      lastHover = ''
+      send({ figmark: MARKER, kind: 'cancel' })
+      return
+    }
+    if (!latest) return
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      depth = Math.max(0, Math.min(latest.ladder.length - 1, depth + (event.key === 'ArrowUp' ? 1 : -1)))
+      latest.index = depth
+      report('hover', latest.ladder[depth], latest.ladder, depth)
+      return
+    }
   }, true)
 
   window.addEventListener('scroll', sendScroll, true)
@@ -146,11 +433,66 @@ export const PICKER_SCRIPT: string = `(function () {
   window.addEventListener('message', function (event) {
     var data = event.data
     if (!data || typeof data !== 'object' || data.figmark !== MARKER) return
-    if (data.kind !== 'mode') return
-    armed = !!data.armed
-    if (!armed) latest = null
+    if (data.kind === 'mode') {
+      armed = !!data.armed
+      doc.documentElement.setAttribute('data-dsh-figmark-armed', armed ? 'true' : 'false')
+      if (!armed) {
+        latest = null
+        latestKey = ''
+        depth = 0
+        lastHover = ''
+      }
+      scheduleSurface()
+      return
+    }
+    if (data.kind === 'depth' && armed && latest && (data.delta === 1 || data.delta === -1)) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      depth = Math.max(0, Math.min(latest.ladder.length - 1, latest.index + data.delta))
+      latest.index = depth
+      report('hover', latest.ladder[depth], latest.ladder, depth)
+      return
+    }
+    if (data.kind === 'watch' && Array.isArray(data.selectors)) {
+      watched = []
+      for (var i = 0; i < data.selectors.length && watched.length < 256; i += 1) {
+        var selector = data.selectors[i]
+        if (typeof selector === 'string' && selector.length > 0 && selector.length <= 2048
+          && watched.indexOf(selector) < 0) watched.push(selector)
+      }
+      lastBounds = ''
+      sendBounds(true)
+      return
+    }
+    if (data.kind === 'reveal' && typeof data.requestId === 'string' && data.requestId.length <= 128) {
+      var requestedSelector = typeof data.selector === 'string'
+        && data.selector.length > 0 && data.selector.length <= 2048 ? data.selector : null
+      var requestedSurface = typeof data.surface === 'string'
+        && data.surface.length > 0 && data.surface.length <= 2048 ? data.surface : null
+      var requestedBox = Array.isArray(data.bbox) && data.bbox.length === 4 ? data.bbox : [0, 0, 0, 0]
+      reveal(data.requestId, requestedSelector, requestedSurface, requestedBox)
+    }
   })
 
+  if (window.MutationObserver) {
+    new window.MutationObserver(function () {
+      scheduleBounds()
+      scheduleSurface()
+    }).observe(doc.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'aria-current']
+    })
+  }
+  window.addEventListener('hashchange', scheduleSurface)
+  window.addEventListener('popstate', scheduleSurface)
+  window.setInterval(function () {
+    sendBounds(false)
+    sendSurface(false)
+  }, 250)
+
   send({ figmark: MARKER, kind: 'ready', scroll: scrollOf() })
+  scheduleSurface()
 })()
 `

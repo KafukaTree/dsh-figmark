@@ -9,11 +9,12 @@
  *
  * So the page is fetched by the Host instead. The frame points at
  * `http://127.0.0.1:<port>`, that origin is the proxy's, and the proxy is a
- * pass-through with exactly two edits: the headers that would forbid framing or
- * the injected script are dropped, and the script tag is put in front of
- * `</body>` in HTML. Everything else — methods, bodies, redirects, assets, the
- * dev server's own websocket-free HMR client — crosses untouched, which is what
- * keeps a script-driven page behaving like the page it is.
+ * pass-through with three edits: policies that would forbid framing or the
+ * injected script are dropped (headers and HTML meta tags alike), same-origin
+ * redirects are kept on the proxy origin, and the script tag is put in front of
+ * `</body>` in HTML. Everything else — methods, bodies, assets, the dev server's
+ * own websocket-free HMR client — crosses untouched, which is what keeps a
+ * script-driven page behaving like the page it is.
  *
  * Only this machine's own servers are reachable through it. A proxy that
  * accepted any origin would be an open relay running inside the app, so a
@@ -31,23 +32,10 @@ import type {
 } from 'node:http'
 import { connect as netConnect } from 'node:net'
 import type { AddressInfo, Socket } from 'node:net'
+import {
+  MAX_HTML_BYTES, PICKER_PATH, PICKER_TAG, injectPicker, stripCspMeta,
+} from './html-injection'
 import { PICKER_SCRIPT } from './picker-script'
-
-/** Where the injected tag asks for the picker. */
-const PICKER_PATH = '/__dsh_figmark_picker.js'
-
-/** The tag injected into every HTML page, exactly as the frame will fetch it. */
-const PICKER_TAG = `<script src="${PICKER_PATH}"></script>`
-
-/**
- * How much HTML this proxy holds in memory in order to put the tag in it.
- *
- * Pages are rewritten whole — the tag has to go in front of the last `</body>`,
- * and a streaming rewrite cannot know which `</body>` is the last one. A cap
- * keeps that from being an allocation a page can choose: past it the page is
- * refused, and the reader is told why rather than shown a broken frame.
- */
-const MAX_HTML_BYTES = 8 * 1024 * 1024
 
 /** What the frame shows when the page stopped answering. */
 const DOWN = 'the page is not answering'
@@ -70,9 +58,6 @@ const STRIPPED: readonly string[] = [
 
 /** The host names that mean this machine. */
 const LOOPBACK: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
-
-/** The closing tag the picker goes in front of. */
-const BODY_END = /<\/body>/i
 
 /** One page being served, and the way to stop serving it. */
 export interface LiveProxy {
@@ -101,7 +86,8 @@ export async function openLive(url: URL): Promise<LiveProxy> {
   // a proxy opened on `http://localhost:5173/docs` serves that page at its root.
   const target = new URL(url.href)
   const sockets = new Set<Socket>()
-  const server = createServer((req, res) => { serve(target, req, res) })
+  let proxyOrigin = ''
+  const server = createServer((req, res) => { serve(target, proxyOrigin, req, res) })
   // A dev server's own reload channel is a websocket, and a page whose reload
   // channel is dead is a page that stops noticing the edits it is being annotated
   // against. Upgrades are piped through as raw sockets, which is all a proxy can do
@@ -115,9 +101,10 @@ export async function openLive(url: URL): Promise<LiveProxy> {
   // A server bound to port 0 is listening on an `AddressInfo`; the union in the
   // type is only there because a server can also be bound to a pipe.
   const { port } = server.address() as AddressInfo
+  proxyOrigin = `http://127.0.0.1:${port}`
   let closed = false
   return {
-    url: `http://127.0.0.1:${port}${target.pathname}${target.search}`,
+    url: `${proxyOrigin}${target.pathname}${target.search}`,
     close(): void {
       if (closed) return
       closed = true
@@ -183,15 +170,16 @@ async function listen(server: Server): Promise<void> {
 /**
  * Answer one request on the proxy.
  * @param target - the page being served.
+ * @param proxyOrigin - this proxy's own origin, used for same-origin redirects.
  * @param req - the request from the frame.
  * @param res - the answer to it.
  */
-function serve(target: URL, req: IncomingMessage, res: ServerResponse): void {
+function serve(target: URL, proxyOrigin: string, req: IncomingMessage, res: ServerResponse): void {
   if (req.method === 'GET' && req.url === PICKER_PATH) {
     sendPicker(res)
     return
   }
-  forward(target, req, res)
+  forward(target, proxyOrigin, req, res)
 }
 
 /**
@@ -216,10 +204,11 @@ function sendPicker(res: ServerResponse): void {
  * the request's `error` event, which is the only place they can be turned into
  * an answer: without it, the frame would sit on a connection that never starts.
  * @param target - the page being served.
+ * @param proxyOrigin - this proxy's own origin.
  * @param req - the request from the frame.
  * @param res - the answer to it.
  */
-function forward(target: URL, req: IncomingMessage, res: ServerResponse): void {
+function forward(target: URL, proxyOrigin: string, req: IncomingMessage, res: ServerResponse): void {
   const headers: OutgoingHttpHeaders = { ...req.headers }
   // A virtual host is picked by the name the reader typed, not by the port the
   // proxy happened to get.
@@ -237,7 +226,7 @@ function forward(target: URL, req: IncomingMessage, res: ServerResponse): void {
     path: req.url,
     headers,
   })
-  upstream.on('response', (answer) => { returnAnswer(res, answer) })
+  upstream.on('response', (answer) => { returnAnswer(target, proxyOrigin, res, answer) })
   upstream.on('error', () => { fail(res, DOWN) })
   // A frame that navigates away mid-request takes the request body with it; the
   // upstream request then has nothing to read from, and without this listener the
@@ -248,15 +237,22 @@ function forward(target: URL, req: IncomingMessage, res: ServerResponse): void {
 
 /**
  * Hand one answer from the target back to the frame.
+ * @param target - the page being served.
+ * @param proxyOrigin - this proxy's own origin.
  * @param res - the answer to the frame.
  * @param answer - the target's answer.
  */
-function returnAnswer(res: ServerResponse, answer: IncomingMessage): void {
+function returnAnswer(
+  target: URL,
+  proxyOrigin: string,
+  res: ServerResponse,
+  answer: IncomingMessage,
+): void {
   if (isHtml(answer.headers)) {
-    holdHtml(res, answer)
+    holdHtml(target, proxyOrigin, res, answer)
     return
   }
-  res.writeHead(statusOf(answer), withoutStripped(answer.headers))
+  res.writeHead(statusOf(answer), withoutStripped(answer.headers, target, proxyOrigin))
   // The target can die in the middle of a body it already started; the frame gets
   // a truncated answer rather than a stale one, which is what a reset means.
   answer.on('error', () => { res.destroy() })
@@ -265,10 +261,17 @@ function returnAnswer(res: ServerResponse, answer: IncomingMessage): void {
 
 /**
  * Buffer an HTML page, put the picker tag in it, and send it on.
+ * @param target - the page being served.
+ * @param proxyOrigin - this proxy's own origin.
  * @param res - the answer to the frame.
  * @param answer - the target's answer.
  */
-function holdHtml(res: ServerResponse, answer: IncomingMessage): void {
+function holdHtml(
+  target: URL,
+  proxyOrigin: string,
+  res: ServerResponse,
+  answer: IncomingMessage,
+): void {
   const chunks: Buffer[] = []
   let size = 0
 
@@ -285,8 +288,8 @@ function holdHtml(res: ServerResponse, answer: IncomingMessage): void {
   })
   answer.on('error', () => { res.destroy() })
   answer.on('end', () => {
-    const body = inject(Buffer.concat(chunks).toString('utf8'))
-    const headers = withoutStripped(answer.headers)
+    const body = injectPicker(stripCspMeta(Buffer.concat(chunks).toString('utf8')), PICKER_TAG)
+    const headers = withoutStripped(answer.headers, target, proxyOrigin)
     // The length and the framing are the proxy's now: the page it holds is not the
     // page the target encoded.
     delete headers['content-length']
@@ -310,11 +313,28 @@ function isHtml(headers: IncomingHttpHeaders): boolean {
 /**
  * Copy headers, dropping the ones that would keep the frame from loading the page.
  * @param source - the target's headers.
+ * @param target - the page being served.
+ * @param proxyOrigin - this proxy's own origin.
  * @returns the headers to send to the frame.
  */
-function withoutStripped(source: IncomingHttpHeaders): OutgoingHttpHeaders {
+function withoutStripped(
+  source: IncomingHttpHeaders,
+  target: URL,
+  proxyOrigin: string,
+): OutgoingHttpHeaders {
   const headers: OutgoingHttpHeaders = { ...source }
   for (const name of STRIPPED) delete headers[name]
+  const location = source.location
+  if (location !== undefined) {
+    try {
+      const redirect = new URL(location, target)
+      if (redirect.origin === target.origin) {
+        headers['location'] = `${proxyOrigin}${redirect.pathname}${redirect.search}${redirect.hash}`
+      }
+    } catch {
+      // A malformed Location is still the target's answer; the frame will reject it.
+    }
+  }
   return headers
 }
 
@@ -328,17 +348,6 @@ function withoutStripped(source: IncomingHttpHeaders): OutgoingHttpHeaders {
  */
 function statusOf(answer: IncomingMessage): number {
   return (answer as IncomingMessage & { readonly statusCode: number }).statusCode
-}
-
-/**
- * Put the picker tag in front of the page's last `</body>`.
- * @param html - the page as the target sent it.
- * @returns the page the frame receives.
- */
-function inject(html: string): string {
-  return BODY_END.test(html)
-    ? html.replace(BODY_END, (close) => `${PICKER_TAG}${close}`)
-    : `${html}${PICKER_TAG}`
 }
 
 /**

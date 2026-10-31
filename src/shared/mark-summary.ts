@@ -232,6 +232,8 @@ function describeGeometry(mark: AnnotationMark, locale: SummaryLocale): string {
  * anything past this is a passage, and the selector or id already locates the element.
  */
 const NAMEABLE_TEXT = 30
+/** Longest human text a record-list signature keeps. */
+const SIGNATURE_TEXT = 36
 
 /**
  * Whether an anchor names the whole picture rather than something in it.
@@ -270,6 +272,31 @@ export function anchorWords(anchor: MarkAnchor): string {
 }
 
 /**
+ * A compact source-shaped identity for one element in the annotation list.
+ *
+ * The list needs more than the element's prose: the reader has to tell two buttons
+ * or two cards apart before clicking one. The tag, id and first classes supply that
+ * identity; a short title or text says what the element contains. The positional
+ * selector remains the locator and is not printed here.
+ * @param anchor - the element the mark landed on.
+ * @returns a signature such as `<section#lead.hero = "Visible text">`.
+ */
+export function anchorDescriptor(anchor: MarkAnchor): string {
+  const tag = anchor.tag.toLowerCase()
+  const id = anchor.id === undefined || anchor.id === '' ? '' : `#${anchor.id}`
+  const classes = (anchor.class ?? '').trim().split(/\s+/u).filter(Boolean).slice(0, 3)
+  const classNames = classes.map(name => `.${name}`).join('')
+  const words = (anchor.title ?? anchor.text ?? '')
+    .replace(/"/gu, "'")
+    .replace(/\s+/gu, ' ')
+    .trim()
+  const opening = `<${tag}${id}${classNames}`
+  if (words === '') return `${opening}>`
+  const shown = words.length <= SIGNATURE_TEXT ? words : `${words.slice(0, SIGNATURE_TEXT - 1)}…`
+  return `${opening} = "${shown}">`
+}
+
+/**
  * Whether a selector is nothing but an element's id with a `#` in front.
  *
  * `#axes_1` says what the id says; a path such as `#s > p:nth-of-type(1)` says where in
@@ -300,21 +327,18 @@ function openingTag(anchor: MarkAnchor): string {
 /**
  * The name the picture shows for the element a mark landed on.
  *
- * The reader clicked one element, and the picture has to answer "which one?" in the
- * words of their own source. An element that declares an id is named by its opening
- * tag, `<section id="s9viz">`, because that is the string they can search for; an
- * element with no id is named by the path that finds it, because a bare `<div>` names
- * a hundred elements. This is the one place it differs from {@link describeMark}, which
- * prints the path even when there is an id: a path is the precise thing to edit, and
- * the canvas is the thing the reader points at while the page's own layout already
- * shows where it sits.
+ * The reader clicked one element, and the picture has to answer "which one?" at a
+ * glance. An id remains the searchable opening tag; otherwise the element's own
+ * title or short text is a name the reader recognises. A full CSS path belongs in
+ * the list that the source reader receives, not in a plate floating over the page.
  * @param anchor - the element the mark landed on.
- * @returns the opening tag, or the path when the element declares no id.
+ * @returns the opening tag, or a short human-readable element name.
  */
 export function anchorCodeName(anchor: MarkAnchor): string {
   if (anchor.id !== undefined && anchor.id !== '') return openingTag(anchor)
-  const selector = anchor.selector ?? ''
-  return selector === '' ? openingTag(anchor) : selector
+  const words = anchorWords(anchor).replace(/\s+/gu, ' ').trim()
+  if (words === '') return openingTag(anchor)
+  return words.length <= 26 ? words : `${words.slice(0, 25)}…`
 }
 
 /**

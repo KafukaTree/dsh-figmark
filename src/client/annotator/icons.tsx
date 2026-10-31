@@ -169,6 +169,16 @@ export function ListIcon(): ReactNode {
   )
 }
 
+/** A small bin for clearing a record without spending a word on it. */
+export function TrashIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.5 7h15M9 7V4.5h6V7M7 7l.8 12.5h8.4L17 7" />
+      <path d="M10 10.5v5.5M14 10.5v5.5" />
+    </svg>
+  )
+}
+
 /** The empty list's picture: an open box, the usual "nothing here yet". */
 export function BoxIcon(): ReactNode {
   return (
