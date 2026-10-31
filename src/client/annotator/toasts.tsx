@@ -237,8 +237,8 @@ interface CardProps {
 /**
  * The stack, drawn.
  *
- * Its place on screen belongs to the surface: the panel puts it over the top-left
- * of the canvas, which is where the eye already is after drawing a mark.
+ * Its place on screen belongs to the surface: the panel puts it in the corner
+ * opposite the tools, clear of the control that acts on what it reports.
  * @param props - the stack to draw, its labels, and whether motion is wanted.
  * @returns the stack, or nothing at all when there is nothing to say.
  */

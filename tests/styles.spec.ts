@@ -4,12 +4,37 @@ import { describe, expect, it } from 'vitest'
 import { STYLES, ensureStyles } from '../src/client/styles'
 
 describe('the annotator stylesheet', () => {
-  it('keeps the movable palette above the bar it can be parked under', () => {
+  it('keeps the movable palette strictly above the bar it can be parked under', () => {
     // Both strips are draggable and both can reach the same corner. At equal stacking
     // the later one in the DOM wins, which is the bar — and the palette's only handle
-    // is its own grip, so a palette under the bar could never be moved again.
-    expect(STYLES).toContain('.da-palette{position:absolute;z-index:12')
-    expect(STYLES).toContain('.da-bar{position:absolute;z-index:12')
+    // is its own grip, so a palette under the bar could never be moved again. The two
+    // used to be written as the same `z-index:12`, so the comment described an order
+    // the sheet did not have: the palette still lost to the bar it was parked on.
+    const zOf = (start: string): number => {
+      const at = STYLES.indexOf(start)
+      const rule = STYLES.slice(at, STYLES.indexOf('}', at))
+      return Number(/z-index:(\d+)/u.exec(rule)?.[1])
+    }
+    expect(zOf('.da-palette{')).toBeGreaterThan(zOf('.da-bar{'))
+  })
+
+  it('keeps the bubbles in the corner opposite the tools', () => {
+    // The palette keeps the top left — the place the reader learned, and the one the
+    // README names. The stack moved to the top right instead: a bubble is transient,
+    // but the first thing a message about the figure must not do is cover the tool
+    // that would fix what it is reporting.
+    expect(STYLES).toContain('.da-toasts{position:absolute;z-index:11;top:14px;right:14px')
+    expect(STYLES).toContain('.da-toast{position:absolute;top:0;right:0')
+    expect(STYLES).toContain('.da-md > .da-toasts{top:10px;right:10px}')
+    expect(STYLES).not.toContain('.da-toasts{position:absolute;z-index:11;top:14px;left:14px')
+  })
+
+  it('keeps the palette grip in reach when the palette has to scroll', () => {
+    // A seven-tool palette is taller than a short panel. The strip scrolls rather than
+    // clipping its last tools, but the grip is its only handle — scrolled out of the
+    // top, the reader could not drag the palette at all. It is sticky and shares the
+    // strip's own ground so the tiles pass underneath instead of showing through.
+    expect(STYLES).toMatch(/\.da-palette-grip\{position:sticky;top:0;z-index:1;background:inherit/u)
   })
 
   it('paints the note that blocks the panel in a tone of its own', () => {

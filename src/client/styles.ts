@@ -62,12 +62,13 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    dragged to the same corner, and at equal stacking the one rendered later wins — the
    bar. The palette's only handle is its grip, so a palette parked under the bar could
    never be dragged out again, and the reader's recovery was a reload. A strip that can
-   be moved must be the one that stays reachable. */
+   be moved must be the one that stays reachable — and the palette is the one to keep
+   on top, because moving it away is what reveals the bar's grip underneath. */
 /* The tools float over the figure in a dark rounded pill so they can be parked
    off whichever corner the reader is working on. Dark rather than light: it sits
    on top of a white figure and a white panel, and a dark chip is what reads as
    "this is a control" instead of as one more piece of the picture. */
-.da-palette{position:absolute;z-index:12;display:flex;flex-direction:column;align-items:center;gap:2px;
+.da-palette{position:absolute;z-index:13;display:flex;flex-direction:column;align-items:center;gap:2px;
   padding:6px 5px;border-radius:16px;background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08);
   /* The panel clips whatever reaches past it, and the palette is positioned outside
@@ -83,7 +84,13 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    is turned to suit the strip — wider than tall on the bar, taller than wide on the
    palette — because a grip whose proportions fight its strip looks borrowed from the
    other one. */
-.da-palette-grip{display:flex;align-items:center;justify-content:center;width:26px;height:17px;
+/* The grip also stays put when the palette is shorter than its tools and has to
+   scroll: it is the strip's only way to be moved, so a handle that scrolls out of
+   the top is the same dead end as one covered by the bar. It inherits the strip's
+   own ground rather than naming it, so the tiles pass underneath instead of
+   showing through the handle. In the bar — which never scrolls — this is a no-op. */
+.da-palette-grip{position:sticky;top:0;z-index:1;background:inherit;
+  display:flex;align-items:center;justify-content:center;width:26px;height:17px;
   border-radius:5px;cursor:move;color:rgba(255,255,255,.55);touch-action:none;flex:0 0 auto}
 .da-palette-grip:hover{color:rgba(255,255,255,.92);background:rgba(255,255,255,.1)}
 /* The dots' box follows the block: three across by two down needs width, two across
@@ -610,12 +617,17 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    column zero pixels tall that grows to fit its cards, so the newest card rises from
    under the last one instead of shoving it down, and it takes no pointer events of
    its own — only its buttons do, so the figure underneath stays reachable. */
-.da-toasts{position:absolute;z-index:11;top:14px;left:14px;width:272px;height:0;
+/* The corner opposite the tools. The palette keeps the top left — the reader's
+   learned place — so the stack takes the top right: a bubble is transient, and the
+   one thing it must never do is cover the tool that would fix what it is reporting.
+   The cards are right-aligned inside the stack, so the corner still reads as one even
+   when a short note leaves most of the stack's width empty. */
+.da-toasts{position:absolute;z-index:11;top:14px;right:14px;width:272px;height:0;
   pointer-events:none;transition:height .35s cubic-bezier(.34,1.4,.5,1)}
 /* A card is as wide as its sentence, up to the stack's width: a two-word note should
    not look like a dialog. Its place in the column comes from the inline transform and
    its depth from the inline opacity, because both are counts rather than styles. */
-.da-toast{position:absolute;top:0;left:0;box-sizing:border-box;width:max-content;max-width:272px;
+.da-toast{position:absolute;top:0;right:0;box-sizing:border-box;width:max-content;max-width:272px;
   display:flex;align-items:flex-start;gap:7px;padding:9px 10px 9px 12px;border-radius:14px;
   background:linear-gradient(180deg,rgba(52,52,56,.90) 0%,rgba(36,36,38,.95) 100%);
   -webkit-backdrop-filter:saturate(180%) blur(22px);backdrop-filter:saturate(180%) blur(22px);
@@ -703,7 +715,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 }
 /* The editor has no bar over its top edge either, so its bubbles sit a little closer
    to the corner than the annotator's, whose canvas starts under a strip of its own. */
-.da-md > .da-toasts{top:10px;left:10px}
+.da-md > .da-toasts{top:10px;right:10px}
 .da-hint{padding:10px 2px;font-size:12px;line-height:1.6;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit))}
 /* The grey above is for "still working". A failure is not quieter than a wait. */
 .da-hint[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}

@@ -13,7 +13,7 @@ import type { SessionsLike } from '../src/client/session'
 import type { RemoteLike } from '../src/client/host-actions'
 import { AUTOSAVE_DELAY_MS } from '../src/client/autosave'
 import { PINCH_SETTLE_DELAY_MS } from '../src/client/zoom'
-import { readPreferences } from '../src/client/preferences'
+import { readPreferences, rememberPreferences } from '../src/client/preferences'
 import { STROKE_WIDTH } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
 import { reviewSize } from '../src/client/export'
@@ -1831,7 +1831,7 @@ describe('the floating strips', () => {
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const strip = await dragStrip(document.body, '.da-palette', 80, 120)
-    // 80/400 across and 120/600 down, from the default spot near the top left.
+    // 80/400 across and 120/600 down, from the default spot in the top left.
     expect(Number.parseFloat(strip.style.left)).toBeCloseTo(22, 3)
     expect(Number.parseFloat(strip.style.top)).toBeCloseTo(24, 3)
     // The reader's parking spot outlives the panel: a reload finds it where it was.
@@ -1844,25 +1844,71 @@ describe('the floating strips', () => {
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
     const strip = await dragStrip(document.body, '.da-bar', 320, 300)
-    // Past the middle of either axis the strip is measured from its far edge, so its
-    // whole box stays on the panel.
-    expect(Number.parseFloat(strip.style.left)).toBeCloseTo(82, 3)
-    expect(Number.parseFloat(strip.style.top)).toBeCloseTo(54, 3)
+    // The drag starts from the bar's own box (stubbed at 100,300 in a 400x600 panel),
+    // not from the palette's corner; past the middle of either axis it is measured
+    // from its far edge, so its whole box stays on the panel.
+    expect(Number.parseFloat(strip.style.left)).toBeCloseTo(98, 3)
+    expect(Number.parseFloat(strip.style.top)).toBeCloseTo(98.6667, 3)
     expect(strip.style.transform).toContain('-100%')
-    expect(readPreferences().bar?.x).toBeCloseTo(0.82, 6)
-    expect(readPreferences().bar?.y).toBeCloseTo(0.54, 6)
+    expect(readPreferences().bar?.x).toBeCloseTo(0.98, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo(0.986667, 6)
   })
 
   it('measures a strip from its near edge while it is in the first half', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
     stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
-    const bar = await dragStrip(document.body, '.da-bar', 60, 60)
-    // Left of centre and above it: the strip hangs from its own top left corner, so
-    // its box grows right and down from the pointer rather than being measured back
-    // from the far edge.
+    const bar = await dragStrip(document.body, '.da-bar', -100, -240)
+    // Carried left of centre and above it: the strip hangs from its own top left
+    // corner, so its box grows right and down from the pointer rather than being
+    // measured back from the far edge.
     expect(bar.style.transform).toContain('translate(0, 0)')
-    expect(Number.parseFloat(bar.style.top)).toBeCloseTo(14, 3)
+    expect(Number.parseFloat(bar.style.left)).toBeCloseTo(0, 3)
+    expect(Number.parseFloat(bar.style.top)).toBeCloseTo(16.6667, 3)
+  })
+
+  it('starts a portalled bar from the panel its position is measured against', async () => {
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    const pane = document.createElement('div')
+    document.body.append(pane)
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    stubRect(pane, { left: 100, top: 80, width: 200, height: 300 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    stubRect(bar, { left: 180, top: 320, width: 40, height: 40 })
+    // PDF chrome is portalled into .da-pdf, whose box is smaller than the body's.
+    // The first drag must use that same box for its origin and for its deltas.
+    Object.defineProperty(bar, 'offsetParent', { configurable: true, value: pane })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 200, clientY: 340 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 240 }))
+    })
+    expect(readPreferences().bar?.x).toBeCloseTo(0.3, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo(0.6, 6)
+  })
+
+  it('starts a parked wide bar from its saved spot, not from the box centre', async () => {
+    rememberPreferences({ bar: { x: 0.3, y: 0.7 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    stubRect(root, { left: 0, top: 0, width: 400, height: 600 })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    // This box crosses both midlines, but the inline style still hangs it from its
+    // near corner because the saved x and y are below 0.5. Measuring its centre
+    // would guess the far corner and make the first move jump.
+    stubRect(bar, { left: 120, top: 420, width: 200, height: 40 })
+    const grip = defined(bar.querySelector('.da-palette-grip')) as HTMLElement
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 140, clientY: 430 }))
+    })
+    await act(async () => {
+      grip.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 160, clientY: 460 }))
+    })
+    expect(readPreferences().bar?.x).toBeCloseTo(0.35, 6)
+    expect(readPreferences().bar?.y).toBeCloseTo(0.75, 6)
   })
 
   it('lets a cancelled drag drop the strip where it was', async () => {

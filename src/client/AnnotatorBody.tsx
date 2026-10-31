@@ -76,7 +76,7 @@ import {
   surfaceBoxStyle,
 } from './annotator/geometry'
 import { buildAnnotationDocument } from './annotator/documents'
-import { DEFAULT_PALETTE, draggedSpot, placementStyle } from './annotator/placement'
+import { DEFAULT_PALETTE, draggedSpot, placementStyle, spotOfBox } from './annotator/placement'
 import {
   clipStatus, failureStatus, hostGestureStatus,
 } from './annotator/delivery'
@@ -653,17 +653,35 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     onCancel: () => { dragFrom.current = null; setDragging(false) },
   }
 
-  /** The bar's drag, on the same terms as the palette's. */
+  /**
+   * The bar's drag, on the same terms as the palette's — except for where it starts.
+   *
+   * The bar has no spot until the reader parks it: the stylesheet puts it on the
+   * bottom edge, centred. Starting its first drag from the palette's default corner
+   * (which is what `barSpot ?? DEFAULT_PALETTE` did) made the strip jump from the
+   * bottom to that corner on the first pixel of travel. It starts from its own box.
+   */
   const barHandle: StripHandle = {
     dragging: barDragging,
     onDown: (event) => {
+      const root = rootRef.current
       /* v8 ignore next -- nothing to measure against until the panel is mounted. */
-      if (rootRef.current === null) return
+      if (root === null) return
       /* v8 ignore next -- jsdom has no pointer capture; a browser always does. */
       event.currentTarget.setPointerCapture?.(event.pointerId)
+      const bar = barRef.current
+      /* v8 ignore next -- the grip is the bar's own child; the bar is mounted here. */
+      if (bar === null) return
+      // A paged document portals the strips into its pane. That pane, not this
+      // body, is what their percentages and pointer deltas are measured against.
+      const panel = bar.offsetParent ?? root
       barFrom.current = {
         pointerId: event.pointerId,
-        origin: barSpot ?? DEFAULT_PALETTE,
+        // A parked bar already has the exact anchor its inline style uses. Reading
+        // the box back would be ambiguous once a wide bar crosses the middle: its
+        // centre can be on the far side while its saved fraction still places it by
+        // the near corner. Only the CSS-owned default needs a measurement.
+        origin: barSpot ?? spotOfBox(bar.getBoundingClientRect(), panel.getBoundingClientRect()),
         box: { left: event.clientX, top: event.clientY } as DOMRect,
       }
       setBarDragging(true)

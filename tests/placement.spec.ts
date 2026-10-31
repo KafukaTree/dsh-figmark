@@ -6,7 +6,9 @@
  * at every panel size the side rail allows.
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PALETTE, draggedSpot, placementStyle, recordStyle } from '../src/client/annotator/placement'
+import {
+  DEFAULT_PALETTE, draggedSpot, placementStyle, recordStyle, spotOfBox,
+} from '../src/client/annotator/placement'
 
 describe('placing a strip at its parked fraction', () => {
   it('hangs a top-half strip down and to the right of its point', () => {
@@ -38,10 +40,16 @@ describe('placing a strip at its parked fraction', () => {
     expect(placementStyle({ x: 0.5, y: 0.6 }).maxHeight).toMatch(/^calc\(60% - 8px\)$/u)
   })
 
-  it('keeps the default spot where a short panel can still show the whole strip', () => {
-    // The default is near the top edge, which is the side with the most room on any
-    // panel the rail allows.
-    expect(placementStyle(DEFAULT_PALETTE).maxHeight).toMatch(/^calc\(96% - 8px\)$/u)
+  it('keeps the palette in the corner the reader learned', () => {
+    // The palette's left corner is the product's established place — the README calls
+    // it the left floating strip. The bubble stack moved instead (see the stylesheet):
+    // it is transient, and a few seconds of news should not make every reader relearn
+    // where the tools are.
+    const style = placementStyle(DEFAULT_PALETTE)
+    expect(style.left).toBe('2%')
+    expect(style.transform).toBe('translate(0, 0)')
+    // The top edge still has the most room, so the first drag has room to grow down.
+    expect(style.maxHeight).toMatch(/^calc\(96% - 8px\)$/u)
   })
 })
 
@@ -107,6 +115,35 @@ describe('following the pointer that drags a strip', () => {
       { clientX: 10, clientY: 10 },
       { left: 0, top: 0, width: 0, height: 0 },
       strip,
+    )
+    expect(Number.isFinite(spot.x)).toBe(true)
+    expect(Number.isFinite(spot.y)).toBe(true)
+  })
+})
+
+describe('reading a strip that is already on the panel', () => {
+  const panel = { left: 0, top: 0, width: 400, height: 600 }
+
+  it('returns the near corner while the strip is in the first half', () => {
+    // The bar has no spot before its first drag: the stylesheet anchors it to the
+    // bottom, so its own box is the only origin that does not make it jump.
+    const spot = spotOfBox({ left: 10, top: 20, width: 40, height: 30 }, panel)
+    expect(spot.x).toBeCloseTo(10 / 400)
+    expect(spot.y).toBeCloseTo(20 / 600)
+  })
+
+  it('returns the far corner once the strip is parked past the middle', () => {
+    // Past the middle placementStyle pins the strip by its far corner, so that is
+    // the point the next drag has to start from.
+    const spot = spotOfBox({ left: 300, top: 500, width: 80, height: 80 }, panel)
+    expect(spot.x).toBeCloseTo(380 / 400)
+    expect(spot.y).toBeCloseTo(580 / 600)
+  })
+
+  it('survives a panel with no size, rather than dividing by it', () => {
+    const spot = spotOfBox(
+      { left: 10, top: 10, width: 20, height: 20 },
+      { left: 0, top: 0, width: 0, height: 0 },
     )
     expect(Number.isFinite(spot.x)).toBe(true)
     expect(Number.isFinite(spot.y)).toBe(true)

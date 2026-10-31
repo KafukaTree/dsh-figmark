@@ -78,8 +78,45 @@ export function draggedSpot(
 }
 
 /**
- * Where a strip sits before the reader moves it: top left, out of the way of the
- * figure's own middle and of the bar along the bottom.
+ * Where a strip already is, as the fraction {@link placementStyle} takes.
+ *
+ * A strip that has not been parked yet is placed by the stylesheet rather than by a
+ * spot — the bar is anchored to the bottom edge and centred — so the only honest
+ * origin for its first drag is its own box. Reading it also means a drag always
+ * continues from where the reader sees the strip, instead of from whichever corner
+ * the default belonged to.
+ *
+ * The corner returned is the one the strip hangs from, and it follows the same rule
+ * `placementStyle` uses: past the middle in either direction, the strip is pinned by
+ * its far corner, so the far corner is the point a drag has to start from. Before
+ * the middle, it hangs from its own top left.
+ * @param box - the strip's current box, in client coordinates.
+ * @param panel - the box its fractions are of, in client coordinates.
+ * @returns the spot its near or far corner sits at.
+ */
+export function spotOfBox(box: ScreenBox, panel: ScreenBox): PaletteSpot {
+  const width = Math.max(1, panel.width)
+  const height = Math.max(1, panel.height)
+  const farX = box.left - panel.left + box.width / 2 > panel.width / 2
+  const farY = box.top - panel.top + box.height / 2 > panel.height / 2
+  return {
+    x: (box.left - panel.left + (farX ? box.width : 0)) / width,
+    y: (box.top - panel.top + (farY ? box.height : 0)) / height,
+  }
+}
+
+/**
+ * Where a strip sits before the reader moves it: the top left corner.
+ *
+ * This is the reader's learned place — the README calls it the left floating strip —
+ * and it stays that way. The bubble stack is what moved to the free corner (see the
+ * `.da-toasts` rule): it is transient, and a few seconds of news should not be the
+ * reason every reader has to relearn where the tools are.
+ *
+ * The weight rail still runs down the left edge, so on a pane under about 800 pixels
+ * tall the palette's lower half sits over the rail's upper half. That is the one
+ * crossing left; moving either of them would cost more than it buys, and the palette
+ * can be dragged clear.
  */
 export const DEFAULT_PALETTE: PaletteSpot = { x: 0.02, y: 0.04 }
 
