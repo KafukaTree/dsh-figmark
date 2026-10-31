@@ -80,6 +80,7 @@ describe('the parts of one mark line', () => {
     )).toEqual({
       name: '元素 1',
       geometry: '(48,83)-(648,125)',
+      tag: '<h1>',
       element: '滑套 34',
       locator: '<h1 id="paper-title">',
       aside: '（超出图面：右 187 像素）',
@@ -92,6 +93,7 @@ describe('the parts of one mark line', () => {
     )).toEqual({
       name: 'element 2',
       geometry: '(1,2)-(3,4)',
+      tag: '',
       element: 'Save',
       locator: '#tools > button:nth-of-type(1)',
       aside: '(outside the figure: right 12px)',
@@ -102,6 +104,7 @@ describe('the parts of one mark line', () => {
     expect(readCardMarkLabel('单点1 位于 (5,6)')).toEqual({
       name: '单点 1',
       geometry: '位于 (5,6)',
+      tag: '',
       element: '',
       locator: '',
       aside: '',
@@ -109,6 +112,7 @@ describe('the parts of one mark line', () => {
     expect(readCardMarkLabel('element')).toEqual({
       name: 'element',
       geometry: '',
+      tag: '',
       element: '',
       locator: '',
       aside: '',
@@ -152,14 +156,16 @@ describe('the card in a sent bubble', () => {
     return [...host.querySelectorAll(selector)].map(node => node.textContent ?? '')
   }
 
-  it('names the figure, its size, and what each mark asked for', () => {
+  it('names the figure, its compact facts, and what each mark asked for', () => {
     mount(<AnnotationCard node={node(DATA)} raw={RAW} />)
-    expect(host.querySelector('.da-card-title')?.textContent).toBe(zh['title'])
-    // The file's own name leads, because the directory is the same for every figure
-    // this session saved and the block's own scope is what coordinates are read against.
-    expect(host.querySelector('.da-card-scope')?.textContent).toBe('fig.svg · 图面 1440×800，标注 2 处')
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('fig.svg')
+    // Dimensions and a count are the scan-level facts. The full scope remains in the
+    // tooltip, rather than spending a second Chinese sentence on the card's face.
+    expect(host.querySelector('.da-card-meta')?.textContent).toBe('1440×800')
+    expect(host.querySelector('.da-card-tally')?.textContent).toBe('2')
     expect(host.querySelector('.da-card-type')?.textContent).toBe('FIG')
-    expect(texts('.da-card-name')).toEqual(['箭头 1', '矩形 1'])
+    expect(texts('.da-card-kind')).toEqual(['1', '2'])
+    expect(texts('.da-card-name')).toEqual(['箭头', '矩形'])
     expect(texts('.da-card-geometry')).toEqual(['(10,20) → (30,40)', '(1,2)-(3,4)'])
     expect(texts('.da-card-said')).toEqual(['往右上拉一点'])
     expect(host.querySelector('.da-card-target')?.textContent).toBe('目标把右上角的线拉直')
@@ -173,19 +179,20 @@ describe('the card in a sent bubble', () => {
     expect(pages).toEqual(['第 2 页'])
     // The page is a property of the line, so it is not repeated inside the mark's name.
     expect(texts('.da-card-mark')).toEqual([
-      '箭头 1',
-      '第 2 页矩形 1',
+      '箭头',
+      '第 2 页矩形',
     ])
   })
 
-  it('reads a name off a path with either slash, and drops the scope when empty', () => {
+  it('reads a name off a path with either slash, and drops dimensions when empty', () => {
     mount(<AnnotationCard node={node({ ...DATA, file: 'C:\\tmp\\a.png', scope: '' })} raw={RAW} />)
-    expect(host.querySelector('.da-card-scope')?.textContent).toBe('a.png')
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('a.png')
+    expect(host.querySelector('.da-card-meta')).toBeNull()
   })
 
   it('keeps a name that carries no path at all', () => {
     mount(<AnnotationCard node={node({ ...DATA, file: 'a.png', scope: '' })} raw={RAW} />)
-    expect(host.querySelector('.da-card-scope')?.textContent).toBe('a.png')
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('a.png')
   })
 
   it('draws the goal first and the marks after it, labelled as the goal', () => {
@@ -207,16 +214,20 @@ describe('the card in a sent bubble', () => {
     expect(host.querySelector('.da-card-type')?.textContent).toBe('HTML')
   })
 
-  it('puts element words, source locators, and warnings on their own lines', () => {
+  it('keeps an element row compact while retaining the source in its tooltip', () => {
     const label = '元素1 (48,83)-(648,125)（元素文字「滑套 34」，<h1 id="paper-title">）（超出图面：右 187 像素）'
     mount(<AnnotationCard
       node={node({ ...DATA, marks: [{ label, comment: '', missing: true, page: undefined }] })}
       raw={RAW}
     />)
-    expect(host.querySelector('.da-card-name')?.textContent).toBe('元素 1')
-    expect(host.querySelector('.da-card-geometry')?.textContent).toBe('(48,83)-(648,125)')
-    expect(host.querySelector('.da-card-element')?.textContent).toBe('滑套 34')
-    expect(host.querySelector('.da-card-locator')?.textContent).toBe('<h1 id="paper-title">')
+    expect(host.querySelector('.da-card-kind')?.textContent).toBe('1')
+    expect(host.querySelector('.da-card-tag')?.textContent).toBe('<h1>')
+    expect(host.querySelector('.da-card-name')?.textContent).toBe('滑套 34')
+    // An element's coordinates stay in the tooltip rather than squeeze its words.
+    expect(host.querySelector('.da-card-geometry')).toBeNull()
+    expect(host.querySelector('.da-card-row')?.getAttribute('title')).toBe(label)
+    expect(host.querySelector('.da-card-element')).toBeNull()
+    expect(host.querySelector('.da-card-locator')).toBeNull()
     expect(host.querySelector('.da-card-warning')?.textContent).toBe('（超出图面：右 187 像素）')
   })
 

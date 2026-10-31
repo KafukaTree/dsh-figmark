@@ -29,6 +29,8 @@ export interface CardMarkLabel {
   readonly name: string
   /** The mark's position, kept as the message wrote it. */
   readonly geometry: string
+  /** The element's opening tag, when the mark names one. */
+  readonly tag: string
   /** The element's own words, when the message carried a short name for it. */
   readonly element: string
   /** The selector or opening tag that locates the element in the source. */
@@ -61,12 +63,15 @@ export function readCardMarkLabel(label: string): CardMarkLabel {
   const selector = /(?:选择器|selector)\s+(.+)$/u.exec(label.replace(aside, ''))?.[1]
     ?.replace(/\s*[)）]\s*$/u, '')
     .trim() ?? ''
-  const tag = /<[^>]+>/u.exec(label)?.[0] ?? ''
+  const openingTag = /<([a-z][\w-]*)\b[^>]*>/iu.exec(label)?.[0] ?? ''
+  const tagName = /^<([a-z][\w-]*)\b/iu.exec(openingTag)?.[1]
+  const tag = tagName === undefined ? '' : `<${tagName.toLowerCase()}>`
   return {
     name: rawName.replace(/^(.+?)(\d+)$/u, '$1 $2').replace(/\s+/gu, ' ').trim(),
     geometry,
+    tag,
     element,
-    locator: selector === '' ? tag : selector,
+    locator: selector === '' ? openingTag : selector,
     aside,
   }
 }
@@ -165,22 +170,34 @@ function SheetIcon(): ReactElement {
  * @param props - the row.
  * @returns the row.
  */
-function CardRow({ mark, page }: { readonly mark: FigmarkMarkLine; readonly page?: string | undefined }): ReactElement {
+function CardRow(props: {
+  readonly mark: FigmarkMarkLine
+  readonly ordinal: number
+  readonly page?: string | undefined
+}): ReactElement {
+  const { mark, ordinal, page } = props
   const said = mark.comment === '' ? undefined : mark.comment
   const parts = readCardMarkLabel(mark.label)
-  const initial = parts.name.replace(/\s*\d+$/u, '').slice(0, 1).toUpperCase()
+  // The badge carries the order, so the words beside it need not repeat "arrow 1" or
+  // "element 2". An element uses its own living text; a drawing uses the tool's noun.
+  const kind = parts.name.replace(/\s*\d+$/u, '')
+  const label = parts.element === '' ? kind : parts.element
   return (
     <span className="da-card-row" title={mark.label}>
       <span className="da-card-row-head">
-        <span className="da-card-kind" aria-hidden="true">{initial}</span>
+        <span className="da-card-kind" aria-hidden="true">{ordinal}</span>
         <span className="da-card-mark">
           {page === undefined ? null : <span className="da-card-page">{page}</span>}
-          <span className="da-card-name">{parts.name}</span>
+          {parts.tag === '' ? null : <span className="da-card-tag">{parts.tag}</span>}
+          <span className="da-card-name">{label}</span>
         </span>
-        {parts.geometry === '' ? null : <span className="da-card-geometry">{parts.geometry}</span>}
+        {/* An element's living text is its strongest locator. Coordinates there would
+            squeeze that text into an ellipsis on the narrow transcript card; they
+            remain in the row's tooltip and in the message the model reads. */}
+        {parts.geometry === '' || parts.tag !== '' ? null : (
+          <span className="da-card-geometry">{parts.geometry}</span>
+        )}
       </span>
-      {parts.element === '' ? null : <span className="da-card-element">{parts.element}</span>}
-      {parts.locator === '' ? null : <span className="da-card-locator">{parts.locator}</span>}
       {said === undefined ? null : <span className="da-card-said">{said}</span>}
       {parts.aside === '' ? null : <span className="da-card-warning">{parts.aside}</span>}
     </span>
@@ -212,6 +229,11 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
   // it, because that is what a mark's coordinates are read against.
   const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
   const name = data.file.slice(cut + 1)
+  // The message's scope has to remain in the model-facing text. On the card, its
+  // dimensions and count are enough for a glance; the complete phrase stays in the
+  // row's tooltip instead of wrapping across two Chinese sentences.
+  const dimensions = /(\d+)\s*[×x]\s*(\d+)/u.exec(data.scope)
+  const size = dimensions === null ? '' : `${dimensions[1]}×${dimensions[2]}`
   const head = (
     <span className="da-card-head">
       <span className="da-card-shot">
@@ -226,17 +248,18 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
       </span>
       <span className="da-card-text">
         <span className="da-card-title-row">
-          <span className="da-card-title">{resolveTranslate(props, 'title')}</span>
+          <span className="da-card-title">{name}</span>
           <span className="da-card-type">{data.html ? 'HTML' : 'FIG'}</span>
         </span>
         <span className="da-card-scope">
-          <span className="da-card-file">{name}</span>
-          {data.scope === '' ? null : (
-            <>
-              <span className="da-card-sep" aria-hidden="true"> · </span>
-              <span className="da-card-meta">{data.scope}</span>
-            </>
-          )}
+          {size === '' ? null : <span className="da-card-meta" title={data.scope}>{size}</span>}
+          <span
+            className="da-card-tally"
+            aria-label={resolveTranslate(props, 'cardCount', { n: data.marks.length })}
+            title={data.scope}
+          >
+            {data.marks.length}
+          </span>
         </span>
       </span>
       {interactive ? (
@@ -258,6 +281,7 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
         <CardRow
           key={`${String(mark.page ?? '')}-${String(index)}`}
           mark={mark}
+          ordinal={index + 1}
           page={mark.page === undefined ? undefined : resolveTranslate(props, 'cardPage', { n: mark.page })}
         />
       ))}

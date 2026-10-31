@@ -321,19 +321,27 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    too, and not just the stage, because the overlay covers the figure and would
    otherwise keep saying what it said before the press. */
 .da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
-/* Element mode says what it is before the reader risks a click. The strip is not a
-   control and takes no pointer events; the pointer still belongs to the picker. */
-.da-pick-guide{position:absolute;z-index:9;top:10px;left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:8px;max-width:calc(100% - 120px);box-sizing:border-box;
-  padding:5px 8px 5px 6px;border-radius:8px;background:rgba(24,24,27,.9);color:#fff;
+/* Element mode says what it is before the reader risks a click. A top-centre banner
+   sat across the first line of real content; this smaller status pill tucks into the
+   quiet upper-right margin instead. It is not a control and takes no pointer events. */
+.da-pick-guide{position:absolute;z-index:9;top:8px;right:8px;
+  display:flex;align-items:center;gap:6px;max-width:calc(100% - 64px);box-sizing:border-box;
+  padding:3px 7px;border-radius:999px;background:rgba(24,24,27,.86);color:#fff;
   box-shadow:0 5px 18px rgba(10,14,24,.2),0 0 0 1px rgba(255,255,255,.08);
-  font:11px/16px -apple-system,"PingFang SC",sans-serif;white-space:nowrap;pointer-events:none}
-.da-pick-mode{flex:0 0 auto;padding:1px 6px;border-radius:5px;background:var(--da-accent,#176df2);
-  font-weight:650;letter-spacing:.02em}
-.da-pick-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.9)}
-.da-pick-keys{flex:0 0 auto;padding-left:8px;border-left:1px solid rgba(255,255,255,.18);
-  color:rgba(255,255,255,.58)}
-@media (max-width:560px){.da-pick-keys{display:none}.da-pick-guide{max-width:calc(100% - 76px)}}
+  font:10px/14px -apple-system,"PingFang SC",sans-serif;white-space:nowrap;pointer-events:none}
+.da-pick-mode{flex:0 0 auto;color:#9bbcff;font-weight:700;letter-spacing:.02em}
+.da-pick-mode::before{content:"";display:inline-block;width:5px;height:5px;margin-right:4px;
+  border-radius:50%;background:var(--da-accent,#176df2);vertical-align:1px}
+.da-pick-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.82)}
+.da-pick-keys{flex:0 0 auto;padding-left:5px;border-left:1px solid rgba(255,255,255,.18);
+  color:rgba(255,255,255,.5)}
+@media (max-width:560px){.da-pick-keys{display:none}}
+/* A split pane is narrower than the browser window that contains it, so a viewport
+   media query cannot see the space this guide actually has. In a compact pane the
+   level is the state the reader needs; the keyboard legend is useful only after that
+   state survives, and its fixed width was otherwise clipping both. */
+.da-root[data-compact="true"] .da-pick-keys{display:none}
+.da-root[data-compact="true"] .da-pick-guide{max-width:calc(100% - 76px)}
 /* The rendered document takes the figure's place, and while no mark-making tool is
    armed it is the reader's own page: it takes the pointer events, so a link follows,
    a button presses, a video plays. A mark on it keeps its own hit area (the overlay
@@ -505,9 +513,10 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    reader uses to recognise the button. It now sits off the glyph's corner rather than
    on it, and a count that grows past two digits is capped rather than allowed to eat
    the icon: the number on the bar is a reminder, the list itself is one click away. */
-.da-dock-count{position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;
+.da-dock-count{position:absolute;z-index:1;top:0;right:-4px;min-width:13px;height:13px;padding:0 3px;
   border-radius:7px;background:var(--dsw-alias-border-l4,#c9ced8);color:var(--dsw-alias-label-primary,#2d2d2d);
-  font-size:9px;font-weight:700;line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
+  box-shadow:0 0 0 1px rgba(24,24,27,.3);font-size:8.5px;font-weight:700;line-height:13px;
+  text-align:center;font-variant-numeric:tabular-nums;pointer-events:none}
 
 /* --- the floating records ------------------------------------------------ */
 /* A record is a card over the figure, opened from the dock and closed on its own
@@ -669,6 +678,11 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    when a short note leaves most of the stack's width empty. */
 .da-toasts{position:absolute;z-index:11;top:14px;right:14px;width:272px;height:0;
   pointer-events:none;transition:height .35s cubic-bezier(.34,1.4,.5,1)}
+/* The HTML preview has a real address bar above its page. A toast in the same corner
+   would cover the file/page badge and the way back to the file, so it starts below
+   the bar — and below the refusal line when one is showing under that bar. */
+.da-root[data-html="true"]>.da-toasts{top:58px}
+.da-root[data-html="true"][data-live-error="true"]>.da-toasts{top:86px}
 /* A card is as wide as its sentence, up to the stack's width: a two-word note should
    not look like a dialog. Its place in the column comes from the inline transform and
    its depth from the inline opacity, because both are counts rather than styles. */
@@ -807,10 +821,10 @@ button.da-card{appearance:none;font-family:inherit;cursor:pointer;transition:bor
 button.da-card:hover{border-color:var(--dsw-alias-border-l3,rgba(128,128,128,.46));background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));
   box-shadow:0 3px 10px rgba(20,40,80,.07)}
 button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
-.da-card-head{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;
+.da-card-head{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 9px;
   border-bottom:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));
   background:var(--dsw-alias-bg-layer-1,rgba(128,128,128,.025))}
-.da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:40px;height:40px;overflow:hidden;border-radius:8px;
+.da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:34px;height:34px;overflow:hidden;border-radius:7px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));color:var(--da-accent,#176df2)}
 /* The picture covers the glyph; a picture that fails hides itself, and the glyph
@@ -820,16 +834,18 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
 .da-card-glyph{width:18px;height:18px}
 .da-card-text{display:flex;flex:1 1 auto;flex-direction:column;gap:2px;min-width:0}
 .da-card-title-row{display:flex;align-items:center;gap:6px;min-width:0}
-.da-card-title{font-size:12.5px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-title{min-width:0;font-size:11.5px;font-weight:650;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-card-type{flex:0 0 auto;padding:0 5px;border-radius:4px;background:var(--da-accent-soft,rgba(23,109,242,.14));
   color:var(--da-accent,#176df2);font-size:8.5px;font-weight:750;line-height:15px;letter-spacing:.06em}
-.da-card-scope{display:flex;align-items:baseline;min-width:0;font-size:10.5px;line-height:1.35;
+.da-card-scope{display:flex;align-items:center;gap:6px;min-width:0;font-size:10px;line-height:1.35;
   color:var(--dsw-alias-label-tertiary,inherit)}
-.da-card-file{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  color:var(--dsw-alias-label-secondary,inherit);
+.da-card-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
-.da-card-sep{flex:0 0 auto}
-.da-card-meta{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-tally{flex:0 0 auto;min-width:15px;padding:0 4px;border-radius:99px;
+  background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
+  color:var(--dsw-alias-label-secondary,inherit);font-size:9px;font-weight:700;
+  line-height:14px;text-align:center;font-variant-numeric:tabular-nums}
 .da-card-go{display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:22px;height:22px;margin-left:2px;
   border-radius:50%;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
   color:var(--dsw-alias-label-tertiary,inherit)}
@@ -838,33 +854,27 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 /* Each mark is a compact record, not a line of debug output. The row head answers
    "which mark and where"; the element name and selector follow only when the message
    carried them; the reader's sentence is the strongest text. */
-.da-card-body{display:flex;flex-direction:column;min-width:0;padding:1px 10px 4px}
-.da-card-row{display:flex;flex-direction:column;gap:3px;min-width:0;padding:7px 0}
+.da-card-body{display:flex;flex-direction:column;min-width:0;padding:0 9px 2px}
+.da-card-row{display:flex;flex-direction:column;gap:2px;min-width:0;padding:6px 0}
 .da-card-row+.da-card-row{border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.14))}
 .da-card-row-head{display:flex;align-items:center;gap:6px;min-width:0}
-.da-card-kind{display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;
+.da-card-kind{display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:16px;height:16px;border-radius:5px;
   background:var(--da-accent-soft,rgba(23,109,242,.14));color:var(--da-accent,#176df2);
-  font-size:9px;font-weight:750;line-height:1}
+  font-size:8px;font-weight:750;line-height:1;font-variant-numeric:tabular-nums}
 .da-card-mark{display:flex;flex:0 1 auto;align-items:center;gap:5px;min-width:0;white-space:nowrap}
+.da-card-tag{flex:0 0 auto;color:var(--da-quiet,#6b6f75);
+  font:9px/1.3 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-card-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:11.5px;font-weight:650;line-height:1.35;color:var(--dsw-alias-label-primary,inherit)}
+  font-size:11px;font-weight:600;line-height:1.35;color:var(--dsw-alias-label-primary,inherit)}
 /* The page a mark belongs to, kept to the left of its name on the same quiet line. */
 .da-card-page{flex:0 0 auto;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
   color:var(--dsw-alias-label-tertiary,inherit);font-size:9.5px;line-height:15px}
 .da-card-geometry{flex:0 1 auto;min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   color:var(--da-quiet,#6b6f75);font:9.5px/1.3 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
-.da-card-element{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
-  margin-left:24px;padding-left:7px;border-left:2px solid var(--da-accent-soft,rgba(23,109,242,.14));
-  overflow:hidden;overflow-wrap:anywhere;white-space:normal;
-  color:var(--dsw-alias-label-secondary,inherit);font-size:11.5px;line-height:1.45}
-.da-card-locator{align-self:flex-start;max-width:calc(100% - 24px);margin-left:24px;padding:1px 5px;border-radius:4px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.07));color:var(--da-quiet,#6b6f75);
-  font:9.5px/1.45 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-card-said{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
-  margin-left:24px;overflow:hidden;overflow-wrap:anywhere;white-space:normal;
-  color:var(--dsw-alias-label-primary,inherit);font-size:11.5px;line-height:1.5}
-.da-card-warning{margin-left:24px;color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,inherit));
+  margin-left:22px;overflow:hidden;overflow-wrap:anywhere;white-space:normal;
+  color:var(--dsw-alias-label-secondary,inherit);font-size:10.5px;line-height:1.4}
+.da-card-warning{margin-left:22px;color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,inherit));
   font-size:10px;line-height:1.4}
 .da-card-rest{display:flex;align-items:center;min-height:26px;color:var(--dsw-alias-label-tertiary,inherit);font-size:10.5px}
 /* The goal the reader wrote is not one of the marks, so a rule separates it. */

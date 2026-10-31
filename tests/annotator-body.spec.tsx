@@ -3073,6 +3073,14 @@ describe('a rendered document', () => {
     expect(element.getAttribute('title')).toBe(zh.htmlFrame)
   })
 
+  it('marks a narrow split pane so the element guide keeps its level visible', async () => {
+    mounted = await htmlBody({}, {}, { width: 320, height: 600 })
+    const root = defined(document.querySelector('.da-root')) as HTMLElement
+    // The browser window is still wide even when the preview column is not. The
+    // guide has to react to the measured figure pane, not to a viewport media query.
+    expect(root.getAttribute('data-compact')).toBe('true')
+  })
+
   it('takes the width of a document laid out for a stage wider than the frame', async () => {
     mounted = await htmlBody()
     const element = frame()
@@ -3216,10 +3224,12 @@ describe('a rendered document', () => {
     mounted = await htmlBody()
     await reportLayout(WINDOW.width, 1843)
     await scrollDocument({ x: 0, y: 300 })
-    // The overlay holds document coordinates, so it moves up with the document. A
-    // mark at y=400 is then over the element at y=400 and not 300 pixels above it.
+    // The marks hold document coordinates and move up with the document. The event
+    // catching svg stays over the window: moving it up used to leave the lower half
+    // of a long page with no annotator over it at all.
     const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
-    expect(overlay.style.transform).toBe('translate(0px, -300px)')
+    expect(overlay.style.transform).toBe('')
+    expect(overlay.firstElementChild?.getAttribute('transform')).toBe('translate(0 -300)')
   })
 
   it('drags the page rather than the pane when the empty canvas is pushed', async () => {
@@ -3521,6 +3531,14 @@ describe('a rendered document', () => {
       expect(document.querySelector('.da-live-error')?.textContent).toBe(zh.liveBadAddress)
       expect(result.calls.filter(call => call.url.endsWith('/dsh-figmark/live'))).toHaveLength(0)
       expect(frame().getAttribute('src')).toBeNull()
+      // Escape gives the field back; the refusal must go with the bad value rather
+      // than staying under the restored filename as if that file had failed.
+      await act(async () => {
+        address().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+        for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
+      })
+      expect(address().value).toBe('report.html')
+      expect((defined(document.querySelector('.da-live-error')) as HTMLElement).hidden).toBe(true)
     })
 
     it('says why a page would not open, and leaves the file where it was', async () => {
@@ -3753,6 +3771,43 @@ describe('a rendered document', () => {
       expect(result.calls.filter(call => call.init?.method === 'DELETE' && call.url.endsWith('/live'))).toHaveLength(1)
       expect(frame().getAttribute('src')).toBeNull()
       expect(address().value).toBe('report.html')
+    })
+
+    it('ignores a programmatic back press while the file is still on screen', async () => {
+      const result = await htmlBody({ annotation: savedHtml, liveUrl: LIVE_URL })
+      mounted = result
+      // The control's `hidden` state is a visual hint. Its handler still has to be
+      // safe when a test or integrating shell dispatches the action directly.
+      await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
+      expect(result.calls.filter(call => call.init?.method === 'DELETE')).toHaveLength(0)
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+    })
+
+    it('restores the file annotation after a live page, without deleting its sidecar', async () => {
+      const result = await htmlBody({ annotation: savedHtml, liveUrl: LIVE_URL })
+      mounted = result
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      // Leaving the file is not clearing it. Let the draft debounce run while the
+      // live page is up: an empty live surface must not delete the file's sidecar.
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20))
+      })
+      expect(result.calls.filter(call =>
+        call.init?.method === 'DELETE' && !call.url.endsWith('/live'))).toHaveLength(0)
+      await click(defined(document.querySelector('.da-live-back')) as HTMLElement)
+      // Coming back restores the file's own marks and figure note, rather than
+      // leaving the reader with the blank surface that belonged to the page.
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      const goal = await openGoal(document.body)
+      expect(goal.value).toBe('改第二段')
+      await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, AUTOSAVE_DELAY_MS + 20))
+      })
+      expect(result.calls.filter(call =>
+        call.init?.method === 'DELETE' && !call.url.endsWith('/live'))).toHaveLength(0)
     })
   })
 
@@ -4448,7 +4503,7 @@ describe('the light the picker shines', () => {
     // drawing the rectangular box that a curve (or a diagonal line) never occupies.
     expect(document.querySelector('.da-name')?.textContent).toBe('text#lead')
     expect(document.querySelector('.da-live-hit')).toBeNull()
-    expect(document.querySelector('.da-pick-guide')?.textContent).toContain('第 1 / 1 层')
+    expect(document.querySelector('.da-pick-guide')?.textContent).toContain('1 / 1')
   })
 
   it('says so when element mode lands on nothing', async () => {

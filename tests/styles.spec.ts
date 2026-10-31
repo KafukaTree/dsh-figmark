@@ -30,6 +30,34 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).not.toContain('.da-toasts{position:absolute;z-index:11;top:14px;left:14px')
   })
 
+  it('moves HTML bubbles below the address bar and its refusal line', () => {
+    // The address bar occupies the top of the HTML surface. A toast at the default
+    // 14px covers the file/page badge and the back action; reserve the bar, and the
+    // extra refusal line when one is present.
+    expect(STYLES).toContain('.da-root[data-html="true"]>.da-toasts{top:58px}')
+    expect(STYLES).toContain('.da-root[data-html="true"][data-live-error="true"]>.da-toasts{top:86px}')
+  })
+
+  it('keeps the current element level visible in a narrow split pane', () => {
+    // The CSS media query sees the browser window, which stays wide while the preview
+    // column is narrow. The measured pane marks that state on the root instead, and
+    // the guide gives up its secondary key legend before its current level.
+    expect(STYLES).toContain('.da-root[data-compact="true"] .da-pick-keys{display:none}')
+    expect(STYLES).toContain('.da-root[data-compact="true"] .da-pick-guide{max-width:calc(100% - 76px)}')
+  })
+
+  it('keeps the element guide in the quiet corner instead of over the page', () => {
+    expect(STYLES).toContain('.da-pick-guide{position:absolute;z-index:9;top:8px;right:8px;')
+    expect(STYLES).not.toContain('.da-pick-guide{position:absolute;z-index:9;top:10px;left:50%;')
+  })
+
+  it('keeps the annotation count inside the toolbar scrollport', () => {
+    // The count used to start four pixels above its button inside an overflow-hidden
+    // horizontal strip, which clipped the top of the badge in the real panel.
+    expect(STYLES).toContain('.da-dock-count{position:absolute;z-index:1;top:0;right:-4px;')
+    expect(STYLES).not.toContain('.da-dock-count{position:absolute;top:-4px;right:-6px;')
+  })
+
   it('keeps the palette grip in reach when the palette has to scroll', () => {
     // A seven-tool palette is taller than a short panel. The strip scrolls rather than
     // clipping its last tools, but the grip is its only handle — scrolled out of the

@@ -437,6 +437,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [createdAt, setCreatedAt] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
   /**
+   * The file's annotation while a proxied page is in the frame.
+   *
+   * Visiting a page is a temporary change of surface, not the reader clearing the
+   * file they came from. This checkpoint lets the back action restore the file
+   * instead of treating an empty page as an empty sidecar and deleting work.
+   */
+  const fileBeforeLive = useRef<{
+    readonly marks: readonly AnnotationMark[]
+    readonly summary: string
+    readonly createdAt: string | null
+  } | null>(null)
+  /**
    * Which popover is showing, if any.
    *
    * One at a time, and this is deliberate: they all hang off the same strip near the
@@ -781,8 +793,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * was on screen six hundred milliseconds ago — which is exactly the edit the
    * reader just made.
    */
-  const live = useRef({ address, loaded, marks, summary, size, createdAt })
-  live.current = { address, loaded, marks, summary, size, createdAt }
+  const live = useRef({ address, createdAt, livePage, loaded, marks, size, summary })
+  live.current = { address, createdAt, livePage, loaded, marks, size, summary }
 
   /**
    * The signature of what is already on disk.
@@ -1331,7 +1343,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     setLiveError(null)
     try {
       const page = await openLivePage(address)
+      fileBeforeLive.current ??= { marks, summary, createdAt }
       resetMarks([])
+      writeSummary('')
+      setCreatedAt(null)
       setSelectedId(null)
       setLiveHover(null)
       setHtmlScroll({ x: 0, y: 0 })
@@ -1342,7 +1357,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     } finally {
       setLiveBusy(false)
     }
-  }, [resetMarks, setSelectedId, t])
+  }, [createdAt, marks, resetMarks, setSelectedId, summary, t, writeSummary])
 
   /**
    * Put the file back in the frame.
@@ -1351,15 +1366,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * nobody is looking at is a leftover, not a feature.
    */
   const closePage = useCallback((): void => {
+    const file = fileBeforeLive.current
+    // `hidden` is a visual hint, not an enforcement point. A programmatic click on the
+    // control while the file is on screen must not turn the file into a blank page.
+    if (file === null) return
+    fileBeforeLive.current = null
     setLivePage(null)
     setLiveText(null)
     setLiveError(null)
     setLiveHover(null)
     setHtmlScroll({ x: 0, y: 0 })
-    resetMarks([])
+    resetMarks(file.marks)
+    writeSummary(file.summary)
+    setCreatedAt(file.createdAt)
     setSelectedId(null)
     void closeLivePage().catch(() => { /* a proxy already gone is not the reader's problem. */ })
-  }, [resetMarks, setSelectedId])
+  }, [resetMarks, setSelectedId, writeSummary])
 
   /**
    * Tell the page whether the pointer belongs to the picker.
@@ -1568,7 +1590,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * describe the whole document.
    */
   useEffect(() => {
-    if (isPage || address === '') return
+    if (isPage || address === '' || livePage !== null) return
     if (loaded === null || size === null) return
     // What was just read is what is already there: a load is not an edit.
     if (writtenSignature.current === null) {
@@ -1576,7 +1598,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     autosave.current?.schedule()
-  }, [address, isPage, loaded, marks, size, summary])
+  }, [address, isPage, livePage, loaded, marks, size, summary])
 
   /**
    * Write the pending draft when the tab goes away.
@@ -1722,7 +1744,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       delay: AUTOSAVE_DELAY_MS,
       write: async (): Promise<void> => {
         const state = live.current
-        if (state.address === '' || state.loaded === null || state.size === null) return
+        // A live page is a temporary surface over the file, not a replacement for it:
+        // its marks have no sidecar, and an empty page must never be read as
+        // "the reader cleared the file" and delete that file's annotation.
+        if (state.livePage !== null || state.address === '' || state.loaded === null || state.size === null) return
         // An empty surface is a clear, and a clear deletes rather than writes. This
         // is the path that matters most: deleting the last mark leaves the sidecar
         // describing marks that are no longer on screen, so a later open would read
@@ -1751,9 +1776,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           createdAt: state.createdAt,
           now: new Date().toISOString(),
         })
-        // A page has nowhere to write a sidecar: its address may not be a file at all,
-        // and the marks it collected travel in the message instead.
-        if (livePage === null) await saveAnnotation(state.address, document, undefined, true)
+        await saveAnnotation(state.address, document, undefined, true)
         writtenSignature.current = signature
         clearSaveError()
       },
@@ -2420,8 +2443,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * the reader did not expect. This strip says what a click takes, where it sits in the
    * hierarchy, and how to move one level without hunting for another control.
    */
+  const pickGuideLabel = pickLevel === undefined
+    ? `${t('toolElementMode')}, ${t('toolElementHint')}`
+    : `${t('toolElementMode')}, ${t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}, ${t('toolElementKeys')}`
   const pickGuide = tool === 'element' ? (
-    <div className="da-pick-guide" role="status" aria-live="polite">
+    <div className="da-pick-guide" role="status" aria-live="polite" aria-label={pickGuideLabel}>
       <span className="da-pick-mode">{t('toolElementMode')}</span>
       <span className="da-pick-copy">
         {pickLevel === undefined
@@ -2444,7 +2470,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const pageUrl = livePage === null ? undefined : livePage.url
 
   return (
-    <div className="da-root" ref={rootRef}>
+    <div className="da-root" data-html={isHtml} data-live-error={liveError !== null}
+      data-compact={fitWidth > 0 && fitWidth < 360} ref={rootRef}>
       {hostError === null ? null : <div className="da-status" data-tone="error">{`${t('readError')}${hostError}`}</div>}
       {loaded === null || loaded.unreadable.length === 0 ? null : (
         // The marks are on disk and are not on the panel. Saying nothing would be the
@@ -2483,14 +2510,27 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             spellCheck={false}
             // Coming back to the field shows the resting address again, so a page the
             // reader half-typed over is what they are looking at, not a leftover.
-            onFocus={() => { setLiveText(null) }}
-            onChange={(event) => { setLiveText(event.target.value) }}
+            onFocus={() => {
+              setLiveText(null)
+              setLiveError(null)
+            }}
+            onChange={(event) => {
+              setLiveText(event.target.value)
+              // The refusal belonged to the previous value; keeping it under a new
+              // address makes a correction look like another failure before Enter.
+              setLiveError(null)
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault()
                 void openPage(event.currentTarget.value)
               }
-              if (event.key === 'Escape') setLiveText(null)
+              if (event.key === 'Escape') {
+                setLiveText(null)
+                // Giving the field back also gives back what it framed. A red refusal
+                // left under the restored filename reads as a failure of that file.
+                setLiveError(null)
+              }
             }}
           />
           <span className="da-live-badge" aria-hidden="true">
