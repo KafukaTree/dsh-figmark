@@ -806,7 +806,7 @@ describe('picking an element', () => {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
       anchor: { tag: 'p', bbox: [40, 30, 120, 60], selector: 'body > section > p:nth-of-type(1)' },
     }
-    mounted = mount({ tool: 'select', marks: [placed] })
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
     expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent)
       .toBe('body > section > p:nth-of-type(1)')
   })
@@ -816,7 +816,7 @@ describe('picking an element', () => {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
       anchor: { tag: 'div', bbox: [40, 30, 120, 60], selector: 'body > div:nth-of-type(3) > section:nth-of-type(2) > p' },
     }
-    mounted = mount({ tool: 'select', marks: [placed] })
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
     const code = defined(mounted.svg.querySelector('[data-da-element-code]')).textContent ?? ''
     expect(code).toContain('…')
     expect(code.startsWith('body > div')).toBe(true)
@@ -828,8 +828,32 @@ describe('picking an element', () => {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
       anchor: { tag: 'g', bbox: [40, 30, 120, 60] },
     }
-    mounted = mount({ tool: 'select', marks: [placed] })
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
     expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<g>')
+  })
+
+  it('names the mark being worked on and leaves the other marks as boxes', () => {
+    // Three element marks on one slide used to put three chips over the slide's own
+    // type, each one covering the caption above the thing it named. The box on every
+    // mark already says where they are, so the name waits until the reader picks one
+    // out — which is also when they are about to write about it.
+    const first: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    const second: AnnotationMark = { id: 'e2', kind: 'element', color: '#e03131', points: [[40, 130], [160, 190]], anchor }
+    mounted = mount({ tool: 'select', marks: [first, second], selectedId: 'e2', elementExtent: 'box' })
+    expect([...mounted.svg.querySelectorAll('[data-da-element-code]')].map(code => code.textContent))
+      .toEqual(['<line id="line2d_10">'])
+    // Both boxes stay: an unselected mark is not a mark the reader cannot see.
+    expect(mounted.svg.querySelector('[data-da-element-box="e1"]')).not.toBeNull()
+    expect(mounted.svg.querySelector('[data-da-element-box="e2"]')).not.toBeNull()
+  })
+
+  it('draws nothing of its own for an unnamed mark on a drawing', () => {
+    // A drawing has no box to keep, so an unselected element mark there is the light
+    // on the element and nothing else — no empty chip, no stray rect.
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    mounted = mount({ tool: 'select', marks: [placed] })
+    expect(mounted.svg.querySelector('[data-da-element-box]')).toBeNull()
+    expect(mounted.svg.querySelector('[data-da-element-code]')).toBeNull()
   })
 
   it('keeps the name on the paper at the top and the right edge', () => {
@@ -837,7 +861,7 @@ describe('picking an element', () => {
       id: 'e1', kind: 'element', color: '#1971c2', points: [[380, 0], [400, 60]],
       anchor: { tag: 'line', id: 'line2d_9', bbox: [380, 0, 20, 60], selector: '#line2d_9' },
     }
-    mounted = mount({ tool: 'select', marks: [placed], width: 400, height: 300 })
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1', width: 400, height: 300 })
     const chip = defined(mounted.svg.querySelector('rect'))
     const x = Number(chip.getAttribute('x'))
     const width = Number(chip.getAttribute('width'))

@@ -258,20 +258,19 @@ function elideCode(code: string): string {
 }
 
 /**
- * The element a mark is on, written out on the picture.
+ * The element a mark is on, written out beside it.
  *
- * An element mark draws no shape of its own: it is a light on the figure's own
- * artwork, and `spotlight.ts` lights it in the element's own shape. That light says
- * "this one" and nothing more, which is not enough to point at a line of source — the
- * id is the only string the mark shares with the document, so it goes on the picture
- * beside the light. A box is drawn around the element too, but only where a box is
- * true: on a rendered document the element really occupies that rectangle, while on a
- * drawing a box around a curve covers half the plot and claims a region the mark never
- * meant.
+ * A chip is a small pale plate with a name on it, and on a slide it is never empty
+ * space: parked above the element it covers the caption above it, parked below it
+ * covers the paragraph. One chip on one mark was a label; three element marks on one
+ * slide were three labels over the slide's own type, which is the piling the reader
+ * complained about, only in smaller print. So the name is drawn for the mark being
+ * worked on — the one whose element the reader is about to talk about — and for no
+ * other. The box stays on every mark, and the list spells every row out in words.
  *
- * The chip is placed above the element and flips below it when the paper has no room
- * there, so a mark at the top edge still shows its name. It is not a control: it takes
- * no press, so a press that lands on it reaches the mark's own hit area.
+ * Placement is unchanged: above the element, below it when the top edge has no room,
+ * kept on the paper. It is not a control: it takes no press, so a press that lands on
+ * it reaches the mark's own hit area.
  */
 function ElementCode(props: {
   readonly mark: AnnotationMark
@@ -281,16 +280,43 @@ function ElementCode(props: {
   readonly paper: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number }
   /** Whether the element's own rectangle is drawn as well. */
   readonly boxed: boolean
+  /** Whether this is the mark the reader is working on, the only one that gets a name. */
+  readonly named: boolean
 }): ReactNode {
-  const { mark, box, unit, paper, boxed } = props
+  const { mark, box, unit, paper, boxed, named } = props
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      {boxed ? (
+        <rect
+          data-da-element-box={mark.id}
+          x={box.x} y={box.y} width={box.width} height={box.height} rx={2 * unit}
+          fill={mark.color} fillOpacity={0.07} stroke={mark.color} strokeWidth={1.5 * unit}
+        />
+      ) : null}
+      {named ? <CodeChip mark={mark} box={box} unit={unit} paper={paper} /> : null}
+    </g>
+  )
+}
+
+/**
+ * The plate that names an element, sized and placed from the element's box.
+ *
+ * Monospace gives every character the same advance, so the plate can be sized without
+ * measuring text — which this module does not do, because the same code draws the
+ * export copy outside a document.
+ */
+function CodeChip(props: {
+  readonly mark: AnnotationMark
+  readonly box: MarkBox
+  readonly unit: number
+  readonly paper: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number }
+}): ReactNode {
+  const { mark, box, unit, paper } = props
   /* v8 ignore next -- an element mark is made from the element it landed on. */
   if (mark.anchor === undefined) return null
   const code = elideCode(anchorCodeName(mark.anchor))
   const pad = 4 * unit
   const fontSize = CODE_FONT_SIZE * unit
-  // Monospace gives every character the same advance, so the chip can be sized
-  // without measuring text — which this module does not do, because the same code
-  // draws the export copy outside a document.
   const width = code.length * fontSize * 0.62 + pad * 2
   const height = fontSize + pad * 1.6
   const gap = 4 * unit
@@ -305,14 +331,7 @@ function ElementCode(props: {
   const wanted = above >= paper.top ? above : box.y + box.height + gap
   const y = Math.min(wanted, Math.max(paper.top, paper.bottom - height))
   return (
-    <g style={{ pointerEvents: 'none' }}>
-      {boxed ? (
-        <rect
-          data-da-element-box={mark.id}
-          x={box.x} y={box.y} width={box.width} height={box.height} rx={2 * unit}
-          fill={mark.color} fillOpacity={0.07} stroke={mark.color} strokeWidth={1.5 * unit}
-        />
-      ) : null}
+    <>
       <rect
         x={x} y={y} width={width} height={height} rx={3 * unit}
         fill="#ffffff" fillOpacity={0.94} stroke={mark.color} strokeWidth={1.2 * unit}
@@ -324,7 +343,7 @@ function ElementCode(props: {
       >
         {code}
       </text>
-    </g>
+    </>
   )
 }
 
@@ -384,6 +403,7 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
             right: -props.originX + props.width - 2, bottom: -props.originY + props.height - 2,
           }}
           boxed={props.elementExtent === 'box'}
+          named={selected}
         />
       )}
       {selected && !isDraft && isPoint ? <FixedFrame box={pointMarkBox(shown, unit)} hairline={sizes.hairline} /> : null}

@@ -431,6 +431,18 @@ async function selectFirstMark(host: HTMLElement): Promise<void> {
   await click(defined(host.querySelector('.da-mark-text')))
 }
 
+/**
+ * The element marks the overlay is drawing a box for, in the order it draws them.
+ *
+ * The box is what every element mark puts on a rendered document, selected or not, so
+ * it is the reading of "this mark is being drawn on the page in front" that survives a
+ * change of what the selected mark shows.
+ */
+function boxedIds(): readonly (string | null)[] {
+  return [...document.querySelectorAll('[data-da-element-box]')]
+    .map(box => box.getAttribute('data-da-element-box'))
+}
+
 let mounted: { readonly root: Root } | undefined
 /** What the panel wrote to the log, for the details a bubble does not carry. */
 let consoleError: ReturnType<typeof vi.spyOn>
@@ -2360,6 +2372,9 @@ describe('the weight of the pen', () => {
     // an element mark shares with the source. A drawing's element box is a rectangle
     // the drawing never contains, so no box goes around it.
     mounted = await svgBody({ annotation: elementOnly })
+    await selectFirstMark(document.body)
+    // A drawing's element box is a rectangle the drawing never contains, so no box
+    // goes around it; the name is there because this mark is the one being worked on.
     expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<g id="line2d_1">')
     expect(document.querySelector('[data-da-element-box]')).toBeNull()
   })
@@ -3228,8 +3243,11 @@ describe('a rendered document', () => {
     const rules = [...frameDocument.querySelectorAll('style[data-da-spot]')]
     expect(rules).toHaveLength(1)
     expect(rules[0]?.textContent).toContain('drop-shadow')
-    // The overlay carries the name and the box: on a rendered document the element's
-    // rectangle is its own place on the page, not a claim about the picture.
+    // The overlay carries the box on every mark, and the name of the mark the reader
+    // picked out: a rendered document's rectangle is the element's own place on the
+    // page, not a claim about the picture, so it can stay while the name waits.
+    expect(document.querySelector('[data-da-element-code]')).toBeNull()
+    await selectFirstMark(document.body)
     expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<p id="lead">')
     expect(document.querySelector('[data-da-element-box]')).not.toBeNull()
   })
@@ -3268,12 +3286,12 @@ describe('a rendered document', () => {
     )
     await reportLayout(WINDOW.width, 1843)
     // Until the first frame nothing has been read, so both marks are drawn as recorded.
-    expect(document.querySelectorAll('[data-da-element-code]')).toHaveLength(2)
+    expect(boxedIds()).toEqual(['cover', 'back'])
     await runFrames()
     // Then only the slide in front is drawn on: the second slide's mark is still in the
     // file, and it is about a page that is not on screen.
-    const codes = [...document.querySelectorAll('[data-da-element-code]')]
-    expect(codes.map(code => code.textContent)).toEqual(['#s1 > h1'])
+    // The mark on the page behind its box too: a box left over from another slide is
+    // the same claim as a chip left over from it.
     expect(document.querySelector('[data-da-element-box="back"]')).toBeNull()
     // The arrow on the other slide goes with it, because its tip named an element
     // there. The region stays: it records an area of the page, not a thing on it.
@@ -3284,8 +3302,7 @@ describe('a rendered document', () => {
     slides[0]?.classList.remove('current')
     slides[1]?.classList.add('current')
     await runFrames()
-    expect([...document.querySelectorAll('[data-da-element-code]')].map(code => code.textContent))
-      .toEqual(['<p id="lead">'])
+    expect(boxedIds()).toEqual(['back'])
     expect(document.querySelector('[data-da-element-box="cover"]')).toBeNull()
     expect(document.querySelector('[data-da-mark="arrow"]')).not.toBeNull()
     // And the mark is drawn at the element's live box, not the box it had when it was
