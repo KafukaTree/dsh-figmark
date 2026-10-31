@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
 import {
-  anchorInDocument, buildRenderedDocument, loadFrameDocument, measureFrameContent,
+  anchorInDocument, buildRenderedDocument, elementBox, loadFrameDocument, measureFrameContent,
 } from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
@@ -376,5 +376,76 @@ describe('naming what a mark landed on', () => {
     stubRect(defined(doc.querySelector('p')), { left: 0, top: 0, width: 40, height: 20 })
     expect(anchorInDocument(doc, 10, 10)?.selector)
       .toBe('body > div:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(1) > p:nth-of-type(1)')
+  })
+})
+
+describe('asking where an element is, while the page is showing it', () => {
+  /** One deck: every slide stacked in the same place, one of them in front. */
+  function deck(): { readonly cover: Element; readonly back: Element } {
+    document.body.innerHTML = '<section class="slide current" id="s1"><h1 id="cover">封面</h1></section>'
+      + '<section class="slide" id="s2"><p id="back">第二页</p></section>'
+    const style = document.createElement('style')
+    style.textContent = '.slide{visibility:hidden}.slide.current{visibility:visible}'
+    document.head.append(style)
+    return { cover: defined(document.querySelector('#cover')), back: defined(document.querySelector('#back')) }
+  }
+
+  afterEach(() => { document.head.innerHTML = '' })
+
+  it('reports the box in document pixels, off the window it is shown through', () => {
+    const { cover } = deck()
+    stubRect(cover, { left: 10, top: 20, width: 100, height: 40 })
+    const view = defined(document.defaultView)
+    Object.defineProperty(view, 'scrollX', { configurable: true, value: 5 })
+    Object.defineProperty(view, 'scrollY', { configurable: true, value: 7 })
+    try {
+      // The box a mark is recorded in is the document's, not the window's: the page
+      // has moved 5px left and 7px up, so the element is further down the document.
+      expect(elementBox(cover)).toEqual([15, 27, 100, 40])
+    } finally {
+      Reflect.deleteProperty(view, 'scrollX')
+      Reflect.deleteProperty(view, 'scrollY')
+    }
+  })
+
+  it('withholds the box of a slide that is not the one in front', () => {
+    const { cover, back } = deck()
+    // Both slides have a box; only one of them is being shown. Reporting the box of
+    // the other one is what put every mark of every slide on top of the slide in front.
+    expect(elementBox(cover)).toEqual([0, 0, 0, 0])
+    expect(elementBox(back)).toBeUndefined()
+  })
+
+  it('withholds an element a collapsed ancestor hides', () => {
+    document.body.innerHTML = '<div style="display:none"><p id="x">不在</p></div>'
+    // `display` is inherited by nothing, so the ancestor is the only thing that says it.
+    expect(elementBox(defined(document.querySelector('#x')))).toBeUndefined()
+  })
+
+  it('asks the engine when it can, since a page hides a thing in more ways than one', () => {
+    const { cover, back } = deck()
+    const asked: unknown[] = []
+    Object.defineProperty(back, 'checkVisibility', {
+      configurable: true,
+      value: (options: unknown) => { asked.push(options); return true },
+    })
+    Object.defineProperty(cover, 'checkVisibility', { configurable: true, value: () => false })
+    // The slide's own stylesheet says one thing and the engine's answer wins: it is the
+    // one that knows about `content-visibility`, collapsed sections and painted boxes.
+    expect(elementBox(back)).toEqual([0, 0, 0, 0])
+    expect(elementBox(cover)).toBeUndefined()
+    // And it is asked for the answer this panel means: the bare call ignores
+    // `visibility: hidden`, which is exactly how a deck puts a slide away, so a mark
+    // would be drawn on the slide in front for every slide behind it.
+    expect(asked).toEqual([{ checkVisibilityCSS: true, visibilityProperty: true, contentVisibilityAuto: true }])
+  })
+
+  it('calls an element it cannot ask about shown', () => {
+    const parsed = parse('<html><body><p>hi</p></body></html>')
+    const paragraph = defined(parsed.querySelector('p'))
+    stubRect(paragraph, { left: 3, top: 4, width: 5, height: 6 })
+    // A document parsed outside a window has no cascade to ask, so the box it reports
+    // is already in its own pixels and there is nothing that could hide it.
+    expect(elementBox(paragraph)).toEqual([3, 4, 5, 6])
   })
 })

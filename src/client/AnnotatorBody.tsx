@@ -34,6 +34,7 @@ import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import type { SidecarWriteResult } from '../shared/http'
 import { anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
+import { shownMarksOf, useShownMarks } from './shown-marks'
 import {
   anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
 } from './live-page'
@@ -365,6 +366,25 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * with nothing extra.
    */
   const listedMarks = props.documentMarks ?? marks
+  /**
+   * What the document in the frame is showing, and the marks that belong to it.
+   *
+   * A rendered document is one file of many surfaces: a deck keeps every one of its
+   * slides in it and shows one at a time, so a mark drawn on the second slide is still
+   * a mark of the document — but it is not a mark about the third slide, and drawing it
+   * there is a comment the reader never made. The document knows which of its elements
+   * it is showing, so it is asked, every frame; only what it is showing is drawn.
+   *
+   * The list and the message keep the whole file. They are the map of what is being
+   * sent, and a mark on another slide is exactly the kind of thing a reader wants to
+   * find in it.
+   */
+  const showing = useShownMarks(
+    frameRef,
+    marks,
+    figure?.kind === 'html' && marks.some(mark => mark.anchor?.selector !== undefined),
+  )
+  const drawnMarks = useMemo(() => shownMarksOf(marks, showing), [marks, showing])
   const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null)
   /**
    * The selection, kept by the owner when there is one.
@@ -1048,7 +1068,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     const root = rootRef.current
     const host = figureRef.current
-    const mark = marks.find(candidate => candidate.id === selectedId)
+    const mark = drawnMarks.find(candidate => candidate.id === selectedId)
     const drawn = liveMark !== null && liveMark.id === selectedId ? liveMark : mark
     const box = drawn === undefined ? undefined : markOutline(drawn, unit)
     if (root === null || host === null || box === undefined || size === null) {
@@ -1087,10 +1107,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // effect its own trigger: a page body rebuilds `size` from its owner's surface,
     // so an unconditional set here re-renders, re-runs, and spins.
     setDetailAt(previous => previous !== null && previous.left === at.left && previous.top === at.top ? previous : at)
-    // `marks` changes on every keystroke in the pill, which is also when the pill's own
-    // height can change, so the re-measurement happens by itself. The write is
-    // idempotent, so a measured height that did not move re-renders nothing.
-  }, [figure, htmlScroll, liveMark, marks, palette, scale, selectedId, size, unit])
+    // `drawnMarks` changes on every keystroke in the pill, which is also when the pill's
+    // own height can change, so the re-measurement happens by itself. The write is
+    // idempotent, so a measured height that did not move re-renders nothing. It also
+    // moves when the page turns, which is what keeps the pill off the slide that just
+    // came up with a mark belonging to another one.
+  }, [drawnMarks, figure, htmlScroll, liveMark, palette, scale, selectedId, size, unit])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -2407,7 +2429,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             // grows the paper, and a pen that grew with it drew thicker than the
             // picture the agent receives.
             figureSize={size}
-            marks={marks}
+            // Only the marks of the page in front: a document's other pages are still
+            // this document's marks, but they are not about the page being looked at.
+            marks={drawnMarks}
             tool={tool}
             color={color}
             weight={weight}

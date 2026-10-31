@@ -2824,11 +2824,25 @@ describe('a rendered document', () => {
   /** Resize callbacks the frame body registered, so a spec can fire a layout pass. */
   const resizeCallbacks: (() => void)[] = []
 
+  /** Frame callbacks the panel asked for, keyed by the handle it can cancel. */
+  const frameCallbacks = new Map<number, FrameRequestCallback>()
+  let frameHandle = 0
+
+  /** Run the animation frames that are due, the way a display would. */
+  async function runFrames(): Promise<void> {
+    const due = [...frameCallbacks.values()]
+    frameCallbacks.clear()
+    await act(async () => {
+      for (const callback of due) callback(0)
+    })
+  }
+
   /** Mount a body over the rendered document. */
   async function htmlBody(
     answers: HostAnswers = {},
     props: Partial<AnnotatorBodyProps> = {},
     pane: { readonly width: number; readonly height: number } = { width: 800, height: 600 },
+    bytes: Uint8Array = htmlBytes(),
   ): Promise<{
     readonly host: HTMLElement
     readonly root: Root
@@ -2858,7 +2872,7 @@ describe('a rendered document', () => {
       return respond(htmlPayload(answers))
     }))
     const result = await mountBody({
-      content: { kind: 'bytes', data: htmlBytes() },
+      content: { kind: 'bytes', data: bytes },
       resourceAddress: HTML_ADDRESS,
       ...props,
     }, { stageWidth: pane.width, stageHeight: pane.height })
@@ -2919,6 +2933,14 @@ describe('a rendered document', () => {
 
   beforeEach(() => {
     resizeCallbacks.length = 0
+    frameCallbacks.clear()
+    frameHandle = 0
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
+      frameHandle += 1
+      frameCallbacks.set(frameHandle, callback)
+      return frameHandle
+    })
+    vi.stubGlobal('cancelAnimationFrame', (target: number): void => { frameCallbacks.delete(target) })
     vi.stubGlobal('ResizeObserver', class {
       /** @param callback - the observer's callback, kept so a spec can fire it. */
       constructor(callback: () => void) { resizeCallbacks.push(callback) }
@@ -3210,6 +3232,69 @@ describe('a rendered document', () => {
     // rectangle is its own place on the page, not a claim about the picture.
     expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<p id="lead">')
     expect(document.querySelector('[data-da-element-box]')).not.toBeNull()
+  })
+
+  it('draws a mark only while the slide it names is the slide in front', async () => {
+    // A deck is one document with many pages: every slide stays in the markup, stacked
+    // in the same place, and one of them is visible at a time. A mark recorded on another
+    // slide would be drawn on top of this one — a comment the reader never made about the
+    // page they are looking at.
+    const deck = '<!doctype html><html><head><title>报告</title>'
+      + '<style>.slide{visibility:hidden}.slide.current{visibility:visible}</style></head><body>'
+      + '<section class="slide current" id="s1"><h1>封面</h1></section>'
+      + '<section class="slide" id="s2"><p id="lead">第二页</p></section></body></html>'
+    const paged: AnnotationDocument = {
+      ...savedHtml,
+      marks: [
+        {
+          id: 'cover', kind: 'element', color: '#1971c2', points: [[0, 0], [1024, 200]], detail: '封面要改',
+          anchor: { tag: 'h1', selector: '#s1 > h1', text: '封面', bbox: [0, 0, 1024, 200] },
+        },
+        {
+          id: 'back', kind: 'element', color: '#1971c2', points: [[0, 0], [1024, 120]], detail: '第二页要改',
+          anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第二页', bbox: [0, 0, 1024, 120] },
+        },
+        // An arrow carries the element its tip landed on, so its page can be told; a
+        // region does not, because a region is about the area rather than a thing.
+        {
+          id: 'arrow', kind: 'arrow', color: '#e03131', points: [[10, 10], [40, 60]], weight: 2,
+          anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第二页', bbox: [0, 0, 1024, 120] },
+        },
+        { id: 'region', kind: 'rect', color: '#e03131', points: [[10, 10], [40, 60]], weight: 2 },
+      ],
+    }
+    mounted = await htmlBody(
+      { annotation: paged }, {}, { width: 800, height: 600 }, new TextEncoder().encode(deck),
+    )
+    await reportLayout(WINDOW.width, 1843)
+    // Until the first frame nothing has been read, so both marks are drawn as recorded.
+    expect(document.querySelectorAll('[data-da-element-code]')).toHaveLength(2)
+    await runFrames()
+    // Then only the slide in front is drawn on: the second slide's mark is still in the
+    // file, and it is about a page that is not on screen.
+    const codes = [...document.querySelectorAll('[data-da-element-code]')]
+    expect(codes.map(code => code.textContent)).toEqual(['#s1 > h1'])
+    expect(document.querySelector('[data-da-element-box="back"]')).toBeNull()
+    // The arrow on the other slide goes with it, because its tip named an element
+    // there. The region stays: it records an area of the page, not a thing on it.
+    expect(document.querySelector('[data-da-mark="arrow"]')).toBeNull()
+    expect(document.querySelector('[data-da-mark="region"]')).not.toBeNull()
+    // The reader turns the page the way the deck does it: one class off, one on.
+    const slides = [...defined(frame().contentDocument).querySelectorAll('section')]
+    slides[0]?.classList.remove('current')
+    slides[1]?.classList.add('current')
+    await runFrames()
+    expect([...document.querySelectorAll('[data-da-element-code]')].map(code => code.textContent))
+      .toEqual(['<p id="lead">'])
+    expect(document.querySelector('[data-da-element-box="cover"]')).toBeNull()
+    expect(document.querySelector('[data-da-mark="arrow"]')).not.toBeNull()
+    // And the mark is drawn at the element's live box, not the box it had when it was
+    // picked: a deck that rescales itself keeps the name on the thing it names.
+    stubRect(defined(defined(frame().contentDocument).querySelector('#lead')), { left: 0, top: 402, width: 700, height: 60 })
+    await runFrames()
+    const plate = defined(document.querySelector('[data-da-element-box="back"]')) as SVGRectElement
+    expect(Math.round(Number(plate.getAttribute('y')))).toBe(402)
+    expect(Math.round(Number(plate.getAttribute('height')))).toBe(60)
   })
 
   it('renders the frame without a document rather than failing', async () => {

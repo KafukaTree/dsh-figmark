@@ -15,7 +15,7 @@
  * mark is recorded in.
  * @module dsh-figmark/client/html-dom
  */
-import type { MarkAnchor } from '../shared/annotation'
+import type { FigureBox, MarkAnchor } from '../shared/annotation'
 import { anchorTextOf } from './anchor-text'
 import { depthBelow, selectorFor } from './dom-path'
 import { isPaper, pickStack } from './pick'
@@ -175,6 +175,77 @@ function scrollOf(document: Document): { readonly x: number; readonly y: number 
   return { x: view?.scrollX ?? 0, y: view?.scrollY ?? 0 }
 }
 
+/**
+ * The box an element covers in its document's own pixels.
+ *
+ * The box comes back in window pixels, while a mark records document pixels, which
+ * differ by however far the page has been scrolled. A document parsed outside a
+ * window reports no view and no offset, and its boxes are already document pixels.
+ * @param element - the element to measure.
+ * @returns the box, in document pixels.
+ */
+function boxOf(element: Element): FigureBox {
+  const rect = element.getBoundingClientRect()
+  const scroll = scrollOf(element.ownerDocument)
+  return [rect.left + scroll.x, rect.top + scroll.y, rect.width, rect.height]
+}
+
+/**
+ * The parts of "visible" this panel means by it.
+ *
+ * `checkVisibility()` on its own only answers for `display` and for content the engine
+ * has skipped laying out; a slide put away with `visibility: hidden` — which is how a
+ * deck keeps every slide in one file and swaps them — counts as visible, and every mark
+ * of every slide would land on the slide in front. Both the current name and the older
+ * one for the same check are passed, because browsers agree on neither spelling yet.
+ * Opacity is deliberately not checked: a slide mid-fade is a page being turned, and a
+ * mark that blinks out and back during the turn looks broken rather than honest.
+ */
+const SHOWN: CheckVisibilityOptions = {
+  checkVisibilityCSS: true,
+  visibilityProperty: true,
+  contentVisibilityAuto: true,
+}
+
+/**
+ * Whether a document is showing an element right now.
+ *
+ * The engine's own answer whenever it has one: `checkVisibility` is precisely this
+ * question, and it covers the ways a page hides a thing — a slide that is not up is
+ * `visibility: hidden`, a page that is put away is `display: none`, a collapsed
+ * section has no box at all. A document parsed by a test double has neither the call
+ * nor a cascade, so the fallback asks the two properties that are computed there, and
+ * walks up for `display`, which is inherited by nothing.
+ * @param element - the element to ask about.
+ * @returns true while the element is on the page in front of the reader.
+ */
+function isRendered(element: Element): boolean {
+  if (typeof element.checkVisibility === 'function') return element.checkVisibility(SHOWN)
+  const view = element.ownerDocument.defaultView
+  for (let node: Element | null = element; node !== null; node = node.parentElement) {
+    const style = view?.getComputedStyle(node)
+    if (style === undefined) return true
+    if (style.display === 'none') return false
+    if (node === element && style.visibility === 'hidden') return false
+  }
+  return true
+}
+
+/**
+ * Where an element is, while the document is showing it.
+ *
+ * A rendered document is one document of many surfaces: a deck keeps every slide in
+ * the markup, stacked in the same place, and shows one of them at a time. An element
+ * on a slide that is not up still has a box, and that box lands on the slide in front
+ * — so "where is this element" and "is its page the page in front" are one question,
+ * and this is it.
+ * @param element - the element to measure.
+ * @returns the box in document pixels, or undefined while the document hides it.
+ */
+export function elementBox(element: Element): FigureBox | undefined {
+  return isRendered(element) ? boxOf(element) : undefined
+}
+
 /** Whether an element is an anonymous inline wrapper: it names no anchor of its own. */
 function isAnonymousWrapper(element: Element): boolean {
   return element.id === '' && WRAPPER_TAGS.includes(element.tagName.toLowerCase())
@@ -287,11 +358,6 @@ function measureInDocument(body: Element, x: number, y: number): MarkAnchor | un
  * @returns the anchor.
  */
 function describeInDocument(described: Element, body: Element): MarkAnchor {
-  const rect = described.getBoundingClientRect()
-  // The box comes back in window pixels; a mark records document pixels, which differ
-  // by however far the page has been scrolled. A document parsed outside a window
-  // reports no view and no offset, and its boxes are already document pixels.
-  const scroll = scrollOf(described.ownerDocument)
   // `Element.textContent` is `string | null` in the DOM types, but only a Document or
   // a Doctype can report null; an element always reports its text.
   // Kept apart, so two labels inside one element stay two labels: the same rule the
@@ -299,7 +365,7 @@ function describeInDocument(described: Element, body: Element): MarkAnchor {
   const text = anchorTextOf(described)
   return {
     tag: described.tagName.toLowerCase(),
-    bbox: [rect.left + scroll.x, rect.top + scroll.y, rect.width, rect.height],
+    bbox: boxOf(described),
     ...(described.id === '' ? {} : { id: described.id }),
     ...(text === '' ? {} : { text }),
     selector: selectorFor(described, body),
