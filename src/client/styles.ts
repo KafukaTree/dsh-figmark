@@ -359,20 +359,42 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    one thing the reader cannot see from the page itself. It is a strip rather than a
    floating pill because it must never sit on the page it describes: a page is the
    reader's own, and covering a corner of it is exactly the "not the page" this
-   replaced. Only HTML previews get one. */
-.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:5px 14px;min-height:26px;
+   replaced. Only HTML previews get one.
+   The field is one control, not a bare input: a document or globe icon says what kind
+   of location is on screen, a quiet badge says the file format or that this is a
+   proxied page, and focus rings the whole field instead of suddenly drawing a blue
+   outline around a previously borderless text box. */
+.da-live-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:7px 14px 8px;
+  background:var(--dsw-alias-bg-layer-1,rgba(127,127,127,.035));
   border-bottom:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.22))}
 .da-live-bar[hidden]{display:none}
-.da-live-addr{flex:1 1 auto;min-width:0;height:22px;padding:0 8px;border:0.5px solid transparent;border-radius:6px;
-  background:transparent;color:inherit;font:12px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
-.da-live-addr:hover{background:rgba(127,127,127,.1)}
-.da-live-addr:focus{outline:none;border-color:var(--da-accent,#176df2);background:rgba(127,127,127,.12)}
+.da-live-field{display:flex;flex:1 1 auto;align-items:center;gap:7px;min-width:0;height:34px;box-sizing:border-box;
+  padding:0 8px 0 10px;border:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:9px;
+  background:var(--dsw-alias-bg-base,#fff);box-shadow:0 1px 2px rgba(20,40,80,.04);
+  transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
+.da-live-field:hover{border-color:var(--dsw-alias-border-l3,rgba(127,127,127,.46))}
+.da-live-field:focus-within{border-color:var(--da-accent,#176df2);
+  box-shadow:0 0 0 2px var(--da-accent-soft,rgba(23,109,242,.14));background:var(--dsw-alias-bg-base,#fff)}
+.da-live-icon{width:15px;height:15px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:1.55;
+  stroke-linecap:round;stroke-linejoin:round;color:var(--dsw-alias-label-tertiary,inherit)}
+.da-live-field[data-live="true"] .da-live-icon{color:var(--da-accent,#176df2)}
+.da-live-addr{flex:1 1 auto;min-width:0;height:30px;padding:0;border:0;outline:none;
+  background:transparent;color:var(--dsw-alias-label-primary,inherit);
+  font:12px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-live-addr::placeholder{color:var(--dsw-alias-label-tertiary,inherit);opacity:.8}
+.da-live-badge{flex:0 0 auto;padding:2px 6px;border-radius:4px;
+  background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.1));
+  color:var(--dsw-alias-label-tertiary,inherit);font-size:9px;font-weight:700;line-height:14px;
+  letter-spacing:.07em;text-transform:uppercase;white-space:nowrap}
+.da-live-field[data-live="true"] .da-live-badge{background:var(--da-accent-soft,rgba(23,109,242,.14));
+  color:var(--da-accent,#176df2)}
 .da-live-note{flex:0 0 auto;font-size:11.5px;color:var(--da-quiet,#6b6f75);white-space:nowrap}
 .da-live-note[hidden]{display:none}
 /* Going back to the file is the reader's way out, so it says so in words: a glyph
    would have to be learned, and there is exactly one of these. */
-.da-live-back{flex:0 0 auto;height:22px;padding:0 8px;border:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.28));
-  border-radius:6px;background:transparent;color:inherit;font-size:11.5px;line-height:1;cursor:pointer}
+.da-live-back{flex:0 0 auto;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.28));
+  border-radius:8px;background:var(--dsw-alias-bg-base,rgba(255,255,255,.7));color:inherit;
+  font-size:11.5px;line-height:1;cursor:pointer}
 .da-live-back:hover{background:rgba(127,127,127,.12)}
 .da-live-back[hidden]{display:none}
 /* An address that did not open says why under the field, in the reader's own words:
@@ -777,40 +799,78 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-card,.da-card-fallback{font:inherit;font-size:12px;line-height:1.5;text-align:left;vertical-align:top;color:inherit}
 /* The fallback is the block verbatim, so it keeps the block's own line breaks. */
 .da-card-fallback{white-space:pre-wrap}
-.da-card{display:inline-flex;flex-direction:column;gap:5px;box-sizing:border-box;width:min(100%,420px);min-width:min(100%,270px);margin:2px 0;padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.35));border-radius:10px;background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));white-space:normal}
-button.da-card{appearance:none;font-family:inherit;cursor:pointer}
-button.da-card:hover{background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.14))}
+.da-card{display:inline-flex;flex-direction:column;box-sizing:border-box;width:min(100%,440px);min-width:min(100%,286px);margin:2px 0;padding:0;overflow:hidden;
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));border-radius:12px;
+  background:var(--dsw-alias-bg-base,rgba(255,255,255,.72));
+  box-shadow:0 1px 2px rgba(20,40,80,.04);white-space:normal}
+button.da-card{appearance:none;font-family:inherit;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
+button.da-card:hover{border-color:var(--dsw-alias-border-l3,rgba(128,128,128,.46));background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));
+  box-shadow:0 3px 10px rgba(20,40,80,.07)}
 button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
-.da-card-head{display:flex;align-items:center;gap:8px;min-width:0}
-.da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:38px;height:38px;overflow:hidden;border-radius:7px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.12));color:var(--dsw-alias-label-tertiary,inherit)}
+.da-card-head{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;
+  border-bottom:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));
+  background:var(--dsw-alias-bg-layer-1,rgba(128,128,128,.025))}
+.da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:40px;height:40px;overflow:hidden;border-radius:8px;
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));
+  background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));color:var(--da-accent,#176df2)}
 /* The picture covers the glyph; a picture that fails hides itself, and the glyph
    underneath it all along is what is left. A miss is never an empty box. */
 .da-card-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .da-card-shot img[hidden]{display:none}
 .da-card-glyph{width:18px;height:18px}
-.da-card-text{display:flex;flex-direction:column;min-width:0}
-.da-card-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.da-card-scope,.da-card-row{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.da-card-scope{font-size:11px;color:var(--dsw-alias-label-tertiary,inherit)}
-.da-card-go{flex:0 0 auto;margin-left:auto;padding-left:12px;color:var(--dsw-alias-label-tertiary,inherit)}
-/* Two lines per mark rather than two columns: the name of a mark is an identifier
-   ("矩形1 (589,238)-(791,439)") and runs to the width of a small card on its own, so
-   sharing a line with the note squeezed the note — the half a reader actually wrote —
-   into an ellipsis. Stacked, the identifier recedes and its sentence gets the line. */
-.da-card-body{display:flex;flex-direction:column;gap:6px;min-width:0}
-.da-card-row{display:flex;flex-direction:column;gap:1px;min-width:0}
-.da-card-mark{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;
+.da-card-text{display:flex;flex:1 1 auto;flex-direction:column;gap:2px;min-width:0}
+.da-card-title-row{display:flex;align-items:center;gap:6px;min-width:0}
+.da-card-title{font-size:12.5px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-type{flex:0 0 auto;padding:0 5px;border-radius:4px;background:var(--da-accent-soft,rgba(23,109,242,.14));
+  color:var(--da-accent,#176df2);font-size:8.5px;font-weight:750;line-height:15px;letter-spacing:.06em}
+.da-card-scope{display:flex;align-items:baseline;min-width:0;font-size:10.5px;line-height:1.35;
   color:var(--dsw-alias-label-tertiary,inherit)}
+.da-card-file{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--dsw-alias-label-secondary,inherit);
+  font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-card-sep{flex:0 0 auto}
+.da-card-meta{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-card-go{display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:22px;height:22px;margin-left:2px;
+  border-radius:50%;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
+  color:var(--dsw-alias-label-tertiary,inherit)}
+.da-card-go svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242,.14));color:var(--da-accent,#176df2)}
+/* Each mark is a compact record, not a line of debug output. The row head answers
+   "which mark and where"; the element name and selector follow only when the message
+   carried them; the reader's sentence is the strongest text. */
+.da-card-body{display:flex;flex-direction:column;min-width:0;padding:1px 10px 4px}
+.da-card-row{display:flex;flex-direction:column;gap:3px;min-width:0;padding:7px 0}
+.da-card-row+.da-card-row{border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.14))}
+.da-card-row-head{display:flex;align-items:center;gap:6px;min-width:0}
+.da-card-kind{display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:18px;height:18px;border-radius:5px;
+  background:var(--da-accent-soft,rgba(23,109,242,.14));color:var(--da-accent,#176df2);
+  font-size:9px;font-weight:750;line-height:1}
+.da-card-mark{display:flex;flex:0 1 auto;align-items:center;gap:5px;min-width:0;white-space:nowrap}
+.da-card-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:11.5px;font-weight:650;line-height:1.35;color:var(--dsw-alias-label-primary,inherit)}
 /* The page a mark belongs to, kept to the left of its name on the same quiet line. */
-.da-card-page{margin-right:5px;padding:0 4px;border-radius:3px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.12))}
+.da-card-page{flex:0 0 auto;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
+  color:var(--dsw-alias-label-tertiary,inherit);font-size:9.5px;line-height:15px}
+.da-card-geometry{flex:0 1 auto;min-width:0;margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--da-quiet,#6b6f75);font:9.5px/1.3 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-card-element{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  margin-left:24px;padding-left:7px;border-left:2px solid var(--da-accent-soft,rgba(23,109,242,.14));
+  overflow:hidden;overflow-wrap:anywhere;white-space:normal;
+  color:var(--dsw-alias-label-secondary,inherit);font-size:11.5px;line-height:1.45}
+.da-card-locator{align-self:flex-start;max-width:calc(100% - 24px);margin-left:24px;padding:1px 5px;border-radius:4px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.07));color:var(--da-quiet,#6b6f75);
+  font:9.5px/1.45 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-card-said{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
-  overflow:hidden;overflow-wrap:anywhere;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
-.da-card-rest{color:var(--dsw-alias-label-tertiary,inherit)}
+  margin-left:24px;overflow:hidden;overflow-wrap:anywhere;white-space:normal;
+  color:var(--dsw-alias-label-primary,inherit);font-size:11.5px;line-height:1.5}
+.da-card-warning{margin-left:24px;color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,inherit));
+  font-size:10px;line-height:1.4}
+.da-card-rest{display:flex;align-items:center;min-height:26px;color:var(--dsw-alias-label-tertiary,inherit);font-size:10.5px}
 /* The goal the reader wrote is not one of the marks, so a rule separates it. */
-.da-card-target{flex-direction:row;gap:4px;align-items:baseline;margin-top:0;padding-top:5px;
-  border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));
+.da-card-target{flex-direction:row;gap:6px;align-items:baseline;padding:8px 0;
   overflow:visible;white-space:normal;color:var(--dsw-alias-label-secondary,inherit)}
-.da-card-goal{flex:0 0 auto;font-weight:600;color:var(--dsw-alias-label-tertiary,inherit)}
+.da-card-goal{flex:0 0 auto;font-size:10px;font-weight:650;color:var(--dsw-alias-label-tertiary,inherit)}
 /* The parked annotation, drawn as an attachment chip. Inside the composer card it is
    the card's first child, so it takes the attachment rail's inset — the card itself has
    no horizontal padding, and the rail spends 10px on each side. The dock stacks its

@@ -3,7 +3,7 @@
 import { act, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AnnotationCard, readAnnotation } from '../src/client/annotation-card'
+import { AnnotationCard, readAnnotation, readCardMarkLabel } from '../src/client/annotation-card'
 import { clearThumbs, rememberThumb } from '../src/client/annotation-thumb'
 import { fallbackTranslate, zh } from '../src/client/locales'
 import { defined, installDom } from './dom'
@@ -73,6 +73,49 @@ describe('reading a block back out of its data', () => {
   })
 })
 
+describe('the parts of one mark line', () => {
+  it('separates an element name, its source locator, and a warning', () => {
+    expect(readCardMarkLabel(
+      '元素1 (48,83)-(648,125)（元素文字「滑套 34」，<h1 id="paper-title">）（超出图面：右 187 像素）',
+    )).toEqual({
+      name: '元素 1',
+      geometry: '(48,83)-(648,125)',
+      element: '滑套 34',
+      locator: '<h1 id="paper-title">',
+      aside: '（超出图面：右 187 像素）',
+    })
+  })
+
+  it('reads the English spelling without leaking its punctuation', () => {
+    expect(readCardMarkLabel(
+      'element 2 (1,2)-(3,4) (element title "Save", selector #tools > button:nth-of-type(1)) (outside the figure: right 12px)',
+    )).toEqual({
+      name: 'element 2',
+      geometry: '(1,2)-(3,4)',
+      element: 'Save',
+      locator: '#tools > button:nth-of-type(1)',
+      aside: '(outside the figure: right 12px)',
+    })
+  })
+
+  it('keeps a plain shape as a name, a position, and nothing invented', () => {
+    expect(readCardMarkLabel('单点1 位于 (5,6)')).toEqual({
+      name: '单点 1',
+      geometry: '位于 (5,6)',
+      element: '',
+      locator: '',
+      aside: '',
+    })
+    expect(readCardMarkLabel('element')).toEqual({
+      name: 'element',
+      geometry: '',
+      element: '',
+      locator: '',
+      aside: '',
+    })
+  })
+})
+
 describe('the card in a sent bubble', () => {
   let root: Root
   let host: HTMLElement
@@ -104,9 +147,9 @@ describe('the card in a sent bubble', () => {
     return defined(host.querySelector('.da-card'))
   }
 
-  /** Every row the card lists. */
-  function rows(): string[] {
-    return [...host.querySelectorAll('.da-card-row')].map(row => row.textContent ?? '')
+  /** One class's text, in document order. */
+  function texts(selector: string): string[] {
+    return [...host.querySelectorAll(selector)].map(node => node.textContent ?? '')
   }
 
   it('names the figure, its size, and what each mark asked for', () => {
@@ -115,23 +158,23 @@ describe('the card in a sent bubble', () => {
     // The file's own name leads, because the directory is the same for every figure
     // this session saved and the block's own scope is what coordinates are read against.
     expect(host.querySelector('.da-card-scope')?.textContent).toBe('fig.svg · 图面 1440×800，标注 2 处')
-    expect(rows()).toEqual([
-      '箭头1 (10,20) → (30,40)往右上拉一点',
-      '第 2 页矩形1 (1,2)-(3,4)',
-      '目标把右上角的线拉直',
-    ])
+    expect(host.querySelector('.da-card-type')?.textContent).toBe('FIG')
+    expect(texts('.da-card-name')).toEqual(['箭头 1', '矩形 1'])
+    expect(texts('.da-card-geometry')).toEqual(['(10,20) → (30,40)', '(1,2)-(3,4)'])
+    expect(texts('.da-card-said')).toEqual(['往右上拉一点'])
+    expect(host.querySelector('.da-card-target')?.textContent).toBe('目标把右上角的线拉直')
     // The closing sentence is the host's boilerplate, not the reader's words.
     expect(host.textContent).not.toContain('逐条改生成源')
   })
 
   it('names the page a mark is on, apart from the mark itself', () => {
     mount(<AnnotationCard node={node(DATA)} raw={RAW} />)
-    const pages = [...host.querySelectorAll('.da-card-page')].map(page => page.textContent)
+    const pages = texts('.da-card-page')
     expect(pages).toEqual(['第 2 页'])
     // The page is a property of the line, so it is not repeated inside the mark's name.
-    expect([...host.querySelectorAll('.da-card-mark')].map(mark => mark.textContent)).toEqual([
-      '箭头1 (10,20) → (30,40)',
-      '第 2 页矩形1 (1,2)-(3,4)',
+    expect(texts('.da-card-mark')).toEqual([
+      '箭头 1',
+      '第 2 页矩形 1',
     ])
   })
 
@@ -157,6 +200,24 @@ describe('the card in a sent bubble', () => {
     mount(<AnnotationCard node={node(DATA)} raw={RAW} t={t} />)
     expect(host.querySelector('.da-card-page')?.textContent).toBe('page 2')
     expect(host.querySelector('.da-card-goal')?.textContent).toBe('Goal')
+  })
+
+  it('marks a rendered HTML review as HTML rather than as a picture', () => {
+    mount(<AnnotationCard node={node({ ...DATA, html: true })} raw={RAW} />)
+    expect(host.querySelector('.da-card-type')?.textContent).toBe('HTML')
+  })
+
+  it('puts element words, source locators, and warnings on their own lines', () => {
+    const label = '元素1 (48,83)-(648,125)（元素文字「滑套 34」，<h1 id="paper-title">）（超出图面：右 187 像素）'
+    mount(<AnnotationCard
+      node={node({ ...DATA, marks: [{ label, comment: '', missing: true, page: undefined }] })}
+      raw={RAW}
+    />)
+    expect(host.querySelector('.da-card-name')?.textContent).toBe('元素 1')
+    expect(host.querySelector('.da-card-geometry')?.textContent).toBe('(48,83)-(648,125)')
+    expect(host.querySelector('.da-card-element')?.textContent).toBe('滑套 34')
+    expect(host.querySelector('.da-card-locator')?.textContent).toBe('<h1 id="paper-title">')
+    expect(host.querySelector('.da-card-warning')?.textContent).toBe('（超出图面：右 187 像素）')
   })
 
   it('draws no goal row when the reader wrote none', () => {
@@ -222,7 +283,7 @@ describe('the card in a sent bubble', () => {
     expect(card().hasAttribute('data-static')).toBe(true)
     expect(host.querySelector('.da-card-go')).toBeNull()
     // Two marks and the goal line.
-    expect(rows()).toHaveLength(3)
+    expect(host.querySelectorAll('.da-card-row')).toHaveLength(3)
   })
 
   it('is inert when nothing can open a figure', () => {

@@ -23,6 +23,54 @@ import type { Translate } from './translate'
 /** How many marks a card lists before it stops counting them one by one. */
 const MAX_ROWS = 5
 
+/** The parts of a delivered mark line that a reader scans at different levels. */
+export interface CardMarkLabel {
+  /** The kind and ordinal, spaced for reading rather than for parsing. */
+  readonly name: string
+  /** The mark's position, kept as the message wrote it. */
+  readonly geometry: string
+  /** The element's own words, when the message carried a short name for it. */
+  readonly element: string
+  /** The selector or opening tag that locates the element in the source. */
+  readonly locator: string
+  /** A warning appended by the summary, such as a mark outside the figure. */
+  readonly aside: string
+}
+
+/**
+ * Split one verbatim mark line into the facts the card draws.
+ *
+ * The message remains the source of truth and is never changed. This only gives the
+ * card three levels of type: a name a reader recognises, geometry they can glance at,
+ * and the element's words or source locator they need when the name is not enough.
+ * An unfamiliar suffix stays in the row's tooltip rather than being invented here.
+ * @param label - one mark's name, exactly as delivered.
+ * @returns the display parts, all empty except a name when the line has no extras.
+ */
+export function readCardMarkLabel(label: string): CardMarkLabel {
+  const named = /^(.+?\d{1,4})(?=\s|$)/u.exec(label)
+  const rawName = named?.[1] ?? label
+  const rest = label.slice(rawName.length).trim()
+  const geometry = /^(?:位于\s*|at\s*)?\([^)]*\)(?:\s*(?:→|->|–|-)\s*\([^)]*\))?/u.exec(rest)?.[0] ?? ''
+  const elementMatch = /(?:元素标题|元素文字|element title|element text)\s*(?:「([^」]*)」|"([^"]*)")/u.exec(label)
+  const element = elementMatch?.[1] ?? elementMatch?.[2] ?? ''
+  const aside = /[（(](?:超出图面|outside)[^）)]*[）)]/iu.exec(label)?.[0] ?? ''
+  // A selector may itself contain parentheses, as `:nth-of-type(1)` does. The source
+  // always puts it last in the anchor, so read to the end and remove the anchor's one
+  // closing bracket rather than stopping at the selector's first `)`.
+  const selector = /(?:选择器|selector)\s+(.+)$/u.exec(label.replace(aside, ''))?.[1]
+    ?.replace(/\s*[)）]\s*$/u, '')
+    .trim() ?? ''
+  const tag = /<[^>]+>/u.exec(label)?.[0] ?? ''
+  return {
+    name: rawName.replace(/^(.+?)(\d+)$/u, '$1 $2').replace(/\s+/gu, ' ').trim(),
+    geometry,
+    element,
+    locator: selector === '' ? tag : selector,
+    aside,
+  }
+}
+
 /** What a keyed user-text renderer is handed for this block. */
 export interface AnnotationCardProps {
   /** The text node the rule produced, whose `data` is the parsed block. */
@@ -119,13 +167,22 @@ function SheetIcon(): ReactElement {
  */
 function CardRow({ mark, page }: { readonly mark: FigmarkMarkLine; readonly page?: string | undefined }): ReactElement {
   const said = mark.comment === '' ? undefined : mark.comment
+  const parts = readCardMarkLabel(mark.label)
+  const initial = parts.name.replace(/\s*\d+$/u, '').slice(0, 1).toUpperCase()
   return (
-    <span className="da-card-row">
-      <span className="da-card-mark">
-        {page === undefined ? null : <span className="da-card-page">{page}</span>}
-        {mark.label}
+    <span className="da-card-row" title={mark.label}>
+      <span className="da-card-row-head">
+        <span className="da-card-kind" aria-hidden="true">{initial}</span>
+        <span className="da-card-mark">
+          {page === undefined ? null : <span className="da-card-page">{page}</span>}
+          <span className="da-card-name">{parts.name}</span>
+        </span>
+        {parts.geometry === '' ? null : <span className="da-card-geometry">{parts.geometry}</span>}
       </span>
+      {parts.element === '' ? null : <span className="da-card-element">{parts.element}</span>}
+      {parts.locator === '' ? null : <span className="da-card-locator">{parts.locator}</span>}
       {said === undefined ? null : <span className="da-card-said">{said}</span>}
+      {parts.aside === '' ? null : <span className="da-card-warning">{parts.aside}</span>}
     </span>
   )
 }
@@ -155,7 +212,6 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
   // it, because that is what a mark's coordinates are read against.
   const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
   const name = data.file.slice(cut + 1)
-  const scopeLine = data.scope === '' ? name : `${name} · ${data.scope}`
   const head = (
     <span className="da-card-head">
       <span className="da-card-shot">
@@ -169,10 +225,27 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
         )}
       </span>
       <span className="da-card-text">
-        <span className="da-card-title">{resolveTranslate(props, 'title')}</span>
-        <span className="da-card-scope">{scopeLine}</span>
+        <span className="da-card-title-row">
+          <span className="da-card-title">{resolveTranslate(props, 'title')}</span>
+          <span className="da-card-type">{data.html ? 'HTML' : 'FIG'}</span>
+        </span>
+        <span className="da-card-scope">
+          <span className="da-card-file">{name}</span>
+          {data.scope === '' ? null : (
+            <>
+              <span className="da-card-sep" aria-hidden="true"> · </span>
+              <span className="da-card-meta">{data.scope}</span>
+            </>
+          )}
+        </span>
       </span>
-      {interactive ? <span className="da-card-go" aria-hidden="true">›</span> : null}
+      {interactive ? (
+        <span className="da-card-go" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <path d="m6 3.5 4.5 4.5L6 12.5" />
+          </svg>
+        </span>
+      ) : null}
     </span>
   )
   /* The same sheet wherever it stands: the dock's card is the last look the reader

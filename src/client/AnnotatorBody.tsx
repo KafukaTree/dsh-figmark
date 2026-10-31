@@ -2458,26 +2458,45 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
 
       {/* The address of what is framed, in the corner the reader expects one.
           A file shows its own name; typing a local address opens that page in the same
-          window, with the same marks and the same tools. Enter opens, Escape gives the
-          field back — the browser's own contract, because this is the browser's job. */}
+          window, with the same marks and the same tools. The icon and badge name what
+          kind of location this is at rest, so the control does not read as a bare text
+          box. Enter opens, Escape gives the field back — the browser's own contract,
+          because this is the browser's job. */}
       <div className="da-live-bar" hidden={!isHtml}>
-        <input
-          className="da-live-addr"
-          value={shownAddress(liveText, livePage, loaded?.path ?? '')}
-          aria-label={t('liveAddress')}
-          spellCheck={false}
-          // Coming back to the field shows the resting address again, so a page the
-          // reader half-typed over is what they are looking at, not a leftover.
-          onFocus={() => { setLiveText(null) }}
-          onChange={(event) => { setLiveText(event.target.value) }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              void openPage(event.currentTarget.value)
-            }
-            if (event.key === 'Escape') setLiveText(null)
-          }}
-        />
+        <div className="da-live-field" data-live={livePage !== null}>
+          {livePage === null ? (
+            <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6.5 3.5h7l4 4v13h-11zM13.5 3.5v4h4M9 11.5h6M9 14.5h6M9 17.5h4" />
+            </svg>
+          ) : (
+            <svg className="da-live-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="8.5" />
+              <path d="M3.8 12h16.4M12 3.5c2.3 2.3 3.5 5.1 3.5 8.5S14.3 18.2 12 20.5M12 3.5C9.7 5.8 8.5 8.6 8.5 12s1.2 6.2 3.5 8.5" />
+            </svg>
+          )}
+          <input
+            className="da-live-addr"
+            value={shownAddress(liveText, livePage, loaded?.path ?? '')}
+            aria-label={t('liveAddress')}
+            placeholder={t('liveAddress')}
+            autoComplete="off"
+            spellCheck={false}
+            // Coming back to the field shows the resting address again, so a page the
+            // reader half-typed over is what they are looking at, not a leftover.
+            onFocus={() => { setLiveText(null) }}
+            onChange={(event) => { setLiveText(event.target.value) }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void openPage(event.currentTarget.value)
+              }
+              if (event.key === 'Escape') setLiveText(null)
+            }}
+          />
+          <span className="da-live-badge" aria-hidden="true">
+            {livePage === null ? 'HTML' : t('livePage')}
+          </span>
+        </div>
         <span className="da-live-note" hidden={!liveBusy}>{t('liveOpening')}</span>
         <button type="button" className="da-live-back" hidden={livePage === null}
           onClick={closePage}>{t('liveBack')}</button>

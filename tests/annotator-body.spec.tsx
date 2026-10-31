@@ -3487,6 +3487,11 @@ describe('a rendered document', () => {
       await reportLayout(WINDOW.width, 1843)
       // The field names the file while the file is what is framed.
       expect(address().value).toBe('report.html')
+      // At rest it is a document field, not a bare text box: its badge says the format.
+      const field = defined(document.querySelector('.da-live-field')) as HTMLElement
+      expect(field.dataset['live']).toBe('false')
+      expect(document.querySelector('.da-live-badge')?.textContent).toBe('HTML')
+      expect(document.querySelector('.da-live-icon path')).not.toBeNull()
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
       await go('localhost:5173')
@@ -3497,6 +3502,10 @@ describe('a rendered document', () => {
       // The frame is the page the Host answered with, not the file whose preview the
       // panel started from.
       expect(frame().getAttribute('src')).toBe(LIVE_URL)
+      // A proxied page keeps the same field but changes its icon and badge.
+      expect(field.dataset['live']).toBe('true')
+      expect(document.querySelector('.da-live-badge')?.textContent).toBe(zh.livePage)
+      expect(document.querySelector('.da-live-icon circle')).not.toBeNull()
       // A page is the reader's own while nothing is being drawn on it.
       expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
       // The file's marks were locators in a document nobody is looking at any more.
