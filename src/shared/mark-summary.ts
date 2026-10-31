@@ -298,6 +298,26 @@ function openingTag(anchor: MarkAnchor): string {
 }
 
 /**
+ * The name the picture shows for the element a mark landed on.
+ *
+ * The reader clicked one element, and the picture has to answer "which one?" in the
+ * words of their own source. An element that declares an id is named by its opening
+ * tag, `<section id="s9viz">`, because that is the string they can search for; an
+ * element with no id is named by the path that finds it, because a bare `<div>` names
+ * a hundred elements. This is the one place it differs from {@link describeMark}, which
+ * prints the path even when there is an id: a path is the precise thing to edit, and
+ * the canvas is the thing the reader points at while the page's own layout already
+ * shows where it sits.
+ * @param anchor - the element the mark landed on.
+ * @returns the opening tag, or the path when the element declares no id.
+ */
+export function anchorCodeName(anchor: MarkAnchor): string {
+  if (anchor.id !== undefined && anchor.id !== '') return openingTag(anchor)
+  const selector = anchor.selector ?? ''
+  return selector === '' ? openingTag(anchor) : selector
+}
+
+/**
  * Describe what a mark points at, when the figure exposed an element.
  *
  * Only the names that still say something are kept: a title, a short element text, or a

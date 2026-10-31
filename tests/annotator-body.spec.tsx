@@ -2355,6 +2355,15 @@ describe('the weight of the pen', () => {
     expect(document.querySelector('.da-weight-input')).toBeNull()
   })
 
+  it('writes the named element s id on the picture, and frames nothing', async () => {
+    // The light alone says "this one" but not which one, and the id is the only string
+    // an element mark shares with the source. A drawing's element box is a rectangle
+    // the drawing never contains, so no box goes around it.
+    mounted = await svgBody({ annotation: elementOnly })
+    expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<g id="line2d_1">')
+    expect(document.querySelector('[data-da-element-box]')).toBeNull()
+  })
+
   it('stands the rail down for a point, whose pin the rail cannot size', async () => {
     // The rail belongs to the stroke, and a pin is a place rather than a line: it used
     // to grow with the rail, which is how a rail left at 4 turned the next pin into a
@@ -3197,6 +3206,10 @@ describe('a rendered document', () => {
     const rules = [...frameDocument.querySelectorAll('style[data-da-spot]')]
     expect(rules).toHaveLength(1)
     expect(rules[0]?.textContent).toContain('drop-shadow')
+    // The overlay carries the name and the box: on a rendered document the element's
+    // rectangle is its own place on the page, not a claim about the picture.
+    expect(document.querySelector('[data-da-element-code]')?.textContent).toBe('<p id="lead">')
+    expect(document.querySelector('[data-da-element-box]')).not.toBeNull()
   })
 
   it('renders the frame without a document rather than failing', async () => {

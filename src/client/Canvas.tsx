@@ -103,6 +103,9 @@ export function Canvas(props: CanvasProps): ReactNode {
         sizes={gesture.sizes}
         originX={originX}
         originY={originY}
+        width={width}
+        height={height}
+        elementExtent={props.elementExtent ?? 'glow'}
         onPressMark={handlers.onPressMark}
         onPressHandle={handlers.onPressHandle}
         onEdit={props.onEdit}

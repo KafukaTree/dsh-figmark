@@ -133,6 +133,16 @@ export interface CanvasProps {
   /** Whether the figure is inlined SVG (only then can marks anchor to elements). */
   readonly anchoring: boolean
   /**
+   * How a mark that names an element draws that element's rectangle.
+   *
+   * Every element mark puts the element's name on the picture. What it does with the
+   * box the element occupies depends on the surface: on a drawing the box is a
+   * rectangle the drawing never contained, so the element is lit in its own shape and
+   * nothing is framed — while on a rendered document the box *is* the layout the
+   * element occupies, and drawing it costs no claim. Absent means `'glow'`.
+   */
+  readonly elementExtent?: 'glow' | 'box' | undefined
+  /**
    * Name the element one figure point landed on, for a surface whose elements
    * live in a document of their own. Present exactly when {@link anchoring} is
    * absent in spirit: the two describe the same question for two kinds of

@@ -16,11 +16,12 @@
 
 import type { ReactNode } from 'react'
 import type { AnnotationMark } from '../../shared/annotation'
+import { anchorCodeName } from '../../shared/mark-summary'
 import { cursorFor, endHandles, handlesFor, tetherFor, type HandleId } from '../handles'
 import type { MarkBox } from '../mark-geometry'
 import {
   PIN_FONT_FAMILY, PIN_NUMBER_COLOR, hasFixedExtent, pinFontSizeOf,
-  strokeWidthOf, markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
+  strokeWidthOf, markOutline, markPathData, markTransform, pinNumberCentre, pinPathData, pointMarkBox,
 } from '../render'
 import { HIT_WIDTH, controlBox } from './hit'
 import { shownMark, type Press } from './press'
@@ -47,6 +48,20 @@ export interface MarkLayerProps {
   readonly originX: number
   /** Vertical offset of figure `(0, 0)` on the paper, in figure pixels. */
   readonly originY: number
+  /** Width of the paper, in figure pixels: a label has to stay on it. */
+  readonly width: number
+  /** Height of the paper, in figure pixels. */
+  readonly height: number
+  /**
+   * Whether an element mark's own rectangle is drawn beside its name.
+   *
+   * `'glow'` — the ordinary case — leaves the element to the light `spotlight.ts`
+   * throws on it, because on a drawing a box around a curve covers half the plot and
+   * claims a region the mark never meant. `'box'` draws the rectangle as well, for a
+   * rendered document, where that rectangle is the element's own layout and saying it
+   * adds nothing the page does not already say.
+   */
+  readonly elementExtent: 'glow' | 'box'
   /**
    * A press on a mark's drawn shape.
    *
@@ -208,9 +223,113 @@ function EndHandles(props: {
   )
 }
 
+/** The font a code name is drawn in: a terminal's, because the name is code. */
+const CODE_FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace'
+
+/**
+ * Font size of a code name, in figure pixels.
+ *
+ * A shade larger than a pin's number: a pin says one digit and the eye can guess it,
+ * while a name is read character by character, and monospace reads smaller than its
+ * point size suggests.
+ */
+const CODE_FONT_SIZE = 12
+
+/** Colour of a code name. Dark enough to read on the pale chip that carries it. */
+const CODE_TEXT_COLOR = '#1f2937'
+
+/** Widest a code name may be, in characters, before its middle is elided. */
+const CODE_MAX_CHARS = 34
+
+/**
+ * Shorten a long name by its middle.
+ *
+ * An element with no id is named by its path, which can run to a whole selector line.
+ * The end of that path says what the element is (`> section:nth-of-type(1)`) and the
+ * start says where it sits, so the middle is what goes.
+ * @param code - the name as the source words it.
+ * @returns the name, elided when it is longer than a plate can carry.
+ */
+function elideCode(code: string): string {
+  if (code.length <= CODE_MAX_CHARS) return code
+  const head = Math.ceil((CODE_MAX_CHARS - 1) / 2)
+  const tail = CODE_MAX_CHARS - 1 - head
+  return `${code.slice(0, head)}…${code.slice(-tail)}`
+}
+
+/**
+ * The element a mark is on, written out on the picture.
+ *
+ * An element mark draws no shape of its own: it is a light on the figure's own
+ * artwork, and `spotlight.ts` lights it in the element's own shape. That light says
+ * "this one" and nothing more, which is not enough to point at a line of source — the
+ * id is the only string the mark shares with the document, so it goes on the picture
+ * beside the light. A box is drawn around the element too, but only where a box is
+ * true: on a rendered document the element really occupies that rectangle, while on a
+ * drawing a box around a curve covers half the plot and claims a region the mark never
+ * meant.
+ *
+ * The chip is placed above the element and flips below it when the paper has no room
+ * there, so a mark at the top edge still shows its name. It is not a control: it takes
+ * no press, so a press that lands on it reaches the mark's own hit area.
+ */
+function ElementCode(props: {
+  readonly mark: AnnotationMark
+  readonly box: MarkBox
+  readonly unit: number
+  /** The paper the chip has to stay on, in figure pixels. */
+  readonly paper: { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number }
+  /** Whether the element's own rectangle is drawn as well. */
+  readonly boxed: boolean
+}): ReactNode {
+  const { mark, box, unit, paper, boxed } = props
+  /* v8 ignore next -- an element mark is made from the element it landed on. */
+  if (mark.anchor === undefined) return null
+  const code = elideCode(anchorCodeName(mark.anchor))
+  const pad = 4 * unit
+  const fontSize = CODE_FONT_SIZE * unit
+  // Monospace gives every character the same advance, so the chip can be sized
+  // without measuring text — which this module does not do, because the same code
+  // draws the export copy outside a document.
+  const width = code.length * fontSize * 0.62 + pad * 2
+  const height = fontSize + pad * 1.6
+  const gap = 4 * unit
+  // Kept on the paper, start-first: the beginning of a name is the part that says
+  // which element it is, so a chip near the right edge slides left rather than losing
+  // its head.
+  const limit = Math.max(paper.left, paper.right - width)
+  const x = Math.min(Math.max(box.x, paper.left), limit)
+  // Above the element, or below it when the top edge has no room: a mark on the
+  // figure's first line still shows which element it is.
+  const above = box.y - gap - height
+  const wanted = above >= paper.top ? above : box.y + box.height + gap
+  const y = Math.min(wanted, Math.max(paper.top, paper.bottom - height))
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      {boxed ? (
+        <rect
+          data-da-element-box={mark.id}
+          x={box.x} y={box.y} width={box.width} height={box.height} rx={2 * unit}
+          fill={mark.color} fillOpacity={0.07} stroke={mark.color} strokeWidth={1.5 * unit}
+        />
+      ) : null}
+      <rect
+        x={x} y={y} width={width} height={height} rx={3 * unit}
+        fill="#ffffff" fillOpacity={0.94} stroke={mark.color} strokeWidth={1.2 * unit}
+      />
+      <text
+        data-da-element-code={mark.id}
+        x={x + pad} y={y + height / 2} fontFamily={CODE_FONT_FAMILY} fontSize={fontSize}
+        fontWeight={600} fill={CODE_TEXT_COLOR} dominantBaseline="central"
+      >
+        {code}
+      </text>
+    </g>
+  )
+}
+
 /** One mark: its shape, its hit area, and whatever its selection asks for. */
-function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; readonly isDraft: boolean }): ReactNode {
-  const { mark, isDraft, selectedId, numbers, unit, sizes, onPressMark, onEdit } = props
+function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; readonly isDraft: boolean }): ReactNode {  const { mark, isDraft, selectedId, numbers, unit, sizes, onPressMark, onEdit } = props
   // The running gesture is the mark's geometry until it is dropped, so the stroke
   // follows the pointer without the parent re-rendering the stored mark.
   const shown = shownMark(mark, props.press)
@@ -219,6 +338,9 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
   const transform = markTransform(shown)
   const isPoint = mark.kind === 'point'
   const pin = isPoint ? pinPathData(shown, unit) : undefined
+  // An element mark draws no shape: the box it names belongs to the element, and the
+  // only thing the mark itself puts on the paper is that name.
+  const elementBox = mark.kind === 'element' ? markOutline(shown, unit) : undefined
   /**
    * What a press on the drawn shape starts.
    *
@@ -250,6 +372,20 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
         </g>
       )}
       {hitArea}
+      {elementBox === undefined ? null : (
+        <ElementCode
+          mark={shown}
+          box={elementBox}
+          unit={unit}
+          // The paper's edges in figure pixels: the overlay is moved by the origin, so
+          // what is visible starts at `-origin`.
+          paper={{
+            left: -props.originX + 2, top: -props.originY + 2,
+            right: -props.originX + props.width - 2, bottom: -props.originY + props.height - 2,
+          }}
+          boxed={props.elementExtent === 'box'}
+        />
+      )}
       {selected && !isDraft && isPoint ? <FixedFrame box={pointMarkBox(shown, unit)} hairline={sizes.hairline} /> : null}
       {selected && !isDraft && mark.kind === 'arrow' ? (
         <EndHandles mark={shown} sizes={sizes} onPressHandle={props.onPressHandle} />

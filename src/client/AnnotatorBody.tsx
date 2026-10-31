@@ -2414,6 +2414,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             scale={scale}
             containerRef={figureHostRef}
             anchoring={isVector}
+            // A rendered document's elements occupy the boxes the layout gave them, so
+            // the mark draws that box beside the name. A drawing's do not.
+            elementExtent={figure?.kind === 'html' ? 'box' : undefined}
             anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
             selectedId={selectedId}
             onSelect={setSelectedId}

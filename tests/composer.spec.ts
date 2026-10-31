@@ -59,6 +59,8 @@ interface ComposerLog {
   readonly removed: string[]
   /** The files `createDrafts` was handed. */
   readonly created: (readonly File[])[]
+  /** Press the box's own send, the way the reader's key or button does. */
+  readonly press: () => void
 }
 
 /** How one stub answers each of the calls arming makes. */
@@ -93,6 +95,13 @@ interface StubOptions {
    * send has run; absent is a box that answers for as long as it is asked.
    */
   readonly reads?: number
+  /**
+   * What the box does with a draft written during a press. `'sync'` writes it through
+   * at once, the way the button — which presses the box between edits — does;
+   * `'queued'` holds it until the press is over, the way Enter does, because Enter
+   * reaches the box's own send from inside the edit that is already running.
+   */
+  readonly press?: 'sync' | 'queued'
 }
 
 /**
@@ -117,6 +126,10 @@ function stubComposer(options: StubOptions = {}): ComposerLog {
   const create = options.create ?? 'ok'
   const remove = options.remove ?? 'ok'
   const submit = options.submit ?? 'ok'
+  /** Whether the box is in the middle of an edit, where a write only queues. */
+  let editing = false
+  /** The draft a write left waiting for the edit to end. */
+  let queued: string | undefined
   const shell: ComposerShellLike = {
     get snapshot() {
       reads += 1
@@ -127,6 +140,12 @@ function stubComposer(options: StubOptions = {}): ComposerLog {
       writes += 1
       if (options.write === 'throw') throw new Error('the editor is gone')
       if (options.write === 'throw-restore' && writes > 1) throw new Error('the editor is gone')
+      // Inside an edit the box keeps the text aside: its draft, which is what a send
+      // started right now would carry, stays exactly as the reader left it.
+      if (editing) {
+        queued = text
+        return
+      }
       draft.current = text
       written.push(text)
     },
@@ -183,8 +202,31 @@ function stubComposer(options: StubOptions = {}): ComposerLog {
         }),
     releaseDraftAttachment: (id: string) => { released.push(id) },
   }
+  const press = (): void => {
+    const send = shell.submit
+    if (send === undefined) return
+    if ((options.press ?? 'sync') !== 'queued') {
+      send.call(shell)
+      return
+    }
+    editing = true
+    try {
+      send.call(shell)
+    } finally {
+      editing = false
+    }
+    // The box commits what the edit queued when the edit ends, a turn after the press
+    // has already returned to whoever pressed it.
+    queueMicrotask(() => {
+      if (queued === undefined) return
+      draft.current = queued
+      written.push(queued)
+      queued = undefined
+    })
+  }
   return {
     conversation, written, draft, rail, phase, submits, submitted, released, added, removed, created,
+    press,
   }
 }
 
@@ -431,6 +473,36 @@ describe('the box send carrying an armed annotation', () => {
     // And the box is left empty: what it carried it delivered.
     expect(log.draft.current).toBe('')
     expect(done).toHaveBeenCalledTimes(1)
+    unhook()
+  })
+
+  it('sends the sentence and the block together when Enter queues the write', async () => {
+    const log = stubComposer({ draft: '这行字错了', press: 'queued' })
+    const armed = park(log)
+    const done = vi.fn()
+    const unhook = holdSubmit(armed, done)
+    log.press()
+    // Inside the box's own edit the merge is only queued, so nothing has gone out yet:
+    // a send started there would carry the sentence and none of the blocks behind it.
+    expect(log.submits).toEqual([])
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    // One press still carries both, once the box has taken the write.
+    expect(log.submits).toEqual([`这行字错了\n\n${armed.text}`])
+    expect(done).toHaveBeenCalledTimes(1)
+    expect(log.draft.current).toBe('')
+    unhook()
+  })
+
+  it('sends one message when a press that is still waiting is pressed again', async () => {
+    const log = stubComposer({ draft: '这行字错了', press: 'queued' })
+    const armed = park(log)
+    const unhook = holdSubmit(armed, vi.fn())
+    log.press()
+    log.press()
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    // The second press joins the one already waiting rather than starting another
+    // message carrying the very same block.
+    expect(log.submits).toEqual([`这行字错了\n\n${armed.text}`])
     unhook()
   })
 

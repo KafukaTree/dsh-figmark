@@ -181,6 +181,8 @@ export function armReview(
 interface Merge {
   /** The draft exactly as the reader had written it. */
   readonly typed: string
+  /** The draft the merge wrote: the reader's words with the messages behind them. */
+  readonly merged: string
 }
 
 /** One card riding a shell's send, and where to report that the send took it. */
@@ -291,7 +293,29 @@ function mergeInto(shell: ComposerShellLike, claims: readonly Claim[]): Merge | 
       return undefined
     }
   }
-  return { typed }
+  return { typed, merged: draft }
+}
+
+/**
+ * Whether the box is already holding the draft the merge wrote.
+ *
+ * A write made while the box is in the middle of an edit is queued until that edit
+ * ends: the send reads the box's text out of the editor, so asking the box is the only
+ * way to know whether the merge is in yet. It is asked rather than assumed because the
+ * two paths differ — the card's own press runs between edits and writes through, a
+ * press of Enter runs inside one and does not.
+ * @param shell - the box the merge wrote to.
+ * @param merge - what the merge wrote.
+ * @returns whether the box reports holding the merged draft.
+ */
+function wroteThrough(shell: ComposerShellLike, merge: Merge): boolean {
+  try {
+    return shell.snapshot.draft === merge.merged
+  } catch {
+    // A box that cannot be read now will not answer after a wait either; the send's
+    // own settlement reads it again and puts back whatever it finds.
+    return true
+  }
 }
 
 /**
@@ -357,6 +381,11 @@ function release(shell: ComposerShellLike, armed: ArmedReview): void {
  * call it, and there is no other seam that sees all three. A second card joins the patch
  * already in place rather than stacking another one, so one press merges the whole queue
  * and dropping one card does not unhook its neighbours.
+ *
+ * Enter reaches this seam from inside the box's own edit, where the merge's write to the
+ * draft is still queued in the editor; a send started there would carry the sentence and
+ * none of the annotations. The box is asked whether the write is in, and a press that it
+ * has not taken yet goes out one turn later, when it has.
  * @param armed - what the card armed.
  * @param done - called once the send has the annotation, so the card can go.
  * @returns a function that unhooks this card.
@@ -371,12 +400,41 @@ export function holdSubmit(armed: ArmedReview, done: () => void): () => void {
   const original = shell.submit
   if (original === undefined) return () => {}
   const claims: Claim[] = [{ armed, done }]
+  /**
+   * The press that is already waiting to go, so a burst of them is still one message.
+   *
+   * Only a press the box queued waits at all; the ones that went straight out have
+   * already cleared this by the time the next arrives.
+   */
+  let waiting = false
   const patched: SubmitLike = (...args) => {
     const merge = mergeInto(shell, claims)
-    original.apply(shell, args)
     // The merge decided this press was not the one carrying the annotations — a box
     // mid-send, or one that cannot be read — so nothing here belongs to the cards.
-    if (merge !== undefined) settleClaims(shell, claims, merge)
+    if (merge === undefined) {
+      original.apply(shell, args)
+      return
+    }
+    const send = (): void => {
+      try {
+        original.apply(shell, args)
+        settleClaims(shell, claims, merge)
+      } finally {
+        waiting = false
+      }
+    }
+    if (wroteThrough(shell, merge)) {
+      send()
+      return
+    }
+    if (waiting) return
+    waiting = true
+    // The press came from inside the box's own edit — Enter does — so the draft the
+    // merge just wrote is still queued in the editor, and a send started here would
+    // read the box as it was before the merge: the reader's sentence and none of the
+    // annotations behind it. The box commits that write before the next turn, so the
+    // send waits for it, and one press still carries both.
+    setTimeout(send, 0)
   }
   try {
     Object.defineProperty(shell, 'submit', { configurable: true, writable: true, value: patched })

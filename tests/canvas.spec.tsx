@@ -13,6 +13,7 @@ interface MountOptions {
   readonly tool: Tool
   readonly marks?: readonly AnnotationMark[]
   readonly anchoring?: boolean
+  readonly elementExtent?: 'glow' | 'box'
   readonly anchorAtFigurePoint?: (x: number, y: number) => MarkAnchor | undefined
   readonly selectedId?: string | null
   readonly container?: HTMLElement | null
@@ -63,6 +64,7 @@ function mount(options: MountOptions): {
         color="#e03131"
         containerRef={containerRef}
         anchoring={options.anchoring ?? false}
+        {...(options.elementExtent === undefined ? {} : { elementExtent: options.elementExtent })}
         {...(options.anchorAtFigurePoint === undefined ? {} : { anchorAtFigurePoint: options.anchorAtFigurePoint })}
         selectedId={options.selectedId ?? null}
         onSelect={options.onSelect ?? (() => {})}
@@ -763,9 +765,12 @@ describe('picking an element', () => {
     expect(onSelect).toHaveBeenCalledWith('e2')
   })
 
-  it('draws nothing on a placed element, not even a frame or a hit box', () => {
+  it('writes the element s name on the picture, and nothing that can be grabbed', () => {
     const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
     mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
+    // The id is the one string a mark shares with the source, so it is on the picture
+    // — spelled as the tag that opens the element, which needs no other explanation.
+    expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<line id="line2d_10">')
     // No handles: a resize would change which element the mark names.
     expect(mounted.svg.querySelector('[data-da-handle]')).toBeNull()
     // No frame either — a box around a curve is a rectangle the figure never draws,
@@ -776,7 +781,80 @@ describe('picking an element', () => {
     // And no hit box: a transparent rect over the element's box is the same rectangle
     // in a different coat, and it would swallow every press meant for the figure
     // inside it — the whole plot, when the element is a curve or an axis.
-    expect(mounted.svg.querySelector('rect')).toBeNull()
+    expect(mounted.svg.querySelector('rect[fill="transparent"]')).toBeNull()
+    // The name is a label, not a shape: the element's own rectangle is left to the
+    // light, because on a drawing that rectangle is not part of the picture.
+    expect(mounted.svg.querySelector('[data-da-element-box]')).toBeNull()
+  })
+
+  it('draws the element s box when the surface says the box is the layout', () => {
+    // On a rendered document the rectangle is the element's own place on the page, so
+    // saying it adds nothing the page does not already say.
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1', elementExtent: 'box' })
+    const box = defined(mounted.svg.querySelector('[data-da-element-box]'))
+    expect(box.getAttribute('x')).toBe('40')
+    expect(box.getAttribute('y')).toBe('30')
+    expect(box.getAttribute('width')).toBe('120')
+    expect(box.getAttribute('height')).toBe('60')
+    expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<line id="line2d_10">')
+  })
+
+  it('names an element without an id by the path that finds it', () => {
+    // A bare `<div>` names a hundred elements; the path names this one.
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
+      anchor: { tag: 'p', bbox: [40, 30, 120, 60], selector: 'body > section > p:nth-of-type(1)' },
+    }
+    mounted = mount({ tool: 'select', marks: [placed] })
+    expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent)
+      .toBe('body > section > p:nth-of-type(1)')
+  })
+
+  it('keeps the ends of a path too long for the picture', () => {
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
+      anchor: { tag: 'div', bbox: [40, 30, 120, 60], selector: 'body > div:nth-of-type(3) > section:nth-of-type(2) > p' },
+    }
+    mounted = mount({ tool: 'select', marks: [placed] })
+    const code = defined(mounted.svg.querySelector('[data-da-element-code]')).textContent ?? ''
+    expect(code).toContain('…')
+    expect(code.startsWith('body > div')).toBe(true)
+    expect(code.endsWith('p')).toBe(true)
+  })
+
+  it('names an element that offers neither an id nor a path by its tag', () => {
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]],
+      anchor: { tag: 'g', bbox: [40, 30, 120, 60] },
+    }
+    mounted = mount({ tool: 'select', marks: [placed] })
+    expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<g>')
+  })
+
+  it('keeps the name on the paper at the top and the right edge', () => {
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [[380, 0], [400, 60]],
+      anchor: { tag: 'line', id: 'line2d_9', bbox: [380, 0, 20, 60], selector: '#line2d_9' },
+    }
+    mounted = mount({ tool: 'select', marks: [placed], width: 400, height: 300 })
+    const chip = defined(mounted.svg.querySelector('rect'))
+    const x = Number(chip.getAttribute('x'))
+    const width = Number(chip.getAttribute('width'))
+    const y = Number(chip.getAttribute('y'))
+    // Flipped below the element, because there is no room above the first line.
+    expect(y).toBeGreaterThan(60)
+    // And slid left of the right edge rather than hanging off the paper.
+    expect(x + width).toBeLessThanOrEqual(398)
+  })
+
+  it('draws no name for an element mark that has no box', () => {
+    const placed: AnnotationMark = {
+      id: 'e1', kind: 'element', color: '#1971c2', points: [],
+      anchor: { tag: 'line', id: 'line2d_9', bbox: [40, 30, 20, 60], selector: '#line2d_9' },
+    }
+    mounted = mount({ tool: 'select', marks: [placed] })
+    expect(mounted.svg.querySelector('[data-da-element-code]')).toBeNull()
   })
 
   it('treats a press over nothing named, or over a name with no mark, as paper', () => {
