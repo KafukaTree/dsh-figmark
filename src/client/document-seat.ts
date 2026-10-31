@@ -226,7 +226,7 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
         locale: options.locale,
         send: async () => {
           if (sessions === undefined) throw new Error('the sessions service is unavailable')
-          await deliverAnnotation({
+          return await deliverAnnotation({
             sessions,
             fileUpload: options.fileUpload,
             sessionId: options.sessionId,

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_ZOOM,
   MIN_ZOOM,
+  STAGE_BOTTOM_INSET,
+  STAGE_INSETS,
   STAGE_PADDING,
   anchoredScroll,
   clampZoom,
@@ -75,6 +77,10 @@ describe('surfaceOffset', () => {
     // at zero. Assuming zero put every zoom step 14px out sideways.
     expect(surfaceOffset(300, 500)).toBe(STAGE_PADDING)
   })
+
+  it('centres inside the room left after the floating bar', () => {
+    expect(surfaceOffset(500, 300, { start: STAGE_PADDING, end: STAGE_BOTTOM_INSET })).toBe(79)
+  })
 })
 
 describe('anchoredScroll', () => {
@@ -89,7 +95,10 @@ describe('anchoredScroll', () => {
     const target = anchoredScroll(before, pointer, 1, 2, { width: 400, height: 300 })
     // The point under the pointer before the zoom, in figure pixels.
     const figureX = (before.scrollLeft + 200 - surfaceOffset(500, 400)) / 1
-    const figureY = (before.scrollTop + 150 - surfaceOffset(400, 300)) / 1
+    const figureY = (before.scrollTop + 150 - surfaceOffset(400, 300, {
+      start: STAGE_INSETS.top,
+      end: STAGE_INSETS.bottom,
+    })) / 1
     // After the zoom the surface overflows both ways, so both offsets are the padding.
     expect(target.scrollLeft).toBeCloseTo(Math.max(0, STAGE_PADDING + figureX * 2 - 200), 10)
     expect(target.scrollTop).toBeCloseTo(Math.max(0, STAGE_PADDING + figureY * 2 - 150), 10)

@@ -20,7 +20,7 @@ const data: FigmarkAnnotation = {
  * @returns the card, minus the id parking gives it.
  */
 function entry(sessionId: string, raw = '【附图标注】/w/fig.svg'): UnparkedAnnotation {
-  return { sessionId, data, raw, conversation: undefined, send: async () => {} }
+  return { sessionId, data, raw, conversation: undefined, send: async () => [] }
 }
 
 beforeEach(() => { clearParked() })
@@ -40,9 +40,9 @@ describe('parking annotations', () => {
   it('queues a second card behind the first instead of replacing it', () => {
     // The reader reviewing figure after figure is handing over review after review.
     // Dropping the earlier one is not a decision, it is losing their work.
-    const first = vi.fn(async () => {})
+    const first = vi.fn(async () => [])
     parkAnnotation({ ...entry('s1', 'first'), send: first })
-    const second = vi.fn(async () => {})
+    const second = vi.fn(async () => [])
     parkAnnotation({ ...entry('s1', 'second'), send: second })
     const cards = parkedAnnotations('s1')
     expect(cards.map(card => card.raw)).toEqual(['first', 'second'])

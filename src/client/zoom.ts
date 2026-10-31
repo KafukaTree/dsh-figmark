@@ -29,6 +29,31 @@ export const MAX_ZOOM = 6
  */
 export const STAGE_PADDING = 14
 
+/**
+ * The room the floating bar keeps below the surface.
+ *
+ * The bar is 36px tall and sits 12px above the stage's bottom edge. Another 8px keeps
+ * the paper from touching it when the figure fits by height, so 56px is the smallest
+ * bottom inset that leaves the default bar outside the drawing rather than over it.
+ */
+export const STAGE_BOTTOM_INSET = 56
+
+/** The four insets one scrollport keeps around its content, in CSS pixels. */
+export interface ScrollportInsets {
+  readonly top: number
+  readonly right: number
+  readonly bottom: number
+  readonly left: number
+}
+
+/** The insets `.da-stage` actually uses. */
+export const STAGE_INSETS: ScrollportInsets = {
+  top: STAGE_PADDING,
+  right: STAGE_PADDING,
+  bottom: STAGE_BOTTOM_INSET,
+  left: STAGE_PADDING,
+}
+
 /** How long a pinch has to pause before its factor is taken as the settled one. */
 export const PINCH_SETTLE_DELAY_MS = 120
 
@@ -79,11 +104,19 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number, pageHeight = 
  * @param surfaceExtent - the surface's laid-out width or height.
  * @returns the offset the flex alignment resolves to.
  */
-export function surfaceOffset(viewportExtent: number, surfaceExtent: number): number {
+export function surfaceOffset(
+  viewportExtent: number,
+  surfaceExtent: number,
+  inset: { readonly start: number; readonly end: number } = {
+    start: STAGE_PADDING,
+    end: STAGE_PADDING,
+  },
+): number {
   // `safe center` centres while there is room, and falls back to `start` — which is
   // the stage's padding, not zero — the moment there is not.
-  if (surfaceExtent > viewportExtent) return STAGE_PADDING
-  return (viewportExtent - surfaceExtent) / 2
+  const available = Math.max(0, viewportExtent - inset.start - inset.end)
+  if (surfaceExtent > available) return inset.start
+  return inset.start + (available - surfaceExtent) / 2
 }
 
 /** What one scrollport reports about its own box and position. */
@@ -122,6 +155,8 @@ export interface ScrollTarget {
  * @param before - the scale the figure is currently drawn at.
  * @param after - the scale it is about to be drawn at.
  * @param figure - the figure's intrinsic size, in figure pixels.
+ * @param insets - the room the stage keeps around its content; the bottom one is
+ *   larger because the floating bar lives there rather than over the drawing.
  * @returns the offsets to apply once the new scale is laid out.
  */
 export function anchoredScroll(
@@ -130,17 +165,19 @@ export function anchoredScroll(
   before: number,
   after: number,
   figure: { readonly width: number; readonly height: number },
+  insets: ScrollportInsets = STAGE_INSETS,
 ): ScrollTarget {
   const localX = pointer.clientX - viewport.left
   const localY = pointer.clientY - viewport.top
-  // Both axes use the same resolved offset, because `.da-stage` lays both out by the
-  // one rule. Hardcoding a vertical margin was the whole of finding 6: the constant
-  // described a CSS rule that does not exist, so the point under the cursor drifted
-  // vertically by the difference between the assumption and the layout.
-  const leftBefore = surfaceOffset(viewport.clientWidth, figure.width * before)
-  const leftAfter = surfaceOffset(viewport.clientWidth, figure.width * after)
-  const topBefore = surfaceOffset(viewport.clientHeight, figure.height * before)
-  const topAfter = surfaceOffset(viewport.clientHeight, figure.height * after)
+  // The axes resolve the same rule with different insets: the bottom one reserves
+  // the bar's room. Reusing the horizontal padding vertically is what used to make
+  // the point under the pointer drift when the stage had extra chrome along an edge.
+  const horizontal = { start: insets.left, end: insets.right }
+  const vertical = { start: insets.top, end: insets.bottom }
+  const leftBefore = surfaceOffset(viewport.clientWidth, figure.width * before, horizontal)
+  const leftAfter = surfaceOffset(viewport.clientWidth, figure.width * after, horizontal)
+  const topBefore = surfaceOffset(viewport.clientHeight, figure.height * before, vertical)
+  const topAfter = surfaceOffset(viewport.clientHeight, figure.height * after, vertical)
   // The point the pointer is over, in figure pixels, before anything moves.
   const figureX = (viewport.scrollLeft + localX - leftBefore) / before
   const figureY = (viewport.scrollTop + localY - topBefore) / before

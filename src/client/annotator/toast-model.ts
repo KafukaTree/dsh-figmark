@@ -24,7 +24,7 @@ export const TOAST_HOLD_MS = 3500
 export const TOAST_FAIL_HOLD_MS = 5000
 /** How long the bubble takes to fade and blur away. */
 export const TOAST_LEAVE_MS = 500
-/** A task that has not answered by now is a failure. */
+/** After this long, the send says it is still working instead of implying a stall. */
 export const TOAST_TASK_TIMEOUT_MS = 12000
 /**
  * A card is one line by construction (`white-space:nowrap` and a width cap), so
@@ -46,8 +46,12 @@ export type ToastKind = 'note' | 'send'
 export type ToastEvent = 'annotate.none' | 'annotate.save.all' | 'annotate.save.one' | 'annotate.send.agent'
 /** Where a card is in its life: talking, waiting on a task, or on its way out. */
 export type ToastPhase = 'typing' | 'sending' | 'hold' | 'leaving'
-/** What a send ended as. `none` means it has not ended yet, or never will. */
-export type ToastOutcome = 'none' | 'ok' | 'fail'
+/**
+ * What a send has ended as. `slow` is not an ending: the task is still running and
+ * the card only changes its sentence, because reporting a failure here while the
+ * request can still be delivered invites a duplicate send.
+ */
+export type ToastOutcome = 'none' | 'slow' | 'ok' | 'fail'
 
 /** One bubble's content, without the phase it is currently in. */
 export interface ToastCard {
@@ -57,6 +61,8 @@ export interface ToastCard {
   readonly tone: ToastTone
   /** What it says while nothing has ended yet, or the whole sentence of a note. */
   readonly text: string
+  /** What it says when the work is taking longer than usual, but still alive. */
+  readonly waiting: string | undefined
   /** What a send says once it lands. */
   readonly done: string | undefined
   /** What a send says when it does not. */
@@ -146,8 +152,9 @@ export function toastHeight(kind: ToastKind): number {
  * The sentence a card says right now.
  *
  * A send has three sentences and which one is on screen is decided by its outcome:
- * until the task answers it is the pending one, and a missing success or failure
- * sentence falls back to it rather than leaving the bubble blank.
+ * until the task answers it is the pending one, then a calm "still working" line,
+ * and a missing success or failure sentence falls back to the pending one rather
+ * than leaving the bubble blank.
  * @param card - the bubble.
  * @param outcome - what its task ended as, or `none`.
  * @returns the sentence to type out.
@@ -155,6 +162,7 @@ export function toastHeight(kind: ToastKind): number {
 export function cardText(card: ToastCard, outcome: ToastOutcome): string {
   if (outcome === 'ok') return card.done ?? card.text
   if (outcome === 'fail') return card.failed ?? card.text
+  if (outcome === 'slow') return card.waiting ?? card.text
   return card.text
 }
 
@@ -263,7 +271,10 @@ export function dropTone(list: readonly ToastEntry[], tone: ToastTone): readonly
  */
 export function planToast(event: ToastEvent, t: Translate): Omit<ToastCard, 'id'> {
   if (event === 'annotate.none') {
-    return { kind: 'note', icon: 'pencil', tone: 'info', text: t('toastNone'), done: undefined, failed: undefined, task: undefined }
+    return {
+      kind: 'note', icon: 'pencil', tone: 'info', text: t('toastNone'),
+      waiting: undefined, done: undefined, failed: undefined, task: undefined,
+    }
   }
   if (event === 'annotate.save.all') return planSend('dialog', t('toastSavedAll'), t)
   if (event === 'annotate.save.one') return planSend('dialog', t('toastSavedOne'), t)
@@ -287,6 +298,7 @@ function planSend(icon: ToastIcon, done: string, t: Translate): Omit<ToastCard, 
     icon,
     tone: 'info',
     text: t('toastSending'),
+    waiting: t('toastStillSending'),
     done,
     failed: t('toastFailed'),
     task: undefined,

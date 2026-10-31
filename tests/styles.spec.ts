@@ -2,6 +2,7 @@
 /** The injected stylesheet: it lands once, it is marked, and it styles the panel. */
 import { describe, expect, it } from 'vitest'
 import { STYLES, ensureStyles } from '../src/client/styles'
+import { STAGE_BOTTOM_INSET, STAGE_PADDING } from '../src/client/zoom'
 
 describe('the annotator stylesheet', () => {
   it('keeps the movable palette strictly above the bar it can be parked under', () => {
@@ -179,6 +180,20 @@ describe('the annotator stylesheet', () => {
     // with no board behind it.
     expect(STYLES).toContain('.da-paper{background:transparent}')
     expect(STYLES).toContain('.da-figure-frame{background:var(--dsw-alias-bg-base,#fff)')
+  })
+
+  it('keeps the default bar outside the fitted figure and the bar to one row', () => {
+    // The paper's fitting height and the stage's padding are two halves of the same
+    // contract. If CSS drops the bottom inset, the arithmetic still thinks the bar is
+    // outside the drawing; if the bar is allowed to wrap, its second row crosses the
+    // reserved strip. Both are regressions the reader sees as the bar covering marks.
+    expect(STYLES).toContain(
+      `padding:${STAGE_PADDING}px ${STAGE_PADDING}px ${STAGE_BOTTOM_INSET}px`,
+    )
+    expect(STYLES).toContain('.da-bar{position:absolute;z-index:12;left:50%;bottom:12px')
+    expect(STYLES).toContain('flex-wrap:nowrap')
+    expect(STYLES).toContain('.da-bar-scroll{display:flex')
+    expect(STYLES).toContain('overflow-x:auto')
   })
 
   it('lets the hand under the select tool reach the overlay over the figure', () => {

@@ -53,6 +53,7 @@ export interface Toasts {
   send: (options: {
     readonly icon: 'dialog' | 'agent'
     readonly pending: string
+    readonly waiting?: string
     readonly done: string
     readonly failed: string
     readonly task: () => Promise<unknown>
@@ -126,16 +127,20 @@ export function useToasts(t: Translate): Toasts {
    * the news about it.
    */
   const begin = useCallback((card: ToastCard) => {
-    let landed = false
     const land = (outcome: ToastOutcome): void => {
-      if (landed) return
-      landed = true
       clearTimeout(timer)
       timers.current.delete(timer)
       if (!alive.current) return
       settle(card.id, outcome)
     }
-    const timer = setTimeout(() => { land('fail') }, TOAST_TASK_TIMEOUT_MS)
+    const timer = setTimeout(() => {
+      timers.current.delete(timer)
+      // A slow request is still a request. Marking it failed while its promise can
+      // still deliver is how one press became two messages: the reader saw "failed",
+      // retried, and the first send landed a moment later. Keep waiting, say so, and
+      // let the task's own resolution decide the outcome.
+      setEntries(list => patchEntry(list, card.id, { outcome: 'slow' }))
+    }, TOAST_TASK_TIMEOUT_MS)
     timers.current.add(timer)
     // A rejection is turned into a bubble that says one short line, so this is the
     // only place its reason can still be read: a failure the reader cannot act on
@@ -173,6 +178,7 @@ export function useToasts(t: Translate): Toasts {
     icon: options.icon,
     tone: 'info',
     text: options.pending,
+    waiting: options.waiting ?? options.pending,
     done: options.done,
     failed: options.failed,
     task: options.task,
@@ -184,6 +190,7 @@ export function useToasts(t: Translate): Toasts {
     // the voice that types is the one about the marks.
     add({
       id: next(), kind: 'note', icon: 'pencil', tone: line.tone, text: line.text,
+      waiting: undefined,
       done: undefined, failed: undefined, task: undefined,
     }, 'hold')
   }, [add, next])

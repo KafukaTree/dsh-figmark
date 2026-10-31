@@ -54,7 +54,10 @@ import { chipKey, elementName, hoverBoxAt, nameChipAt } from './hover-name'
 import { elementAt, ensureSpotlight, moveSpotlight, type LitSpot } from './spotlight'
 import { deliverAnnotation } from './session'
 import { ensureStyles } from './styles'
-import { PINCH_SETTLE_DELAY_MS, anchoredScroll, clampZoom, wheelZoomFactor } from './zoom'
+import {
+  PINCH_SETTLE_DELAY_MS, STAGE_BOTTOM_INSET, STAGE_INSETS, STAGE_PADDING,
+  anchoredScroll, clampZoom, wheelZoomFactor,
+} from './zoom'
 import {
   DETAIL_HEIGHT, DETAIL_WIDTH, measuredSize, obstacleBox, placeAboveBar, placeCard, scaledBox,
   type RecordPlacement,
@@ -76,9 +79,11 @@ import {
   surfaceBoxStyle,
 } from './annotator/geometry'
 import { buildAnnotationDocument } from './annotator/documents'
-import { DEFAULT_PALETTE, draggedSpot, placementStyle, spotOfBox } from './annotator/placement'
 import {
-  clipStatus, failureStatus, hostGestureStatus,
+  DEFAULT_PALETTE, boxesOverlap, draggedSpot, placementStyle, spotOfBox,
+} from './annotator/placement'
+import {
+  clipStatus, failureStatus, hostGestureStatus, reportDeliveryWarnings,
 } from './annotator/delivery'
 import { decodeFigure, figureLayer, figureSize, type LoadedFigure } from './annotator/figure-source'
 import {
@@ -92,18 +97,6 @@ import { COLORS, ELEMENT_TOOLS, TOOLS } from './annotator/tokens'
 import { WeightRail } from './annotator/weight-rail'
 
 export type { AnnotatorBodyProps, AnnotatorInjected, BodyContent, PageSurface, SurfaceDraft, Translate, TranslateVars } from './annotator-contract'
-
-/**
- * The margin the pane keeps around the figure, in client pixels.
- *
- * Read from the stylesheet's own padding rather than chosen here: the window a
- * rendered document is shown through is measured as the pane minus this, and a window
- * wider than the space it is drawn in would put its right edge out of sight.
- */
-const PANE_INSET = 28
-
-
-
 
 /**
  * Render one figure with its annotation layer.
@@ -580,6 +573,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * that widening the pane keeps it centred rather than walking it sideways.
    */
   const [barSpot, setBarSpot] = useState<PaletteSpot | undefined>(remembered.bar)
+  /** The current parking spot, read by the resize guard without making it a trigger. */
+  const parkedBar = useRef(barSpot)
+  parkedBar.current = barSpot
   const [barDragging, setBarDragging] = useState(false)
   const barFrom = useRef<{ pointerId: number; origin: PaletteSpot; box: DOMRect } | null>(null)
   /**
@@ -975,12 +971,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     if (stage === null) return
     // The stage's own padding, so what is measured is the pane the reader sees rather
     // than a box whose bottom edge is scrolled out of sight.
-    // A pane smaller than its own inset has no room to show anything, and a negative
-    // window is not a window: it is held at nothing, which is what makes an empty
-    // pane "not measured yet" rather than "measured at minus twenty-eight".
+    // A pane smaller than its own insets has no room to show anything, and a negative
+    // window is not a window: it is held at nothing, which makes an empty pane "not
+    // measured yet" rather than a negative viewport. The bottom inset includes the
+    // floating bar's room, so fitting the height does not put the paper under it.
     const measure = (): void => {
-      setFitWidth(Math.max(0, stage.clientWidth - PANE_INSET))
-      setFitHeight(Math.max(0, stage.clientHeight - PANE_INSET))
+      setFitWidth(Math.max(0, stage.clientWidth - STAGE_PADDING * 2))
+      setFitHeight(Math.max(0, stage.clientHeight - STAGE_PADDING - STAGE_BOTTOM_INSET))
     }
     measure()
     const observer = new ResizeObserver(measure)
@@ -992,9 +989,36 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // The paper, not the figure: the paper is what the surface is laid out at, so
     // fitting the figure left the panel wider than its box as soon as a mark reached
     // past the figure's edge.
-    () => drawingScale({ zoom, fitWidth, surface: paper, ownerWidth: props.fitWidth }),
-    [zoom, fitWidth, paper, props.fitWidth],
+    () => drawingScale({
+      zoom,
+      fitWidth,
+      fitHeight,
+      surface: paper,
+      ownerWidth: props.fitWidth,
+    }),
+    [zoom, fitWidth, fitHeight, paper, props.fitWidth],
   )
+
+  /**
+   * Rescue a parked bar that a resize has put back over the figure.
+   *
+   * Its saved spot is a fraction of the panel, which is what makes it survive a
+   * resize; it is also what lets a bar parked in a side gutter land on the picture
+   * when the pane changes shape. The default bottom anchor has a reserved inset, so
+   * returning there is the one place guaranteed not to cover the drawing. This only
+   * runs when the available box changes, not while the reader is deliberately
+   * dragging the bar over the figure.
+   */
+  useEffect(() => {
+    if (parkedBar.current === undefined) return
+    const bar = barRef.current
+    const figure = figureRef.current
+    /* v8 ignore next -- the chrome and the frame are mounted together. */
+    if (bar === null || figure === null) return
+    if (boxesOverlap(bar.getBoundingClientRect(), figure.getBoundingClientRect(), 8)) {
+      setBarSpot(undefined)
+    }
+  }, [fitHeight, fitWidth])
 
   /**
    * Where the records hang: above the bar, centred on it.
@@ -1185,6 +1209,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // The paper, not the figure: that is what the surface is the size of, and the
       // anchor arithmetic has to be done in the coordinates the offset is measured in.
       paper,
+      STAGE_INSETS,
     )
     liveScale.current = reached
     // The paper is the one thing that scales. It used to be the figure host that took
@@ -1820,6 +1845,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       ? 'annotate.send.agent'
       : only === undefined ? 'annotate.save.all' : 'annotate.save.one'
     setBusy('sending')
+    let warnings: readonly string[] = []
     try {
       // The work is the bubble's task, so a reader who asks for it again from the
       // failure bubble gets the same work and not a second, subtly different, run.
@@ -1882,7 +1908,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             file: reviewImageFile(review, document_.figure.path),
             locale,
             send: async () => {
-              await deliverAnnotation({
+              return await deliverAnnotation({
                 sessions,
                 fileUpload: undefined,
                 sessionId,
@@ -1896,7 +1922,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             },
           })
         } else {
-          await deliverAnnotation({
+          warnings = await deliverAnnotation({
             sessions,
             // A single-surface figure is reviewed as the picture it is, which travels
             // as an image part and not as an attached file.
@@ -1912,6 +1938,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         }
       })
       if (outcome !== 'ok') return
+      // Delivery can succeed while one of its artifacts does not travel. The text is
+      // already in the session, so this is not a retryable failure; it still has to
+      // be said, or the reader believes the agent received a file it never got.
+      reportDeliveryWarnings(warnings, setStatus)
       // What happens to the marks afterwards depends on what was sent. A whole-figure
       // hand-off has delivered everything the sidecar described, so the sidecars are
       // deleted and the surface cleared: leaving them would make the reader clear the

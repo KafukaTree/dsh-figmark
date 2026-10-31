@@ -103,6 +103,7 @@ function ParkedChip(props: {
   readonly sessionId: string
   readonly t?: Translate | undefined
   readonly localeId?: string | undefined
+  readonly onWarnings: (warnings: readonly string[]) => void
 }): ReactElement {
   const { entry, sessionId } = props
   const [busy, setBusy] = useState(false)
@@ -126,7 +127,8 @@ function ParkedChip(props: {
     sending.current = true
     setBusy(true)
     try {
-      await entry.send()
+      const warnings = await entry.send()
+      if (warnings.length > 0) props.onWarnings(warnings)
       // The message is in the session now, so the card it stood for is spent — and
       // only that card: its neighbours are reviews the reader has not sent yet.
       unparkAnnotation(sessionId, entry.id)
@@ -228,11 +230,14 @@ function ParkedChip(props: {
 export function PendingCard(props: PendingCardProps): ReactElement | null {
   const sessionId = props.sessionId ?? ''
   const [entries, setEntries] = useState<readonly ParkedAnnotation[]>(() => parkedAnnotations(sessionId))
+  /** Delivery warnings stay after their card leaves, because the message already went. */
+  const [warnings, setWarnings] = useState<readonly string[]>([])
   // The stylesheet is injected by whichever body is on screen, and the composer is on
   // screen before any figure is opened. Injecting it is idempotent, so the cards ask
   // for it themselves rather than depending on an order they cannot see.
   useEffect(() => { ensureStyles(document) }, [])
   useEffect(() => {
+    setWarnings([])
     setEntries(parkedAnnotations(sessionId))
     return watchParked(sessionId, () => { setEntries(parkedAnnotations(sessionId)) })
   }, [sessionId])
@@ -241,12 +246,13 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
   const anchor = useRef<HTMLSpanElement | null>(null)
   const [seat, setSeat] = useState<HTMLElement | null>(null)
   const parked = entries.length > 0
+  const showing = parked || warnings.length > 0
   useLayoutEffect(() => {
     const node = anchor.current
     if (node === null) return undefined
     return mountSeat(node, setSeat)
-  }, [sessionId, parked])
-  if (!parked) return null
+  }, [sessionId, showing])
+  if (!showing) return null
   const cards = (
     <>
       {entries.map(entry => (
@@ -256,14 +262,36 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
           sessionId={sessionId}
           t={props.t}
           localeId={props.localeId}
+          onWarnings={(each) => {
+            setWarnings(current => [
+              ...current,
+              ...each.filter(warning => !current.includes(warning)),
+            ])
+          }}
         />
       ))}
     </>
   )
+  const report = warnings.length === 0 ? null : (
+    <span className="da-staged-result" role="status">
+      <span className="da-staged-result-text">{warnings.join(' ')}</span>
+      <button
+        type="button"
+        className="da-staged-result-x"
+        aria-label={resolveTranslate(props, 'close')}
+        title={resolveTranslate(props, 'close')}
+        onClick={() => { setWarnings([]) }}
+      >
+        ×
+      </button>
+    </span>
+  )
   return (
     <>
       <span className="da-staged-anchor" ref={anchor} hidden />
-      {seat === null ? cards : createPortal(cards, seat)}
+      {seat === null
+        ? <>{cards}{report}</>
+        : createPortal(<>{cards}{report}</>, seat)}
     </>
   )
 }

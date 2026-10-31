@@ -7,8 +7,27 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_PALETTE, draggedSpot, placementStyle, recordStyle, spotOfBox,
+  DEFAULT_PALETTE, boxesOverlap, draggedSpot, placementStyle, recordStyle, spotOfBox,
 } from '../src/client/annotator/placement'
+
+describe('whether a parked strip covers the figure', () => {
+  const figure = { left: 100, top: 100, width: 300, height: 200 }
+
+  it('sees a bar crossing the figure, including the requested breathing room', () => {
+    expect(boxesOverlap({ left: 120, top: 220, width: 200, height: 40 }, figure, 8)).toBe(true)
+    expect(boxesOverlap({ left: 100, top: 307, width: 200, height: 40 }, figure, 8)).toBe(true)
+  })
+
+  it('leaves a bar clear of the figure alone', () => {
+    expect(boxesOverlap({ left: 100, top: 316, width: 200, height: 40 }, figure, 8)).toBe(false)
+    expect(boxesOverlap({ left: 420, top: 100, width: 200, height: 40 }, figure, 8)).toBe(false)
+  })
+
+  it('does not mistake an unmeasured box for an overlap', () => {
+    expect(boxesOverlap({ left: 0, top: 0, width: 0, height: 0 }, figure, 8)).toBe(false)
+    expect(boxesOverlap(figure, { left: 0, top: 0, width: 10, height: 0 }, 8)).toBe(false)
+  })
+})
 
 describe('placing a strip at its parked fraction', () => {
   it('hangs a top-half strip down and to the right of its point', () => {

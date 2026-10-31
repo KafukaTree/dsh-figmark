@@ -185,6 +185,7 @@ export function FigureBar(props: FigureBarProps): ReactNode {
          rather than `bottom:auto` inline, because the offset is a rule and a rule
          beats nothing but loses to any inline value that happens to survive. */
       data-parked={props.parked ? 'true' : undefined} style={props.style}>
+      <div className="da-bar-scroll">
       <div className="da-palette-grip" title={t('moveBar')}
         onPointerDown={handle.onDown}
         onPointerMove={handle.onMove}
@@ -212,20 +213,6 @@ export function FigureBar(props: FigureBarProps): ReactNode {
           <span className="da-style-caret" aria-hidden>{props.styleOpen ? '\u25b4' : '\u25be'}</span>
         </button>
       </div>
-      {/* The fold that steers the next stroke, opened upwards clear of the bar. */}
-      {props.styleOpen ? (
-        <div className="da-style-row" role="group" aria-label={t('style')}
-          data-side={props.foldOpensDown ? 'below' : 'above'}>
-          <span className="da-style-label">{t('styleColor')}</span>
-          <div className="da-style-colors">
-            {COLORS.map(value => (
-              <button key={value} type="button" className="da-swatch" aria-pressed={props.shownColor === value}
-                style={{ background: value }} aria-label={value} title={value}
-                onClick={() => { props.onChooseColor(value) }} />
-            ))}
-          </div>
-        </div>
-      ) : null}
       <span className="da-sep" aria-hidden />
       <span className="da-spacer" />
       {/* One fold for each record, with the count riding on the one that has a
@@ -276,6 +263,23 @@ export function FigureBar(props: FigureBarProps): ReactNode {
           </button>
         </>
       )}
+      </div>
+      {/* The fold is a sibling of the scrolling row, not one of its items: a popup
+          clipped by the row's horizontal scroll would lose the controls it exists to
+          show. */}
+      {props.styleOpen ? (
+        <div className="da-style-row" role="group" aria-label={t('style')}
+          data-side={props.foldOpensDown ? 'below' : 'above'}>
+          <span className="da-style-label">{t('styleColor')}</span>
+          <div className="da-style-colors">
+            {COLORS.map(value => (
+              <button key={value} type="button" className="da-swatch" aria-pressed={props.shownColor === value}
+                style={{ background: value }} aria-label={value} title={value}
+                onClick={() => { props.onChooseColor(value) }} />
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

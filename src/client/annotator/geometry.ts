@@ -30,6 +30,9 @@ export type Zoom = 'fit' | number
  *   whatever width the owner asked for.
  * @param input.zoom - the factor asked for, or `fit`.
  * @param input.fitWidth - the panel width measured for this body, in pixels.
+ * @param input.fitHeight - the panel height available below the floating bar, in
+ *   pixels. Fitting only the width made a wide, short window enlarge a portrait page
+ *   until its lower half, and its marks, sat under the bar.
  * @param input.size - the figure's own size, or null before there is one.
  * @param input.ownerWidth - a width the owner insists on, if any.
  * @returns the factor to draw at, never outside the shared range.
@@ -37,6 +40,7 @@ export type Zoom = 'fit' | number
 export function drawingScale(input: {
   readonly zoom: Zoom
   readonly fitWidth: number
+  readonly fitHeight: number
   /**
    * The width fit has to fit: the *paper*, not the figure.
    *
@@ -45,14 +49,19 @@ export function drawingScale(input: {
    * past the figure's edge — exactly the case where a grown paper is the point. Fit
    * stopped fitting at the moment a mark mattered.
    */
-  readonly surface: { readonly width: number } | null
+  readonly surface: { readonly width: number; readonly height: number } | null
   readonly ownerWidth: number | undefined
 }): number {
   if (input.surface === null) return 1
   if (input.zoom !== 'fit') return input.zoom
-  const target = input.ownerWidth ?? input.fitWidth
-  if (target <= 0) return 1
-  return Math.min(1.5, Math.max(0.05, target / input.surface.width))
+  const targetWidth = input.ownerWidth ?? input.fitWidth
+  const widthScale = targetWidth > 0 ? targetWidth / input.surface.width : Number.POSITIVE_INFINITY
+  const heightScale = input.fitHeight > 0
+    ? input.fitHeight / input.surface.height
+    : Number.POSITIVE_INFINITY
+  const fitted = Math.min(widthScale, heightScale)
+  if (!Number.isFinite(fitted)) return 1
+  return Math.min(1.5, Math.max(0.05, fitted))
 }
 
 /**

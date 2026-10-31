@@ -29,6 +29,24 @@ export interface DeliveryStatus {
 }
 
 /**
+ * Show what a delivery could not do, without turning a successful send into a failure.
+ *
+ * A warning arrives after the message is already in the session. The component still
+ * needs to say it, but the send must not be presented as retryable; the one call site
+ * therefore only ever asks for an informational line.
+ * @param warnings - what the delivery could not attach or include.
+ * @param show - where the panel puts an informational line.
+ */
+export function reportDeliveryWarnings(
+  warnings: readonly string[],
+  show: (status: DeliveryStatus) => void,
+): void {
+  const text = warnings.join(' ')
+  if (text === '') return
+  show({ tone: 'info', text })
+}
+
+/**
  * The sentence for a failure, with the reason appended.
  *
  * The reason is the last thing the reader reads, so it comes last — and a thrown

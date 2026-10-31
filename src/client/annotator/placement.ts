@@ -35,6 +35,25 @@ export interface ScreenBox {
 }
 
 /**
+ * Whether two boxes touch or cross, with a little breathing room between them.
+ *
+ * Used after a resize, when a bar parked against one layout can land on the figure
+ * in another. Zero-sized boxes are not an overlap: a panel that has not been measured
+ * must not look like one whose contents are on top of each other.
+ * @param a - one box, in client coordinates.
+ * @param b - the other box, in client coordinates.
+ * @param gap - the space the two must keep, in pixels.
+ * @returns true when they are closer than the gap.
+ */
+export function boxesOverlap(a: ScreenBox, b: ScreenBox, gap = 0): boolean {
+  if (a.width <= 0 || a.height <= 0 || b.width <= 0 || b.height <= 0) return false
+  return a.left < b.left + b.width + gap
+    && a.left + a.width + gap > b.left
+    && a.top < b.top + b.height + gap
+    && a.top + a.height + gap > b.top
+}
+
+/**
  * Where a strip ends up when the pointer dragging it is at a client coordinate.
  *
  * The origin is the strip's position when the press started and the offset is

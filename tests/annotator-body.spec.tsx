@@ -242,7 +242,10 @@ function menuLabels(host: HTMLElement): string[] {
   return [...host.querySelectorAll('.da-menu-item')].map(row => row.textContent ?? '')
 }
 
-function svgBody(answers: HostAnswers = {}, props: Partial<AnnotatorBodyProps> = {}, options: { readonly stageWidth?: number } = {}): Promise<{
+function svgBody(answers: HostAnswers = {}, props: Partial<AnnotatorBodyProps> = {}, options: {
+  readonly stageWidth?: number
+  readonly stageHeight?: number
+} = {}): Promise<{
   readonly host: HTMLElement
   readonly root: Root
   readonly scrollports: (HTMLElement | null)[]
@@ -469,6 +472,7 @@ afterEach(() => {
   consoleError.mockRestore()
   document.body.innerHTML = ''
   if (Object.hasOwn(HTMLElement.prototype, 'clientWidth')) delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth
+  if (Object.hasOwn(HTMLElement.prototype, 'clientHeight')) delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
 })
 
 /** Everything the panel logged, as one string. */
@@ -1911,6 +1915,36 @@ describe('the floating strips', () => {
     expect(readPreferences().bar?.y).toBeCloseTo(0.75, 6)
   })
 
+  it('returns a parked bar to the safe bottom lane when a resize puts it on the figure', async () => {
+    let width = 500
+    let height = 400
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => height })
+    let resized: (() => void) | undefined
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe(): void {}
+      disconnect(): void {}
+    })
+    rememberPreferences({ bar: { x: 0.35, y: 0.7 } })
+    mounted = await svgBody({}, { mode: 'annotate' })
+    const bar = defined(document.querySelector('.da-bar')) as HTMLElement
+    const figure = defined(document.querySelector('.da-figure-frame')) as HTMLElement
+    // The saved fraction was clear in the old layout. The narrower, shorter pane
+    // puts the same fraction over the drawing; the bar must return to its reserved
+    // bottom strip instead of sitting on the marks the reader came to annotate.
+    stubRect(bar, { left: 140, top: 260, width: 200, height: 36 })
+    stubRect(figure, { left: 20, top: 120, width: 460, height: 220 })
+    width = 600
+    height = 300
+    await act(async () => {
+      defined(resized)()
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(bar.getAttribute('data-parked')).toBeNull()
+    expect(readPreferences().bar).toBeUndefined()
+  })
+
   it('lets a cancelled drag drop the strip where it was', async () => {
     mounted = await svgBody({}, { mode: 'annotate' })
     const root = defined(document.querySelector('.da-root')) as HTMLElement
@@ -2946,7 +2980,10 @@ describe('a rendered document', () => {
   }
 
   /** The window a rendered document is shown through in this spec, in figure pixels. */
-  const WINDOW = { width: 800 - 28, height: 600 - 28 }
+  // The bottom inset is larger than the other three: the floating bar lives in that
+  // strip, and an HTML window extending under it would make the reader's viewport
+  // disagree with the part of the page they can actually read.
+  const WINDOW = { width: 800 - 28, height: 600 - 14 - 56 }
 
   /** Report one layout pass for the frame: the length and width of its document. */
   async function reportLayout(width: number, height: number): Promise<void> {
@@ -4143,6 +4180,19 @@ describe('a body that lets its owner keep the magnification', () => {
     const surface = defined(document.querySelector('.da-surface')) as HTMLElement
     // A stated factor replaces the fit, it does not multiply it: 200px at 2×.
     expect(surface.style.width).toBe('400px')
+  })
+})
+
+describe('a figure fitted into a short window', () => {
+  it('fits the height as well as the width, with room reserved for the bar', async () => {
+    // 200px tall stage, minus 14px above and the 56px bottom inset the bar occupies.
+    // Width alone would leave this 200x100 figure at its 1.5 ceiling and under the bar;
+    // the height-limited fit is 130px tall and leaves the bar its own strip.
+    mounted = await svgBody({}, {}, { stageWidth: 900, stageHeight: 200 })
+    const surface = defined(document.querySelector('.da-surface')) as HTMLElement
+    expect(surface.style.width).toBe('260px')
+    expect(surface.style.height).toBe('130px')
+    expect(defined(document.querySelector('.da-bar')).closest('.da-stage')).toBeNull()
   })
 })
 

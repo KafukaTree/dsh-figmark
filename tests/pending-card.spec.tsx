@@ -67,7 +67,7 @@ describe('the attachment card above the composer', () => {
       data: DATA,
       raw: RAW,
       conversation: undefined,
-      send: async () => {},
+      send: async () => [],
       ...overrides,
     }
     parkAnnotation(entry)
@@ -243,7 +243,7 @@ describe('the attachment card above the composer', () => {
   })
 
   it('sends the parked delivery once, and the card is spent', async () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async () => [])
     park({ send })
     mount()
     await press(open())
@@ -252,9 +252,26 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged')).toBeNull()
   })
 
+  it('keeps a missing-attachment warning after the sent card is gone', async () => {
+    const warning = '本次组合没有附件服务，标注图未随消息发送。'
+    park({ send: async () => [warning] })
+    mount()
+    await press(open())
+    // The message went out, so the card must not stay and invite a duplicate send...
+    expect(parkedAnnotations('s1')).toEqual([])
+    expect(host.querySelector('.da-staged')).toBeNull()
+    // ...but the warning outlives it, because the file did not.
+    expect(host.querySelector('.da-staged-result')?.getAttribute('role')).toBe('status')
+    expect(host.querySelector('.da-staged-result-text')?.textContent).toBe(warning)
+    await press(defined(host.querySelector('.da-staged-result-x')) as HTMLButtonElement)
+    expect(host.querySelector('.da-staged-result')).toBeNull()
+  })
+
   it('holds the card while the message is on its way', async () => {
     let release: (() => void) | undefined
-    const send = vi.fn((): Promise<void> => new Promise<void>((resolve) => { release = resolve }))
+    const send = vi.fn((): Promise<readonly string[]> => new Promise<readonly string[]>((resolve) => {
+      release = () => { resolve([]) }
+    }))
     park({ send })
     mount()
     // Two presses in one tick, before the disabled state has been rendered.
@@ -285,7 +302,7 @@ describe('the attachment card above the composer', () => {
   })
 
   it('takes the card off without sending anything', async () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async () => [])
     park({ send })
     mount()
     await press(remove())
@@ -295,7 +312,7 @@ describe('the attachment card above the composer', () => {
   })
 
   it('presses the box\'s own send for an armed review, not the card\'s delivery', async () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async () => [])
     const box = stubBox({ draft: '先看这张图' })
     park({ send, armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
     mount()
@@ -392,8 +409,8 @@ describe('the attachment card above the composer', () => {
   })
 
   it('sends only the card that was pressed', async () => {
-    const first = vi.fn(async () => {})
-    const second = vi.fn(async () => {})
+    const first = vi.fn(async () => [])
+    const second = vi.fn(async () => [])
     park({ send: first })
     park({ send: second, data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') })
     mount()
@@ -462,7 +479,7 @@ describe('the attachment card inside the composer', () => {
    * @param send - the delivery the card will make.
    * @returns the parked entry.
    */
-  function park(send: () => Promise<void> = async () => {}): UnparkedAnnotation {
+  function park(send: () => Promise<readonly string[]> = async () => []): UnparkedAnnotation {
     const entry: UnparkedAnnotation = {
       sessionId: 's1',
       data: DATA,
@@ -491,7 +508,7 @@ describe('the attachment card inside the composer', () => {
   })
 
   it('sends from inside the card, and the chip leaves the card with it', async () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async () => [])
     park(send)
     draw()
     const button = defined(document.querySelector('.da-staged-open')) as HTMLButtonElement

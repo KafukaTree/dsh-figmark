@@ -30,7 +30,7 @@ const t: Translate = (key, vars) => {
 function card(over: Partial<ToastCard> = {}): ToastCard {
   return {
     id: 1, kind: 'note', icon: 'pencil', tone: 'info', text: '先说一句',
-    done: undefined, failed: undefined, task: undefined, ...over,
+    waiting: undefined, done: undefined, failed: undefined, task: undefined, ...over,
   }
 }
 
@@ -70,8 +70,11 @@ describe('what a card says', () => {
   })
 
   it('picks the sentence the outcome calls for', () => {
-    const send = card({ kind: 'send', text: '发送中', done: '已发送', failed: '发送失败' })
+    const send = card({
+      kind: 'send', text: '发送中', waiting: '仍在发送', done: '已发送', failed: '发送失败',
+    })
     expect(cardText(send, 'none')).toBe('发送中')
+    expect(cardText(send, 'slow')).toBe('仍在发送')
     expect(cardText(send, 'ok')).toBe('已发送')
     expect(cardText(send, 'fail')).toBe('发送失败')
   })
@@ -82,6 +85,7 @@ describe('what a card says', () => {
     const plain = card()
     expect(cardText(plain, 'ok')).toBe('先说一句')
     expect(cardText(plain, 'fail')).toBe('先说一句')
+    expect(cardText({ ...plain, kind: 'send' }, 'slow')).toBe('先说一句')
   })
 
   it('holds a failure longer than an answer, because a failure is news to act on', () => {
@@ -100,6 +104,7 @@ describe('what a card says', () => {
 
   it('says it is sending until the work answers', () => {
     expect(planToast('annotate.save.all', t).text).toBe(t('toastSending'))
+    expect(planToast('annotate.send.agent', t).waiting).toBe(t('toastStillSending'))
     expect(planToast('annotate.send.agent', t).failed).toBe(t('toastFailed'))
   })
 })
@@ -384,18 +389,22 @@ describe('the stack a surface mounts', () => {
     expect(cards()).toHaveLength(1)
   })
 
-  it('answers even when the work never does', async () => {
+  it('keeps saying it is working when the work takes longer than usual', async () => {
     mount()
     const work = unfinished()
     let outcome: ToastOutcome | undefined
     act(() => { void stack().notify('annotate.send.agent', work.task).then(ended => { outcome = ended }) })
     expect(outcome).toBeUndefined()
     await waitFor(TOAST_TASK_TIMEOUT_MS)
-    expect(outcome).toBe('fail')
-    expect(cards()[0]?.getAttribute('data-state')).toBe('fail')
-    // The late answer is not a second outcome.
+    // A slow request is not a failed one: it must not invite a retry that would send
+    // the same annotation twice. The task remains live and the card says so.
+    expect(outcome).toBeUndefined()
+    expect(cards()[0]?.getAttribute('data-state')).toBe('sending')
+    expect(cards()[0]?.getAttribute('data-text')).toBe(t('toastStillSending'))
+    // Its real answer still owns the outcome whenever it lands.
     await act(async () => { work.settle(true) })
-    expect(cards()[0]?.getAttribute('data-state')).toBe('fail')
+    expect(outcome).toBe('ok')
+    expect(cards()[0]?.getAttribute('data-state')).toBe('ok')
   })
 
   it('answers a send that has no work behind it at once', async () => {

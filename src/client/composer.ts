@@ -122,7 +122,7 @@ export interface ParkInput {
   /** Message language. */
   readonly locale: SummaryLocale
   /** Hand the message to the session directly, for when nothing could be armed. */
-  readonly send: () => Promise<void>
+  readonly send: () => Promise<readonly string[]>
 }
 
 /**

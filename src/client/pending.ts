@@ -51,8 +51,10 @@ export interface ParkedAnnotation {
    *
    * Everything the delivery needs is closed over, so a send that happens minutes
    * after the figure was closed still carries the same pictures and the same text.
+   * The message can still arrive while an attachment does not; those warnings come
+   * back to the card instead of disappearing with it.
    */
-  readonly send: () => Promise<void>
+  readonly send: () => Promise<readonly string[]>
 }
 
 /** What a caller hands `parkAnnotation`: the card, minus the identity it gets here. */

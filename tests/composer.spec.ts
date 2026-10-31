@@ -245,7 +245,7 @@ function park(log: ComposerLog, file?: File): ArmedReview {
     thumb: undefined,
     file,
     locale: 'zh',
-    send: async () => {},
+    send: async () => [],
   })
   return defined(defined(parkedAnnotations('s1')[0]).armed)
 }
@@ -259,7 +259,7 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 describe('parking an annotation above the composer', () => {
   it('parks the message as a card, and sends nothing', () => {
-    const send = vi.fn(async () => {})
+    const send = vi.fn(async () => [])
     parkInComposer({
       conversation: undefined,
       sessionId: 's1',
@@ -342,7 +342,7 @@ describe('parking an annotation above the composer', () => {
     const log = stubComposer({ registry: 'reject' })
     parkInComposer({
       conversation: log.conversation, sessionId: 's1', document: document_, paths,
-      thumb: undefined, file: undefined, locale: 'zh', send: async () => {},
+      thumb: undefined, file: undefined, locale: 'zh', send: async () => [],
     })
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.armed).toBeUndefined()
@@ -355,7 +355,7 @@ describe('parking an annotation above the composer', () => {
     parkInComposer({
       conversation: log.conversation, sessionId: 's1', document: document_, paths,
       thumb: undefined, file: new File(['png'], 'a.png', { type: 'image/png' }), locale: 'zh',
-      send: async () => {},
+      send: async () => [],
     })
     const parked = defined(parkedAnnotations('s1')[0])
     // Nothing to merge into a press, so the card keeps its own delivery — and the
@@ -374,7 +374,7 @@ describe('parking an annotation above the composer', () => {
       thumb,
       file: undefined,
       locale: 'zh',
-      send: async () => {},
+      send: async () => [],
     })
     const parked = defined(parkedAnnotations('s1')[0])
     expect(thumbFor(parked.raw)).toBe(thumb)
@@ -389,7 +389,7 @@ describe('parking an annotation above the composer', () => {
       thumb: undefined,
       file: undefined,
       locale: 'en',
-      send: async () => {},
+      send: async () => [],
     })
     expect(defined(parkedAnnotations('s1')[0]).raw).toContain('[figure annotations]')
   })
@@ -405,7 +405,7 @@ describe('parking an annotation above the composer', () => {
       thumb: undefined,
       file: undefined,
       locale: 'zh',
-      send: async () => {},
+      send: async () => [],
     })
     const parked = defined(parkedAnnotations('s1')[0])
     expect(parked.data).toEqual({
@@ -420,12 +420,12 @@ describe('parking an annotation above the composer', () => {
   })
 
   it('queues behind the card the session already had', () => {
-    const first = vi.fn(async () => {})
+    const first = vi.fn(async () => [])
     parkInComposer({
       conversation: undefined, sessionId: 's1', document: document_, paths, thumb: undefined,
       file: undefined, locale: 'zh', send: first,
     })
-    const second = vi.fn(async () => {})
+    const second = vi.fn(async () => [])
     parkInComposer({
       conversation: undefined, sessionId: 's1', document: nameless, paths, thumb: undefined,
       file: undefined, locale: 'zh', send: second,
@@ -442,7 +442,7 @@ describe('parking an annotation above the composer', () => {
 
   it('arms two cards without either of them writing into the box', () => {
     const log = stubComposer()
-    const park_ = async (): Promise<void> => {}
+    const park_ = async (): Promise<readonly string[]> => []
     parkInComposer({
       conversation: log.conversation, sessionId: 's1', document: document_, paths,
       thumb: undefined, file: undefined, locale: 'zh', send: park_,

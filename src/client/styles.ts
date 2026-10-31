@@ -9,6 +9,7 @@
  * rather than a palette of its own.
  * @module dsh-figmark/client/styles
  */
+import { STAGE_BOTTOM_INSET, STAGE_PADDING } from './zoom'
 
 /** Marker attribute identifying our own style element. */
 const STYLE_MARKER = 'data-dsh-figmark'
@@ -88,7 +89,8 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    scroll: it is the strip's only way to be moved, so a handle that scrolls out of
    the top is the same dead end as one covered by the bar. It inherits the strip's
    own ground rather than naming it, so the tiles pass underneath instead of
-   showing through the handle. In the bar — which never scrolls — this is a no-op. */
+   showing through the handle. On the bar it pins to the left as its row scrolls,
+   so the one way to move the strip never disappears off that edge. */
 .da-palette-grip{position:sticky;top:0;z-index:1;background:inherit;
   display:flex;align-items:center;justify-content:center;width:26px;height:17px;
   border-radius:5px;cursor:move;color:rgba(255,255,255,.55);touch-action:none;flex:0 0 auto}
@@ -97,7 +99,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    by three down needs height. Sized per block rather than once, so the svg is not
    letterboxed inside its own handle. */
 .da-grip-dots{width:12px;height:8px;fill:currentColor;display:block}
-.da-bar .da-palette-grip{width:16px;height:18px}
+.da-bar .da-palette-grip{position:sticky;left:0;z-index:2;width:16px;height:18px;background:inherit}
 .da-bar .da-grip-dots{width:8px;height:12px}
 /* A tile is a round button holding one white glyph. No word under it: six glyphs in
    a column are read at a glance, and the word is still there as the tooltip and as
@@ -176,10 +178,16 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    and the hand-off; the tools have their own strip so either can be parked alone.
    Centred along the bottom until it is moved, which is where a bar belongs. */
 .da-bar{position:absolute;z-index:12;left:50%;bottom:12px;transform:translateX(-50%);
-  display:flex;align-items:center;gap:2px;flex:0 0 auto;flex-wrap:wrap;
+  display:flex;align-items:center;flex:0 0 auto;flex-wrap:nowrap;
   width:max-content;max-width:calc(100% - 20px);padding:4px 5px;border-radius:16px;
   background:var(--dsw-alias-bg-inverse,#2d2d2d);color:#fff;
   box-shadow:0 8px 26px rgba(10,14,24,.3),0 0 0 1px rgba(255,255,255,.08)}
+/* One row at every width: it scrolls sideways before it wraps into a second row
+   that would cover the drawing the bottom inset protects. The style fold stays
+   outside this scroller so its popup is never clipped. */
+.da-bar-scroll{display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;
+  overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scrollbar-width:none}
+.da-bar-scroll::-webkit-scrollbar{display:none}
 /* Parked: placed from the top by the reader's drag, so the bottom anchor that keeps
    it centred while untouched must not also apply — with both set it stretches. */
 .da-bar[data-parked="true"]{bottom:auto}
@@ -281,7 +289,9 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* A figure is a sheet on a table, not a picture floating in a void: the white paper
    is what gives the panel a middle, and the gap around it is the margin the eye
    needs to see where the drawing stops. */
-.da-stage{position:relative;display:flex;align-items:safe center;justify-content:safe center;flex:1 1 auto;overflow:auto;min-height:0;padding:14px;background:var(--dsw-alias-bg-document-preview,transparent)}
+.da-stage{position:relative;display:flex;align-items:safe center;justify-content:safe center;flex:1 1 auto;overflow:auto;min-height:0;
+  padding:${STAGE_PADDING}px ${STAGE_PADDING}px ${STAGE_BOTTOM_INSET}px;
+  background:var(--dsw-alias-bg-document-preview,transparent)}
 .da-surface{position:relative;flex:0 0 auto;margin:0;transform-origin:top left}
 /* The paper: the figure plus the margin a mark may have needed. It is deliberately
    left transparent — the white sheet belongs to the figure, so a margin that only
@@ -851,6 +861,17 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
 .da-staged-x:focus-visible{opacity:1;outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
 .da-staged-x[disabled]{opacity:.3;cursor:default}
 .da-staged-trouble{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-error,#c0392b)}
+/* A warning outlives the card it belonged to: the message has already reached the
+   session, so removing the card must not make the missing attachment disappear too. */
+.da-staged-result{display:flex;align-items:flex-start;gap:6px;box-sizing:border-box;
+  width:min(320px,100%);padding:7px 8px;border-radius:9px;
+  background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.06));
+  color:var(--dsw-alias-label-secondary,inherit);font-size:11px;line-height:1.5}
+.da-staged-result-text{flex:1 1 auto;min-width:0}
+.da-staged-result-x{flex:0 0 auto;width:18px;height:18px;padding:0;border:0;border-radius:50%;
+  background:none;font:inherit;font-size:13px;line-height:1;cursor:pointer;opacity:.65}
+.da-staged-result-x:hover{opacity:1;background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72))}
+.da-staged-result-x:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
 /* One figure, one picture. The message that carries an annotation also attaches the
    review picture, and the shell draws that attachment full width above the bubble —
    so the same figure appeared twice, once huge and once as the card's 38px copy. The
