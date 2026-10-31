@@ -972,12 +972,14 @@ describe('editing marks', () => {
 })
 
 describe('the keyboard while annotating', () => {
-  it('leaves annotating on Escape, and drops the selection before the mode', async () => {
-    mounted = await svgBody({ annotation: saved })
-    await selectFirstMark(document.body)
+  it('leaves element mode on Escape', async () => {
+    mounted = await svgBody()
+    await click(button(document.body, zh.toolElement))
+    expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('.da-pick-guide')).not.toBeNull()
     await pressKey('Escape', { bare: true })
-    // The first Escape only lets go of the mark the note box is bound to.
-    await pressKey('Escape', { bare: true })
+    expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('.da-pick-guide')).toBeNull()
   })
 
   it('keeps Escape in a note box, so the caret can leave the field itself', async () => {
@@ -4433,9 +4435,30 @@ describe('the light the picker shines', () => {
     // And nothing this plugin draws wears it: the overlay is the panel talking, not the
     // figure, so lighting anything in it would be a second language again.
     expect(overlay.querySelectorAll('.da-spot')).toHaveLength(0)
-    // An element in a figure is named by the mark drawn on it; there is no CSS path to
-    // read a name from, and a chip would be the panel inventing one.
-    expect(document.querySelector('.da-name')).toBeNull()
+    // The name follows the glow: it says which stable artist a click would take without
+    // drawing the rectangular box that a curve (or a diagonal line) never occupies.
+    expect(document.querySelector('.da-name')?.textContent).toBe('text#lead')
+    expect(document.querySelector('.da-live-hit')).toBeNull()
+    expect(document.querySelector('.da-pick-guide')?.textContent).toContain('第 1 / 1 层')
+  })
+
+  it('says so when element mode lands on nothing', async () => {
+    mounted = await svgBody()
+    await click(button(document.body, zh.toolElement))
+    const overlay = defined(document.querySelector('svg.da-overlay')) as SVGSVGElement
+    stubRect(overlay, { left: 0, top: 0, width: 200, height: 100 })
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [],
+    })
+    try {
+      await act(async () => {
+        overlay.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 10, clientY: 20 }))
+      })
+    } finally {
+      Reflect.deleteProperty(document, 'elementsFromPoint')
+    }
+    expect(aside()).toBe(zh.toolElementMiss)
   })
 
   it('keeps an element mark lit on the element it names', async () => {

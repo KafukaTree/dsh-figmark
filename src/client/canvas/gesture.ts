@@ -18,21 +18,36 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annotation'
 import { WEIGHT_DEFAULT, describesARegion } from '../../shared/annotation'
+import {
+  anchorAtOffset, sameChoiceAnchors, sameChoiceElements,
+  type ElementChoices,
+} from '../element-choice'
 import { endAt, gripAt, type HandleId } from '../handles'
 import { controlSizes, type ControlSizes } from './controls'
 import { elementMarkOn } from '../annotator/mark-edits'
-import { controlBox, elementNamedBy, sameAnchor } from './hit'
+import { controlBox, elementNamedBy } from './hit'
 import {
   appendPenSample, draftAnchorPoint, draftMark, draftWorthCommitting, elementMark, pointMark, stretchDraft,
   type DragTool,
 } from './marks'
-import { anchorOf, figurePointOf, type SurfaceGeometry } from './pointer'
+import { anchorOf, choicesOf, figurePointOf, type SurfaceGeometry } from './pointer'
 import { editFor, liveMark, patchFrom, type Press } from './press'
 import { hasFixedExtent } from '../render'
 import type { CanvasProps, EventPoint, MarkPatch, SurfaceClickEvent, SurfaceEvent } from './types'
 
 /** Hit reach of a control handle, as a multiple of its side: generous enough to grab. */
 const HANDLE_REACH = 2.2
+
+/**
+ * Whether a key event is going into a field where arrow keys edit text.
+ * @param target - the event target.
+ * @returns true for inputs, textareas, selects, and contenteditable regions.
+ */
+function editingField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT'
+}
 
 /**
  * Everything the surface's svg binds.
@@ -106,7 +121,11 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    * is why an element mark could be placed but never reopened.
    */
   const settled = useRef(false)
-  const [hover, setHover] = useState<MarkAnchor | null>(null)
+  const [picked, setPicked] = useState<{
+    readonly choices: ElementChoices
+    readonly index: number
+  } | null>(null)
+  const hover = picked === null ? null : anchorAtOffset(picked.choices, picked.index - picked.choices.preferred)
   const reportHover = props.onHover
   /**
    * Tell the parent which element the pointer is over.
@@ -118,8 +137,11 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    * answer, not the props object a parent rebuilds every render.
    */
   useEffect(() => {
-    reportHover?.(hover ?? undefined)
-  }, [hover, reportHover])
+    reportHover?.(
+      hover ?? undefined,
+      picked === null ? undefined : { level: picked.index + 1, count: picked.choices.anchors.length },
+    )
+  }, [hover, picked, reportHover])
   /**
    * Forget the highlight whenever the picker is put away.
    *
@@ -129,8 +151,36 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
    * reader leaves the figure with the picker armed, so no move arrives to clear it.
    */
   useEffect(() => {
-    if (tool !== 'element') setHover(null)
+    if (tool !== 'element') setPicked(null)
   }, [tool])
+  /**
+   * Move through the element ladder without moving the pointer.
+   *
+   * The pointer chooses a position and the arrow keys choose what at that position the
+   * reader means: up is the containing artist or block, down is the exact painted part.
+   * The keys are only taken while a picker has something under it and the reader is not
+   * typing, so an arrow in the comment field still moves the caret.
+   */
+  useEffect(() => {
+    if (tool !== 'element' || picked === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      if (editingField(event.target)) return
+      event.preventDefault()
+      setPicked(current => {
+        /* v8 ignore next -- this listener only exists while a level is picked. */
+        if (current === null) return null
+        const delta = event.key === 'ArrowUp' ? 1 : -1
+        const next = Math.min(
+          current.choices.anchors.length - 1,
+          Math.max(0, current.index + delta),
+        )
+        return next === current.index ? current : { ...current, index: next }
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [picked, tool])
   /**
    * Where the current press landed, in figure pixels.
    *
@@ -143,7 +193,19 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
 
   const toFigure = (event: EventPoint): FigurePoint => figurePointOf(event, geometry)
   const anchorFor = (event: EventPoint, point: FigurePoint): MarkAnchor | undefined =>
-    anchorOf(event, point, geometry, { anchoring, containerRef, anchorAtFigurePoint: props.anchorAtFigurePoint })
+    anchorOf(event, point, geometry, {
+      anchoring,
+      containerRef,
+      anchorAtFigurePoint: props.anchorAtFigurePoint,
+      anchorChoicesAtFigurePoint: props.anchorChoicesAtFigurePoint,
+    })
+  const choicesFor = (event: EventPoint, point: FigurePoint): ElementChoices | undefined =>
+    choicesOf(event, point, geometry, {
+      anchoring,
+      containerRef,
+      anchorAtFigurePoint: props.anchorAtFigurePoint,
+      anchorChoicesAtFigurePoint: props.anchorChoicesAtFigurePoint,
+    })
   const elementMarkAt = (event: EventPoint, point: FigurePoint): AnnotationMark | undefined =>
     elementNamedBy(marks, anchorFor(event, point), props.selectedId)
 
@@ -274,9 +336,16 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       // whole answer, and there is nothing for a drag to decide. A press that names
       // no element does nothing at all, rather than placing a mark on the background —
       // an element mark with no element would be a box claiming to name a thing.
-      const picked = anchorFor(event, point)
-      if (picked === undefined) return
-      const mark = elementMark(picked, color)
+      const choices = choicesFor(event, point)
+      if (choices === undefined) {
+        props.onPickMiss?.()
+        return
+      }
+      const offset = picked !== null && sameChoiceElements(picked.choices, choices)
+        ? picked.index - picked.choices.preferred
+        : 0
+      const pickedAnchor = anchorAtOffset(choices, offset)
+      const mark = elementMark(pickedAnchor, color)
       // An element that already carries a mark is picked, not marked again: the press
       // lands on the mark that is there, which is the one the reader wanted to comment
       // on, and nothing new appears for a fourth or fifth time.
@@ -315,8 +384,15 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
     // An unchanged name leaves the state alone: a stream of moves across one element
     // would otherwise re-render the whole overlay for every frame of it.
     if (tool === 'element') {
-      const found = anchorFor(event, toFigure(event)) ?? null
-      setHover(current => (sameAnchor(current, found) ? current : found))
+      const found = choicesFor(event, toFigure(event))
+      setPicked(current => {
+        if (found === undefined) return null
+        if (current === null || !sameChoiceElements(current.choices, found)) {
+          return { choices: found, index: found.preferred }
+        }
+        if (sameChoiceAnchors(current.choices, found)) return current
+        return { ...current, choices: found }
+      })
     }
     if (press !== null) {
       const point = toFigure(event)
@@ -446,7 +522,7 @@ export function useCanvasGesture(props: CanvasProps, geometry: SurfaceGeometry):
       onPointerMove: move,
       onPointerUp: finish,
       onPointerCancel: finish,
-      onPointerLeave: () => { setHover(null) },
+      onPointerLeave: () => { setPicked(null) },
       onClick,
       onDoubleClick,
       onPressMark,

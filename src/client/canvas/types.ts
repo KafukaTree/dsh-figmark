@@ -16,6 +16,7 @@ import type {
   MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, RefObject,
 } from 'react'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../../shared/annotation'
+import type { ElementChoices, PickLevel } from '../element-choice'
 
 /**
  * A pointer event on the surface, whichever element of it the press landed on.
@@ -150,6 +151,15 @@ export interface CanvasProps {
    */
   readonly anchorAtFigurePoint?: ((x: number, y: number) => MarkAnchor | undefined) | undefined
   /**
+   * Every element one figure point can mean, for a surface whose elements live in a
+   * document of their own.
+   *
+   * Kept beside {@link anchorAtFigurePoint} because selecting an existing mark still
+   * asks only for the default answer, while the armed picker needs the whole ladder
+   * so the reader can step toward a child or a parent before committing.
+   */
+  readonly anchorChoicesAtFigurePoint?: ((x: number, y: number) => ElementChoices | undefined) | undefined
+  /**
    * Report the element the pointer is over while the picker is armed.
    *
    * The canvas knows *which* element a click would take but not how to light it: an
@@ -158,8 +168,11 @@ export interface CanvasProps {
    * Reporting the name lets the body light the element itself, so the highlight has
    * the element's own shape instead of a box drawn around it.
    * @param anchor - what the pointer names, or undefined when it names nothing.
+   * @param level - where that anchor sits in the available element ladder.
    */
-  readonly onHover?: ((anchor: MarkAnchor | undefined) => void) | undefined
+  readonly onHover?: ((anchor: MarkAnchor | undefined, level: PickLevel | undefined) => void) | undefined
+  /** A press with the picker armed that named no element. */
+  readonly onPickMiss?: (() => void) | undefined
   /** Currently selected mark. */
   readonly selectedId: string | null
   /** Select one mark, or clear the selection. */

@@ -12,6 +12,7 @@
 import type { MarkAnchor } from '../shared/annotation'
 import { anchorTextOf } from './anchor-text'
 import { depthBelow, isStableId, selectorWithin } from './dom-path'
+import { anchorAtOffset, type ElementChoices } from './element-choice'
 import { coversInterior, PICK_REACH, pickStack } from './pick'
 
 /**
@@ -294,6 +295,31 @@ export function anchorAtPoint(
   scaleX: number,
   scaleY: number,
 ): MarkAnchor | undefined {
+  const choices = elementChoicesAtPoint(container, clientX, clientY, scaleX, scaleY)
+  return choices === undefined ? undefined : anchorAtOffset(choices, 0)
+}
+
+/**
+ * Every element a point can reasonably mean, from exact paint outward.
+ *
+ * The exact painted element is first because the reader may want the segment they
+ * can see. The named artist and its stable ancestors follow because those are the
+ * names a source reader can act on. Unnamed layout groups between them are skipped:
+ * they add a choice without changing what the reader can see or the source can name.
+ * @param container - element holding the inline figure, used as the coordinate origin.
+ * @param clientX - pointer x in client space.
+ * @param clientY - pointer y in client space.
+ * @param scaleX - figure pixels per client pixel horizontally.
+ * @param scaleY - figure pixels per client pixel vertically.
+ * @returns the ordered choices and the level a plain click takes.
+ */
+export function elementChoicesAtPoint(
+  container: HTMLElement,
+  clientX: number,
+  clientY: number,
+  scaleX: number,
+  scaleY: number,
+): ElementChoices | undefined {
   const root = container.querySelector('svg')
   if (root === null) return undefined
   const frame = root.getBoundingClientRect()
@@ -302,6 +328,38 @@ export function anchorAtPoint(
   // than falling back to the sheet it is blank on.
   if (hit === undefined) return undefined
   const described = namingAncestor(hit, container)
+  const elements: [Element, ...Element[]] = [hit]
+  for (let node: Element | null = described; node !== null && node !== container; node = node.parentElement) {
+    const namesItself = node === described
+      || isStableId(node.id)
+      || node.querySelector(':scope > title') !== null
+    if (namesItself && !elements.includes(node)) elements.push(node)
+  }
+  return {
+    anchors: [
+      anchorOfElement(elements[0], root, container, scaleX, scaleY),
+      ...elements.slice(1).map(element => anchorOfElement(element, root, container, scaleX, scaleY)),
+    ],
+    preferred: elements.indexOf(described),
+  }
+}
+
+/**
+ * Write one SVG element as the anchor a mark carries.
+ * @param described - the element to name.
+ * @param root - the figure root, which a positional selector is rooted at.
+ * @param container - element holding the figure, used to express the box locally.
+ * @param scaleX - figure pixels per client pixel horizontally.
+ * @param scaleY - figure pixels per client pixel vertically.
+ * @returns the anchor.
+ */
+function anchorOfElement(
+  described: Element,
+  root: Element,
+  container: HTMLElement,
+  scaleX: number,
+  scaleY: number,
+): MarkAnchor {
   const rect = described.getBoundingClientRect()
   const containerRect = container.getBoundingClientRect()
   const title = described.querySelector(':scope > title')?.textContent?.trim()

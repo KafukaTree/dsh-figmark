@@ -16,7 +16,9 @@ import {
 } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
 import { bytesToDataUrl, composeReviewSvg, reviewSize, rasterizePng } from '../src/client/export'
-import { anchorAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox } from '../src/client/figure-dom'
+import {
+  anchorAtPoint, elementChoicesAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox,
+} from '../src/client/figure-dom'
 import { PICK_REACH } from '../src/client/pick'
 import { defined, installDom, stubRasterizer, stubRect } from './dom'
 
@@ -889,6 +891,31 @@ describe('asking the browser what is under the pointer', () => {
     stubRect(line, { left: 0, top: 0, width: 10, height: 10 })
     Object.defineProperty(document, 'elementsFromPoint', { configurable: true, value: () => [line] })
     expect(anchorAtPoint(container, 5, 5, 1, 1)?.selector).toBe('#line2d_1')
+  })
+
+  it('offers the painted part, its named artist, and the containing axes', () => {
+    const { container } = figureThatAnswers(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+      + '<g id="axes_1"><g id="line2d_1"><path id="m12345678" d="M0 0 L100 100"/></g></g></svg>',
+      new Map(),
+    )
+    const axes = defined(container.querySelector('#axes_1'))
+    const artist = defined(container.querySelector('#line2d_1'))
+    const path = defined(container.querySelector('path'))
+    for (const element of [axes, artist, path]) stubRect(element, { left: 0, top: 0, width: 100, height: 100 })
+    Object.defineProperty(document, 'elementsFromPoint', {
+      configurable: true,
+      value: () => [path, axes, artist],
+    })
+    const choices = elementChoicesAtPoint(container, 50, 50, 1, 1)
+    expect(choices?.anchors.map(choice => choice.selector)).toEqual([
+      '#line2d_1 > path:nth-of-type(1)',
+      '#line2d_1',
+      '#axes_1',
+    ])
+    // A plain click keeps the stable artist name; the exact path is one level down.
+    expect(choices?.preferred).toBe(1)
+    expect(anchorAtPoint(container, 50, 50, 1, 1)?.selector).toBe('#line2d_1')
   })
 
   it('spells a nameless element path from the figure root', () => {

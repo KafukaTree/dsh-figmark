@@ -321,6 +321,19 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    too, and not just the stage, because the overlay covers the figure and would
    otherwise keep saying what it said before the press. */
 .da-stage[data-panning="true"],.da-stage[data-panning="true"] *{cursor:grabbing !important}
+/* Element mode says what it is before the reader risks a click. The strip is not a
+   control and takes no pointer events; the pointer still belongs to the picker. */
+.da-pick-guide{position:absolute;z-index:9;top:10px;left:50%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:8px;max-width:calc(100% - 120px);box-sizing:border-box;
+  padding:5px 8px 5px 6px;border-radius:8px;background:rgba(24,24,27,.9);color:#fff;
+  box-shadow:0 5px 18px rgba(10,14,24,.2),0 0 0 1px rgba(255,255,255,.08);
+  font:11px/16px -apple-system,"PingFang SC",sans-serif;white-space:nowrap;pointer-events:none}
+.da-pick-mode{flex:0 0 auto;padding:1px 6px;border-radius:5px;background:var(--da-accent,#176df2);
+  font-weight:650;letter-spacing:.02em}
+.da-pick-copy{min-width:0;overflow:hidden;text-overflow:ellipsis;color:rgba(255,255,255,.9)}
+.da-pick-keys{flex:0 0 auto;padding-left:8px;border-left:1px solid rgba(255,255,255,.18);
+  color:rgba(255,255,255,.58)}
+@media (max-width:560px){.da-pick-keys{display:none}.da-pick-guide{max-width:calc(100% - 76px)}}
 /* The rendered document takes the figure's place, and while no mark-making tool is
    armed it is the reader's own page: it takes the pointer events, so a link follows,
    a button presses, a video plays. A mark on it keeps its own hit area (the overlay
@@ -369,7 +382,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-overlay{position:absolute;touch-action:none}
 .da-overlay[data-tool="select"]{cursor:inherit}
 .da-overlay:not([data-tool="select"]):not([data-tool="element"]){cursor:crosshair}
-.da-overlay[data-tool="element"]{cursor:pointer}
+.da-overlay[data-tool="element"]{cursor:crosshair}
 /* The element a click would take, or already names, lit in its own shape rather than
    boxed. A drop shadow follows whatever the element paints — a stroked curve, filled
    glyphs, a patch — so one rule lights every kind of artist the figure can hold. The

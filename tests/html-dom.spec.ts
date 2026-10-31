@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MarkAnchor } from '../src/shared/annotation'
 import {
-  anchorInDocument, buildRenderedDocument, elementBox, loadFrameDocument, measureFrameContent,
+  anchorInDocument, buildRenderedDocument, elementBox, elementChoicesInDocument, loadFrameDocument,
+  measureFrameContent,
 } from '../src/client/html-dom'
 import { defined, stubRect } from './dom'
 
@@ -181,6 +182,22 @@ describe('asking the document what is under the pointer', () => {
       text: 'second',
       selector: '#s > p:nth-of-type(2)',
     } satisfies MarkAnchor)
+  })
+
+  it('offers the inline word, its paragraph, and the containing article', () => {
+    const doc = hitTesting('<html><body><article><p>the <b>bold</b> word</p></article></body></html>', new Map())
+    const article = defined(doc.querySelector('article'))
+    const paragraph = defined(doc.querySelector('p'))
+    const bold = defined(doc.querySelector('b'))
+    stubRect(article, { left: 0, top: 0, width: 400, height: 300 })
+    stubRect(paragraph, { left: 0, top: 0, width: 400, height: 40 })
+    stubRect(bold, { left: 20, top: 0, width: 40, height: 20 })
+    Object.defineProperty(doc, 'elementsFromPoint', { configurable: true, value: () => [bold, paragraph] })
+    const choices = elementChoicesInDocument(doc, 30, 10)
+    expect(choices?.anchors.map(choice => choice.tag)).toEqual(['b', 'p', 'article'])
+    // A plain click rises to the paragraph, as it did before; the exact inline word
+    // is now one level down rather than being impossible to name.
+    expect(choices?.preferred).toBe(1)
   })
 
   it('asks about the point the reader is looking at, not the one the page starts at', () => {

@@ -15,7 +15,8 @@
 
 import type { RefObject } from 'react'
 import type { FigurePoint, MarkAnchor } from '../../shared/annotation'
-import { anchorAtPoint } from '../figure-dom'
+import { anchorAtOffset, type ElementChoices } from '../element-choice'
+import { elementChoicesAtPoint } from '../figure-dom'
 import type { EventPoint } from './types'
 
 /** Where figure coordinate `(0, 0)` sits on this paper, and how big the paper is. */
@@ -48,6 +49,11 @@ export interface AnchorSource {
    * in a document of their own.
    */
   readonly anchorAtFigurePoint: ((x: number, y: number) => MarkAnchor | undefined) | undefined
+  /**
+   * Every element one figure point can mean, for a surface whose elements live in a
+   * document of their own.
+   */
+  readonly anchorChoicesAtFigurePoint: ((x: number, y: number) => ElementChoices | undefined) | undefined
 }
 
 /**
@@ -93,7 +99,35 @@ export function anchorOf(
   geometry: SurfaceGeometry,
   source: AnchorSource,
 ): MarkAnchor | undefined {
-  if (source.anchorAtFigurePoint !== undefined) return source.anchorAtFigurePoint(point[0], point[1])
+  const choices = choicesOf(event, point, geometry, source)
+  return choices === undefined ? undefined : anchorAtOffset(choices, 0)
+}
+
+/**
+ * Every element one pointer position can mean on this surface.
+ *
+ * A rendered document reports its own ladder because its layout is in a frame. An
+ * inline SVG asks the same way it always did, but now keeps the painted leaf and its
+ * named ancestors instead of throwing all but one of them away.
+ * @param event - the pointer event, bound to the surface.
+ * @param point - the same event, in figure pixels.
+ * @param geometry - the paper's size and origin.
+ * @param source - how this surface names elements.
+ * @returns the ordered choices, or undefined when the point names nothing.
+ */
+export function choicesOf(
+  event: EventPoint,
+  point: FigurePoint,
+  geometry: SurfaceGeometry,
+  source: AnchorSource,
+): ElementChoices | undefined {
+  if (source.anchorChoicesAtFigurePoint !== undefined) {
+    return source.anchorChoicesAtFigurePoint(point[0], point[1])
+  }
+  if (source.anchorAtFigurePoint !== undefined) {
+    const anchor = source.anchorAtFigurePoint(point[0], point[1])
+    return anchor === undefined ? undefined : { anchors: [anchor], preferred: 0 }
+  }
   const container = source.containerRef.current
   if (!source.anchoring || container === null) return undefined
   const rect = event.currentTarget.getBoundingClientRect()
@@ -109,5 +143,5 @@ export function anchorOf(
   const scaleY = geometry.height / rect.height
   const clientX = rect.left + (point[0] + geometry.originX) / scaleX
   const clientY = rect.top + (point[1] + geometry.originY) / scaleY
-  return anchorAtPoint(container, clientX, clientY, scaleX, scaleY)
+  return elementChoicesAtPoint(container, clientX, clientY, scaleX, scaleY)
 }

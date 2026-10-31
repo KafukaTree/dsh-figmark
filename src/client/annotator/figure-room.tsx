@@ -92,6 +92,8 @@ export interface FigureRoomProps {
    * marks and tools, which is the body's business.
    */
   readonly chip?: ReactNode
+  /** A short mode guide drawn above the paper without taking pointer events. */
+  readonly guide?: ReactNode
   /** The translator seat. */
   readonly t: Translate
 }
@@ -172,6 +174,7 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
           {props.chip}
         </div>
       </div>
+      {props.guide}
     </div>
   )
 }

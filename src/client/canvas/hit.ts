@@ -18,23 +18,6 @@ import { markBounds, type MarkBox } from '../mark-geometry'
 export const HIT_WIDTH = 14
 
 /**
- * Whether two anchors name the same element in the same place.
- *
- * Two separate reads of the same element can arrive as two objects, and the
- * highlight only has to change when what it is drawn around changes. Comparing the
- * name *and* the box covers both ways it can: a different element, or the same
- * element after the surface reflowed under it.
- * @param one - the anchor drawn now, or null when nothing is lit.
- * @param other - the anchor the pointer just named.
- * @returns true when the highlight would look exactly the same.
- */
-export function sameAnchor(one: MarkAnchor | null, other: MarkAnchor | null): boolean {
-  if (one === null || other === null) return one === other
-  if (one.selector !== other.selector || one.id !== other.id || one.tag !== other.tag) return false
-  return one.bbox.every((value, index) => value === other.bbox[index])
-}
-
-/**
  * The mark that names the element under the pointer, if any.
  *
  * An element mark draws nothing, so it has no painted shape a press can land on,

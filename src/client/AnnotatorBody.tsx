@@ -33,7 +33,10 @@ import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
 import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
 import type { SidecarWriteResult } from '../shared/http'
-import { anchorInDocument, loadFrameDocument, measureFrameContent } from './html-dom'
+import {
+  anchorInDocument, elementChoicesInDocument, loadFrameDocument, measureFrameContent,
+} from './html-dom'
+import type { PickLevel } from './element-choice'
 import { shownMarksOf, useShownMarks } from './shown-marks'
 import {
   anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
@@ -174,6 +177,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * panel, while the chip is drawn by React and cannot appear without a render.
    */
   const [chipAnchor, setChipAnchor] = useState<MarkAnchor | null>(null)
+  /** Where the hovered element sits in the picker's child-to-parent ladder. */
+  const [pickLevel, setPickLevel] = useState<PickLevel | undefined>(undefined)
   /**
    * The page being framed instead of the file, when one is.
    *
@@ -1618,8 +1623,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       }
       if (typing(event.target)) return
       // Escape lets go of the selection. It used to leave a viewing mode as well;
-      // there is no such mode now, so the selection is all there is to drop.
+      // element picking is the one mode with something else to leave first.
       if (key === 'Escape') {
+        if (tool === 'element') {
+          event.preventDefault()
+          setTool('select')
+          return
+        }
         if (selectedId === null) return
         event.preventDefault()
         setSelectedId(null)
@@ -1635,7 +1645,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => { window.removeEventListener('keydown', onKeyDown) }
-  }, [redo, removeMark, selectedId, undo])
+  }, [redo, removeMark, selectedId, tool, undo])
 
   // --- export and delivery --------------------------------------------------
 
@@ -2128,6 +2138,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     (x: number, y: number) => anchorInDocument(frameRef.current?.contentDocument, x, y),
     [],
   )
+  /** Every containing level of the element under one point in the framed document. */
+  const anchorChoicesAtFigurePoint = useCallback(
+    (x: number, y: number) => elementChoicesInDocument(frameRef.current?.contentDocument, x, y),
+    [],
+  )
 
   /**
    * The element a selector names, in whichever document the figure's elements live.
@@ -2218,9 +2233,10 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     litRef.current = []
   }, [])
 
-  const lightElement = useCallback((anchor: MarkAnchor | undefined): void => {
+  const lightElement = useCallback((anchor: MarkAnchor | undefined, level?: PickLevel): void => {
     hovered.current = anchor
     lightUp(anchor)
+    setPickLevel(level)
     // The pointer reports the element it is on for every move it makes. Naming the
     // same element again is not news, and a render per pixel would make the page under
     // the hand feel like it was being dragged rather than pointed at.
@@ -2375,8 +2391,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /**
    * The name of the element the pointer is on, written at its own corner.
    *
-   * Only on a rendered document: an element inside an inline SVG is named by the mark
-   * the reader already drew on it, and a picture has no elements to name at all.
+   * On both surfaces that have elements. An inline SVG uses the name alone beside its
+   * own glow; a rendered document also gets the live box because its blocks are what
+   * the reader is choosing between. A picture has no elements to name at all.
    */
   /**
    * The element the pointer is on, whichever half of the fence reported it.
@@ -2392,9 +2409,28 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         anchor: liveHover.anchor,
         name: liveHover.name,
       }
-      : isHtml && chipAnchor !== null
+      : (isHtml || isVector) && chipAnchor !== null
         ? { ...nameChipAt(chipAnchor.bbox, [htmlScroll.x, htmlScroll.y], { width: fitWidth }), anchor: chipAnchor }
         : null
+  /**
+   * The one visible explanation of element mode.
+   *
+   * The tool icon alone is indistinguishable from a shape tool once the pointer is on
+   * the figure, and the only result of a click used to be a mark appearing somewhere
+   * the reader did not expect. This strip says what a click takes, where it sits in the
+   * hierarchy, and how to move one level without hunting for another control.
+   */
+  const pickGuide = tool === 'element' ? (
+    <div className="da-pick-guide" role="status" aria-live="polite">
+      <span className="da-pick-mode">{t('toolElementMode')}</span>
+      <span className="da-pick-copy">
+        {pickLevel === undefined
+          ? t('toolElementHint')
+          : t('toolElementDepth', { level: pickLevel.level, count: pickLevel.count })}
+      </span>
+      {pickLevel === undefined ? null : <span className="da-pick-keys">{t('toolElementKeys')}</span>}
+    </div>
+  ) : null
   /**
    * Whether the page under the overlay owns the pointer.
    *
@@ -2499,6 +2535,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             // the mark draws that box beside the name. A drawing's do not.
             elementExtent={figure?.kind === 'html' ? 'box' : undefined}
             anchorAtFigurePoint={figure?.kind === 'html' ? anchorAtFigurePoint : undefined}
+            anchorChoicesAtFigurePoint={figure?.kind === 'html' ? anchorChoicesAtFigurePoint : undefined}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onAdd={addMark}
@@ -2509,6 +2546,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             onPanStart={() => { setPanning(true) }}
             onPanEnd={() => { setPanning(false) }}
             onHover={lightElement}
+            onPickMiss={() => { setStatus({ tone: 'info', text: t('toolElementMiss') }) }}
             onEdit={editMark}
             onDrawn={finishDrawing}
             onLiveEdit={setLiveMark}
@@ -2523,12 +2561,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 statement the placed mark makes, so pointing and having pointed at speak
                 one language — and it is here for both ways of reading the document, the
                 frame this side can read and the page it only hears from. */}
-            <span className="da-live-hit" style={hoverBoxAt(chip.anchor.bbox, [htmlScroll.x, htmlScroll.y])} />
+            {isHtml ? (
+              <span className="da-live-hit" style={hoverBoxAt(chip.anchor.bbox, [htmlScroll.x, htmlScroll.y])} />
+            ) : null}
             <span className="da-name" style={{ left: chip.left, top: chip.top }}>
               {elementName(chip.anchor, findElement, chip.name)}
             </span>
           </>
         )}
+        guide={pickGuide}
         t={t}
       />
 

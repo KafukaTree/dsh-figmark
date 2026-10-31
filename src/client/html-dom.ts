@@ -18,6 +18,7 @@
 import type { FigureBox, MarkAnchor } from '../shared/annotation'
 import { anchorTextOf } from './anchor-text'
 import { depthBelow, selectorFor } from './dom-path'
+import { anchorAtOffset, type ElementChoices } from './element-choice'
 import { isPaper, pickStack } from './pick'
 
 /**
@@ -280,6 +281,27 @@ function isAnonymousWrapper(element: Element): boolean {
  * @returns the anchor, or undefined when the point names no element.
  */
 export function anchorInDocument(document: Document | null | undefined, x: number, y: number): MarkAnchor | undefined {
+  const choices = elementChoicesInDocument(document, x, y)
+  return choices === undefined ? undefined : anchorAtOffset(choices, 0)
+}
+
+/**
+ * Every element a point in a rendered document can mean.
+ *
+ * The exact painted element is first, then the named block that used to be the only
+ * possible answer, then the blocks that contain it. The default stays the named block
+ * because that is the element a source reader can act on, but the exact element and
+ * its parents are available for the reader to choose before committing.
+ * @param document - the frame's document, or nothing when the frame is gone.
+ * @param x - point x in figure pixels.
+ * @param y - point y in figure pixels.
+ * @returns the ordered choices and the level a plain click takes.
+ */
+export function elementChoicesInDocument(
+  document: Document | null | undefined,
+  x: number,
+  y: number,
+): ElementChoices | undefined {
   if (document === null || document === undefined) return undefined
   const body = document.body
   if (body === null) return undefined
@@ -289,6 +311,7 @@ export function anchorInDocument(document: Document | null | undefined, x: numbe
   const frame = body.getBoundingClientRect()
   const stack = pickStack(document, hitX, hitY)
   if (stack === null) return measureInDocument(body, hitX, hitY)
+  let described: Element | undefined
   let wrapper: Element | undefined
   for (const element of stack) {
     if (!body.contains(element) || element === body) continue
@@ -297,9 +320,37 @@ export function anchorInDocument(document: Document | null | undefined, x: numbe
       wrapper ??= element
       continue
     }
-    return describeInDocument(element, body)
+    described = element
+    break
   }
-  return wrapper === undefined ? undefined : describeInDocument(wrapper, body)
+  described ??= wrapper
+  if (described === undefined) return undefined
+  return choicesAround(described, wrapper, body)
+}
+
+/**
+ * Build a document choice ladder from the exact element and its containing blocks.
+ * @param described - the block a plain click names.
+ * @param wrapper - an anonymous inline descendant under the pointer, if any.
+ * @param body - the document body, excluded from the ladder.
+ * @returns the ordered choices.
+ */
+function choicesAround(described: Element, wrapper: Element | undefined, body: Element): ElementChoices {
+  const elements: [Element, ...Element[]] = [described]
+  if (wrapper !== undefined && wrapper !== described) elements.unshift(wrapper)
+  const root = body.ownerDocument.documentElement
+  for (let parent = described.parentElement;
+    parent !== null && parent !== body && parent !== root;
+    parent = parent.parentElement) {
+    if (!elements.includes(parent)) elements.push(parent)
+  }
+  return {
+    anchors: [
+      describeInDocument(elements[0], body),
+      ...elements.slice(1).map(element => describeInDocument(element, body)),
+    ],
+    preferred: elements.indexOf(described),
+  }
 }
 
 /**
@@ -319,7 +370,7 @@ export function anchorInDocument(document: Document | null | undefined, x: numbe
  * @param y - point y in figure pixels.
  * @returns the element, or undefined when no box contains the point.
  */
-function measureInDocument(body: Element, x: number, y: number): MarkAnchor | undefined {
+function measureInDocument(body: Element, x: number, y: number): ElementChoices | undefined {
   let named: Element | undefined
   let namedArea = Number.POSITIVE_INFINITY
   let namedDepth = -1
@@ -347,7 +398,8 @@ function measureInDocument(body: Element, x: number, y: number): MarkAnchor | un
     }
   }
   const described = named ?? wrapper
-  return described === undefined ? undefined : describeInDocument(described, body)
+  if (described === undefined) return undefined
+  return choicesAround(described, wrapper, body)
 }
 
 /**

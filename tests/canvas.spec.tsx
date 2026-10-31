@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotationMark, FigurePoint, MarkAnchor } from '../src/shared/annotation'
 import { HANDLE_SIZE } from '../src/client/handles'
 import { Canvas, nextMarkId, type MarkPatch, type Tool } from '../src/client/Canvas'
+import type { ElementChoices, PickLevel } from '../src/client/element-choice'
 import { defined, stubRect } from './dom'
 
 /** Options one mounted surface is built from. */
@@ -15,6 +16,7 @@ interface MountOptions {
   readonly anchoring?: boolean
   readonly elementExtent?: 'glow' | 'box'
   readonly anchorAtFigurePoint?: (x: number, y: number) => MarkAnchor | undefined
+  readonly anchorChoicesAtFigurePoint?: (x: number, y: number) => ElementChoices | undefined
   readonly selectedId?: string | null
   readonly container?: HTMLElement | null
   readonly svgSize?: { readonly width: number; readonly height: number }
@@ -25,7 +27,8 @@ interface MountOptions {
   readonly onRemove?: (id: string) => void
   readonly onEdit?: (id: string) => void
   readonly onDrawn?: (id: string) => void
-  readonly onHover?: (anchor: MarkAnchor | undefined) => void
+  readonly onHover?: (anchor: MarkAnchor | undefined, level: PickLevel | undefined) => void
+  readonly onPickMiss?: () => void
   readonly numbering?: ReadonlyMap<string, number>
   readonly onPan?: (dx: number, dy: number) => void
   readonly onPanStart?: () => void
@@ -66,6 +69,9 @@ function mount(options: MountOptions): {
         anchoring={options.anchoring ?? false}
         {...(options.elementExtent === undefined ? {} : { elementExtent: options.elementExtent })}
         {...(options.anchorAtFigurePoint === undefined ? {} : { anchorAtFigurePoint: options.anchorAtFigurePoint })}
+        {...(options.anchorChoicesAtFigurePoint === undefined
+          ? {}
+          : { anchorChoicesAtFigurePoint: options.anchorChoicesAtFigurePoint })}
         selectedId={options.selectedId ?? null}
         onSelect={options.onSelect ?? (() => {})}
         onAdd={options.onAdd ?? (() => {})}
@@ -75,6 +81,7 @@ function mount(options: MountOptions): {
         onEdit={options.onEdit ?? (() => {})}
         onDrawn={options.onDrawn}
         {...(options.onHover === undefined ? {} : { onHover: options.onHover })}
+        {...(options.onPickMiss === undefined ? {} : { onPickMiss: options.onPickMiss })}
         {...(options.onPan === undefined ? {} : { onPan: options.onPan })}
         {...(options.onPanStart === undefined ? {} : { onPanStart: options.onPanStart })}
         {...(options.onPanEnd === undefined ? {} : { onPanEnd: options.onPanEnd })}
@@ -91,6 +98,13 @@ function mount(options: MountOptions): {
 function pointer(target: Element, type: string, clientX: number, clientY: number): void {
   act(() => {
     target.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, clientY }))
+  })
+}
+
+/** Send one keyboard event to the window the picker listens on. */
+function key(key_: string): void {
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: key_, bubbles: true, cancelable: true }))
   })
 }
 
@@ -524,6 +538,15 @@ describe('picking an element', () => {
     bbox: [40, 30, 120, 60],
     selector: '#line2d_10',
   }
+  /** Three levels at one point: exact path, stable artist, containing axes. */
+  const levels: ElementChoices = {
+    anchors: [
+      { tag: 'path', bbox: [40, 30, 120, 60], selector: '#line2d_10 > path:nth-of-type(1)' },
+      anchor,
+      { tag: 'g', id: 'axes_1', bbox: [0, 0, 300, 220], selector: '#axes_1' },
+    ],
+    preferred: 1,
+  }
 
   /** A surface that names `anchor` for every point on the figure. */
   function picking(options: { readonly anchor?: MarkAnchor | undefined } = {}): ReturnType<typeof mount> & { readonly added: AnnotationMark[], readonly drawn: string[], readonly hovered: (MarkAnchor | undefined)[] } {
@@ -769,6 +792,144 @@ describe('picking an element', () => {
     act(() => { mounted?.svg.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(onSelect).toHaveBeenCalledWith('e1')
     expect(onSelect).not.toHaveBeenCalledWith(null)
+  })
+
+  it('reports the selected level and walks toward parent and child with the arrow keys', () => {
+    const hovered: { anchor: MarkAnchor | undefined, level: PickLevel | undefined }[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => levels,
+      onHover: (anchor, level) => { hovered.push({ anchor, level }) },
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    expect(hovered.at(-1)).toEqual({ anchor, level: { level: 2, count: 3 } })
+    // Keys that do not choose a level are left to the rest of the panel.
+    const beforeOtherKey = hovered.length
+    key('Escape')
+    expect(hovered).toHaveLength(beforeOtherKey)
+    key('ArrowDown')
+    expect(hovered.at(-1)?.anchor?.selector).toBe('#line2d_10 > path:nth-of-type(1)')
+    // The exact painted path is the first level, so another child step clamps there.
+    key('ArrowDown')
+    expect(hovered.at(-1)?.level).toEqual({ level: 1, count: 3 })
+    key('ArrowUp')
+    key('ArrowUp')
+    expect(hovered.at(-1)?.anchor?.selector).toBe('#axes_1')
+    expect(hovered.at(-1)?.level).toEqual({ level: 3, count: 3 })
+    // A parent step at the top has nowhere to go and reports nothing new.
+    const before = hovered.length
+    key('ArrowUp')
+    expect(hovered).toHaveLength(before)
+  })
+
+  it('commits the level the reader chose before pressing', () => {
+    const added: AnnotationMark[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => levels,
+      onAdd: mark => added.push(mark),
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    key('ArrowUp')
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(defined(added[0]).anchor?.selector).toBe('#axes_1')
+  })
+
+  it('keeps the chosen level through a reflow but resets on a different element', () => {
+    let found = levels
+    const hovered: MarkAnchor[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => found,
+      onHover: anchor => { if (anchor !== undefined) hovered.push(anchor) },
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    key('ArrowUp')
+    expect(hovered.at(-1)?.selector).toBe('#axes_1')
+    const exactPath: MarkAnchor = { ...defined(levels.anchors[0]), bbox: [41, 31, 120, 60] }
+    const artist: MarkAnchor = { ...defined(levels.anchors[1]), bbox: [41, 31, 120, 60] }
+    const axes: MarkAnchor = { ...defined(levels.anchors[2]), bbox: [1, 1, 300, 220] }
+    const reflowed: [MarkAnchor, ...MarkAnchor[]] = [exactPath, artist, axes]
+    found = { ...levels, anchors: reflowed }
+    pointer(surface.svg, 'pointermove', 62, 52)
+    expect(hovered.at(-1)?.selector).toBe('#axes_1')
+    expect(hovered.at(-1)?.bbox).toEqual([1, 1, 300, 220])
+    found = {
+      anchors: [
+        { tag: 'path', bbox: [1, 1, 2, 2], selector: '#other > path:nth-of-type(1)' },
+        { tag: 'g', id: 'other', bbox: [1, 1, 2, 2], selector: '#other' },
+      ],
+      preferred: 1,
+    }
+    pointer(surface.svg, 'pointermove', 80, 70)
+    expect(hovered.at(-1)?.selector).toBe('#other')
+  })
+
+  it('leaves arrow keys to every kind of field the reader is typing in', () => {
+    const hovered: MarkAnchor[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => levels,
+      onHover: anchor => { if (anchor !== undefined) hovered.push(anchor) },
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    const fields = ['input', 'textarea', 'select'] as const
+    for (const tag of fields) {
+      const field = document.createElement(tag)
+      document.body.append(field)
+      act(() => {
+        field.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+      })
+      expect(hovered.at(-1)?.selector).toBe('#line2d_10')
+    }
+    const editable = document.createElement('div')
+    editable.contentEditable = 'true'
+    // jsdom records the attribute but does not derive HTMLElement.isContentEditable.
+    Object.defineProperty(editable, 'isContentEditable', { value: true })
+    document.body.append(editable)
+    act(() => {
+      editable.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+    })
+    expect(hovered.at(-1)?.selector).toBe('#line2d_10')
+  })
+
+  it('still walks levels when the key event comes from non-editable content', () => {
+    const hovered: MarkAnchor[] = []
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => levels,
+      onHover: anchor => { if (anchor !== undefined) hovered.push(anchor) },
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointermove', 60, 50)
+    const field = document.createElement('div')
+    document.body.append(field)
+    act(() => {
+      field.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
+    })
+    expect(hovered.at(-1)?.selector).toBe('#axes_1')
+  })
+
+  it('reports a picker press that found no element', () => {
+    const onPickMiss = vi.fn()
+    const surface = mount({
+      tool: 'element',
+      anchoring: false,
+      anchorChoicesAtFigurePoint: () => undefined,
+      onPickMiss,
+    })
+    mounted = surface
+    pointer(surface.svg, 'pointerdown', 60, 50)
+    expect(onPickMiss).toHaveBeenCalledTimes(1)
   })
 
   it('reaches the second of two marks naming the same element', () => {
