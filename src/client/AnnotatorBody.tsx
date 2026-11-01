@@ -450,6 +450,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /** A cross-origin page reports the same facts by message; a same-origin one is read. */
   const showing = previewPage === null ? staticShowing : previewShowing
   const drawnMarks = useMemo(() => shownMarksOf(marks, showing), [marks, showing])
+  /** The one mark a temporary hidden-layer reveal has put in front of the page. */
+  const [temporaryMark, setTemporaryMark] = useState<AnnotationMark | null>(null)
   const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null)
   /**
    * The selection, kept by the owner when there is one.
@@ -475,6 +477,17 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     if (props.onSelectedIdChange === undefined) setOwnSelectedId(value)
     else props.onSelectedIdChange(value)
   }, [props.onSelectedIdChange])
+  /**
+   * What the overlay may draw while a temporary reveal is open.
+   *
+   * A cover can be lifted over a slide without changing which slide the page reports
+   * as live. The slide's elements are then still visible to their own surface and
+   * bounds measurements, but they are underneath the cover the reader asked to see.
+   */
+  const visibleMarks = useMemo(() => {
+    if (temporaryMark === null) return drawnMarks
+    return [drawnMarks.find(candidate => candidate.id === temporaryMark.id) ?? temporaryMark]
+  }, [drawnMarks, temporaryMark])
   /** The mark whose detail box should take the caret once it is on screen. */
   const [focusId, setFocusId] = useState<string | null>(null)
   /**
@@ -1545,7 +1558,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // A row can still be opened after the live element has gone away (a closed
     // cover, a removed tab). Keep its comment reachable at the last recorded box;
     // the visible-page copy still wins whenever there is one.
-    const mark = drawnMarks.find(candidate => candidate.id === selectedId)
+    const mark = visibleMarks.find(candidate => candidate.id === selectedId)
       ?? marks.find(candidate => candidate.id === selectedId)
     const drawn = liveMark !== null && liveMark.id === selectedId ? liveMark : mark
     const box = drawn === undefined ? undefined : markOutline(drawn, unit)
@@ -1590,7 +1603,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // idempotent, so a measured height that did not move re-renders nothing. It also
     // moves when the page turns, which is what keeps the pill off the slide that just
     // came up with a mark belonging to another one.
-  }, [drawnMarks, figure, htmlScroll, liveMark, marks, palette, scale, selectedId, size, unit])
+  }, [figure, htmlScroll, liveMark, marks, palette, scale, selectedId, size, unit, visibleMarks])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -1928,7 +1941,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     readonly count?: number
   } | null>(null)
   /** The list row whose live-page reveal is waiting for the page's answer. */
-  const pendingReveal = useRef<{ readonly id: string; readonly markId: string } | null>(null)
+  const pendingReveal = useRef<{ readonly id: string; readonly mark: AnnotationMark } | null>(null)
   /** Opaque token and timeout for that one reveal request. */
   const revealSerial = useRef(0)
   const revealTimer = useRef<number | null>(null)
@@ -2112,8 +2125,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       return
     }
     if (!hadSelectedMark.current) return
+    // Turning toward another slide clears the old selection before the new mark
+    // arrives. Releasing while that reveal is in flight would invalidate its request
+    // in the picker, so leave restoration to the answer (or the timeout).
+    if (pendingReveal.current !== null) {
+      hadSelectedMark.current = false
+      return
+    }
     hadSelectedMark.current = false
     temporaryReveal.current = null
+    setTemporaryMark(null)
     releasePicker(previewPage.url)
   }, [previewPage, releasePicker, selectedId])
 
@@ -2148,21 +2169,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         }
         if (reported.status === 'revealed') {
           temporaryReveal.current = reported.temporary === true
-            ? { markId: pending.markId, surface: reported.surface ?? null }
+            ? { markId: pending.mark.id, surface: reported.surface ?? null }
             : null
-          setSelectedId(pending.markId)
+          setTemporaryMark(reported.temporary === true ? pending.mark : null)
+          setSelectedId(pending.mark.id)
           // The list hangs over the element it just found. Once the page has
           // confirmed the destination, get out of the way so the reader can see it.
           setOpenPanel(null)
         } else if (reported.status === 'hidden') {
           temporaryReveal.current = null
+          setTemporaryMark(null)
           // The element may belong to a state the page has since closed. The mark
           // still has a comment to edit, so open it at its recorded box instead of
           // making the list row feel inert.
-          setSelectedId(pending.markId)
+          setSelectedId(pending.mark.id)
           setOpenPanel(null)
         } else {
           temporaryReveal.current = null
+          setTemporaryMark(null)
           setStatus({ tone: 'info', text: t(`reveal_${reported.status}`) })
           setSelectedId(null)
         }
@@ -3242,10 +3266,12 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       const requestId = `${Date.now().toString(36)}-${(revealSerial.current += 1).toString(36)}`
       const view = frameRef.current?.contentWindow
       temporaryReveal.current = null
-      pendingReveal.current = { id: requestId, markId: mark.id }
+      setTemporaryMark(null)
+      pendingReveal.current = { id: requestId, mark }
       if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
       revealTimer.current = window.setTimeout(() => {
         pendingReveal.current = null
+        setTemporaryMark(null)
         setSelectedId(null)
         setStatus({ tone: 'info', text: t('reveal_timeout') })
         releasePicker(previewPage.url)
@@ -3562,6 +3588,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                   onClick={() => {
                     pendingReveal.current = null
                     temporaryReveal.current = null
+                    setTemporaryMark(null)
                     revealSerial.current += 1
                     if (revealTimer.current !== null) {
                       window.clearTimeout(revealTimer.current)
@@ -3669,7 +3696,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             figureSize={size}
             // Only the marks of the page in front: a document's other pages are still
             // this document's marks, but they are not about the page being looked at.
-            marks={drawnMarks}
+            marks={visibleMarks}
             tool={tool}
             color={color}
             weight={weight}

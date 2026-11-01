@@ -5533,6 +5533,83 @@ describe('a rendered document', () => {
       })
     })
 
+    it('draws only the mark a temporary cover reveal asked to show', async () => {
+      mounted = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'cover', kind: 'element', color: '#e03131', points: [[0, 0], [300, 80]],
+              detail: '封面标题',
+              anchor: { tag: 'h1', id: 'cover', selector: '#cover', text: '封面标题', bbox: [0, 0, 300, 80] },
+            },
+            {
+              id: 'slide', kind: 'element', color: '#1971c2', points: [[20, 100], [260, 40]],
+              detail: '第一页标题', surface: '#s1',
+              anchor: {
+                tag: 'h2', id: 'title', selector: '#title', text: '第一页标题',
+                bbox: [20, 100, 240, 40],
+              },
+            },
+          ],
+        },
+      })
+      await report({ kind: 'surface', selector: '#s1' })
+      const bounds = [
+        { selector: '#cover', bbox: [0, 0, 300, 80], visible: true },
+        { selector: '#title', bbox: [20, 100, 240, 40], visible: true },
+      ] as const
+      await report({ kind: 'bounds', bounds })
+      expect(boxedIds()).toEqual(['cover', 'slide'])
+
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await openList(document.body)
+      await click(defined(document.querySelectorAll('.da-mark-text')[1]))
+      const slideRequest = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: slideRequest['requestId'],
+        status: 'revealed',
+        surface: '#s1',
+      })
+      expect(boxedIds()).toEqual(['cover', 'slide'])
+
+      await openList(document.body)
+      await click(defined(document.querySelector('.da-mark-text')))
+      const coverRequest = defined(posted.filter(message => message['kind'] === 'reveal').at(-1))
+      await report({
+        kind: 'reveal-result',
+        requestId: coverRequest['requestId'],
+        status: 'revealed',
+        surface: '#s1',
+        temporary: true,
+      })
+      // The cover is now the page state the reader asked to inspect. The title on
+      // the slide underneath still measures as visible, but it belongs to a
+      // different layer and must not leave a box on the cover.
+      expect(boxedIds()).toEqual(['cover'])
+      await report({ kind: 'bounds', bounds })
+      expect(boxedIds()).toEqual(['cover'])
+      // A late measurement may still call the temporarily lifted cover hidden. Its
+      // recorded box is the useful fallback while the cover is what the list opened.
+      await report({
+        kind: 'bounds',
+        bounds: [
+          { selector: '#cover', bbox: [0, 0, 0, 0], visible: false },
+          { selector: '#title', bbox: [20, 100, 240, 40], visible: true },
+        ],
+      })
+      expect(boxedIds()).toEqual(['cover'])
+      await report({ kind: 'bounds', bounds })
+
+      await pressKey('Escape', { bare: true })
+      expect(boxedIds()).toEqual(['cover', 'slide'])
+    })
+
     it('asks the page to reveal a mark and selects it only after the page agrees', async () => {
       mounted = await serviceBody()
       await click(button(document.body, zh.toolElement))
@@ -5577,6 +5654,59 @@ describe('a rendered document', () => {
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')[0]?.getAttribute('data-selected')).toBe('true')
       expect(document.querySelectorAll('.da-mark')[1]?.getAttribute('data-selected')).toBe('false')
+    })
+
+    it('keeps a reveal alive when the page turn clears the previous selection', async () => {
+      mounted = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'first-page', kind: 'element', color: '#e03131', points: [[20, 30], [240, 60]],
+              detail: '第一页', surface: '#s1',
+              anchor: { tag: 'p', id: 'lead', selector: '#lead', text: '第一页', bbox: [20, 30, 220, 30] },
+            },
+            {
+              id: 'second-page', kind: 'element', color: '#1971c2', points: [[30, 40], [260, 70]],
+              detail: '第二页', surface: '#s2',
+              anchor: { tag: 'h2', id: 'back', selector: '#back', text: '第二页', bbox: [30, 40, 230, 30] },
+            },
+          ],
+        },
+      })
+      await report({ kind: 'surface', selector: '#s1' })
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+
+      await openList(document.body)
+      await click(defined(document.querySelectorAll('.da-mark-text')[0]))
+      const firstRequest = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: firstRequest['requestId'],
+        status: 'revealed',
+        surface: '#s1',
+      })
+
+      await openList(document.body)
+      await click(defined(document.querySelectorAll('.da-mark-text')[1]))
+      const secondRequest = defined(posted.filter(message => message['kind'] === 'reveal').at(-1))
+      // The picker turns the deck before it measures the destination. That surface
+      // change clears the old row, but it must not abort the reveal still in flight.
+      await report({ kind: 'surface', selector: '#s2' })
+      expect(posted).not.toContainEqual({ figmark: LIVE_MESSAGE, kind: 'release-reveal' })
+      await report({
+        kind: 'reveal-result',
+        requestId: secondRequest['requestId'],
+        status: 'revealed',
+        surface: '#s2',
+      })
+      expect(document.querySelector('.da-float-list')).toBeNull()
+      expect((defined(document.querySelector('.da-float-detail textarea')) as HTMLTextAreaElement).value)
+        .toBe('第二页')
     })
 
     it('ignores stale reveal answers, clears a rejected reveal, and dismisses on cancel', async () => {
