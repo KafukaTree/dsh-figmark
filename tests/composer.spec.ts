@@ -415,6 +415,7 @@ describe('parking an annotation above the composer', () => {
       target: '',
       instruction: '',
       html: false,
+      pageCapture: 'none',
       marks: [],
     })
     expect(parked.raw).toContain('【附图标注】')

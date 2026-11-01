@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   anchorOfPick, closeLivePage, discoverLiveServices, liveAddressOf, loopbackAddressOf,
-  liveScreenshotMarks, openLivePage, pickName,
+  liveMarksNeedScreenshot, liveScreenshotMarks, openLivePage, pickName,
   shownAddress, type LivePage,
 } from '../src/client/live-page'
 import { AnnotatorHostError } from '../src/client/host-api'
@@ -245,6 +245,64 @@ describe('choosing the marks in one live screenshot', () => {
     )
     expect(found.map(mark => mark.id)).toEqual(['live'])
     expect(found[0]?.points).toEqual([[40, 50], [240, 130]])
+  })
+
+  it('asks for a screenshot only when a mark has drawn geometry', () => {
+    const pick = element('pick', '#pick', [10, 20, 30, 40])
+    const pin: AnnotationMark = {
+      id: 'pin',
+      kind: 'point',
+      color: '#1971c2',
+      points: [[15, 25]],
+    }
+    const arrow: AnnotationMark = {
+      id: 'arrow',
+      kind: 'arrow',
+      color: '#1971c2',
+      points: [[10, 20], [80, 90]],
+    }
+    expect(liveMarksNeedScreenshot([])).toBe(false)
+    expect(liveMarksNeedScreenshot([pick])).toBe(false)
+    expect(liveMarksNeedScreenshot([pick, pin])).toBe(false)
+    expect(liveMarksNeedScreenshot([pick, arrow])).toBe(true)
+    expect(liveMarksNeedScreenshot([arrow], '#slide-1')).toBe(true)
+    expect(liveMarksNeedScreenshot([arrow], '#slide-1', [0, 0])).toBe(true)
+    expect(liveMarksNeedScreenshot(
+      [{ ...arrow, surface: '#slide-2' }],
+      '#slide-1',
+      [0, 0],
+      [800, 600],
+    )).toBe(false)
+    expect(liveMarksNeedScreenshot(
+      [{ ...arrow, points: [[900, 700], [940, 740]], surface: '#slide-1' }],
+      '#slide-1',
+      [0, 0],
+      [800, 600],
+    )).toBe(false)
+    expect(liveMarksNeedScreenshot(
+      [{ ...arrow, surface: '#slide-1' }],
+      '#slide-1',
+      [0, 0],
+      [800, 600],
+    )).toBe(true)
+    expect(liveMarksNeedScreenshot(
+      [arrow],
+      '#slide-1',
+      [0, 0],
+      [800, 600],
+    )).toBe(false)
+    expect(liveMarksNeedScreenshot(
+      [arrow],
+      null,
+      [0, 0],
+      [800, 600],
+    )).toBe(true)
+    expect(liveMarksNeedScreenshot(
+      [{ ...arrow, anchor: { tag: 'h1', bbox: [10, 20, 80, 70], selector: '#title' } }],
+      '#slide-1',
+      [0, 0],
+      [800, 600],
+    )).toBe(true)
   })
 
   it('keeps unscoped marks that touch the window and drops those beyond it', () => {

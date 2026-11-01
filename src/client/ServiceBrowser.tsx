@@ -56,6 +56,32 @@ export interface ServiceBrowserInjected {
   readonly conversation: ComposerLike | undefined
   /** Host gesture face for the page context menu. */
   readonly remote: RemoteLike | undefined
+  /**
+   * The tab's framework-bound reader, supplied by the sidebar shell.
+   *
+   * Kept optional so the browser can also be mounted directly in tests or by a host
+   * that does not expose tab navigation.
+   */
+  readonly useTabInfo?: (() => TabInfoLike) | undefined
+}
+
+/** The one navigation field this page type consumes. */
+interface TabInfoLike {
+  readonly tab: {
+    readonly navigation: TabNavigationLike
+  }
+}
+
+/** One navigation request delivered to the mounted page type. */
+interface TabNavigationLike {
+  readonly revision: number
+  readonly params: unknown
+}
+
+/** A page to open after the browser has processed its latest navigation request. */
+interface NavigationSeed {
+  readonly key: string
+  readonly address: string
 }
 
 /** A live-page workspace whose marks survive while another tab is in front. */
@@ -83,6 +109,17 @@ function sessionName(workspace: LiveWorkspace): string {
   return path === '/' ? endpointOf(workspace.address) : path
 }
 
+/**
+ * Read the live address a navigation request carries.
+ * @param params - the tab body's opaque navigation parameters.
+ * @returns the address, when this request names one.
+ */
+function seededAddress(params: unknown): string | undefined {
+  if (typeof params !== 'object' || params === null) return undefined
+  const url = (params as Record<string, unknown>)['url']
+  return typeof url === 'string' && loopbackAddressOf(url) !== undefined ? url : undefined
+}
+
 /** The one mounted live annotator, given stable owner callbacks. */
 function ActiveLiveBody(props: ServiceBrowserInjected & {
   readonly workspace: LiveWorkspace
@@ -92,6 +129,7 @@ function ActiveLiveBody(props: ServiceBrowserInjected & {
   readonly onDraft: (workspaceId: string, address: string, draft: SurfaceDraft) => void
   readonly onSummary: (workspaceId: string, address: string, summary: string) => void
   readonly refreshToken: number
+  readonly hidden: boolean
 }): ReactNode {
   const { id: workspaceId } = props.workspace
   const { address } = props.page
@@ -105,7 +143,7 @@ function ActiveLiveBody(props: ServiceBrowserInjected & {
     [address, onSummary, workspaceId],
   )
   return (
-    <div className="da-service-live">
+    <div className="da-service-live" hidden={props.hidden}>
       <AnnotatorBody
         key={workspaceId}
         livePage={props.page}
@@ -185,6 +223,24 @@ function looksLikeAddress(input: string): boolean {
  * @returns the service picker, or the annotated live page.
  */
 export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
+  const { useTabInfo, ...rest } = props
+  if (useTabInfo === undefined) return <ServiceBrowserBody {...rest} />
+  return <NavigatedServiceBrowser {...rest} useTabInfo={useTabInfo} />
+}
+
+/** Read the shell hook from one component that is mounted only when it exists. */
+function NavigatedServiceBrowser(props: Omit<ServiceBrowserInjected, 'useTabInfo'> & {
+  readonly useTabInfo: () => TabInfoLike
+}): ReactNode {
+  const navigation = props.useTabInfo().tab.navigation
+  return <ServiceBrowserBody {...props} navigation={navigation} />
+}
+
+/** The browser body, with the shell's navigation request separated from its hook. */
+function ServiceBrowserBody(props: ServiceBrowserInjected & {
+  readonly navigation?: TabNavigationLike | undefined
+}): ReactNode {
+  const navigation = props.navigation
   const t = useCallback((key: string): string => fallbackTranslate(props.localeId, key), [props.localeId])
   const [services, setServices] = useState<readonly ServiceSummary[]>([])
   const [query, setQuery] = useState('')
@@ -208,6 +264,10 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
   const activeDraft = useRef<LiveDraft>(EMPTY_LIVE_DRAFT)
   /** One debounced storage write per address. */
   const draftTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  /** The last navigation request this body has already seen. */
+  const openedNavigation = useRef<string | null>(null)
+  /** A valid request parked while another page is opening. */
+  const pendingNavigation = useRef<NavigationSeed | null>(null)
 
   useEffect(() => { ensureStyles(document) }, [])
   useEffect(() => () => {
@@ -245,6 +305,8 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     setActiveWorkspaceId(null)
     setShowingList(true)
     setRefreshToken(0)
+    openedNavigation.current = null
+    pendingNavigation.current = null
     activeDraft.current = EMPTY_LIVE_DRAFT
     setLiveDraft(EMPTY_LIVE_DRAFT)
     for (const timer of draftTimers.current.values()) clearTimeout(timer)
@@ -303,12 +365,12 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     text: string,
     title?: string,
     wantedWorkspaceId?: string,
-  ): Promise<void> => {
-    if (openingRef.current) return
+  ): Promise<boolean> => {
+    if (openingRef.current) return false
     const address = loopbackAddressOf(text)
     if (address === undefined) {
       setError(t('serviceBadAddress'))
-      return
+      return false
     }
     const known = wantedWorkspaceId === undefined
       ? workspaces.find(workspace => workspace.address === address)
@@ -329,7 +391,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
           // frame it, so close it instead of leaving a loopback listener behind.
           await closeLivePage(outcome.page.url).catch(() => { /* the Host may already have replaced it. */ })
         }
-        return
+        return true
       }
       if ('page' in outcome) {
         remember(address)
@@ -366,6 +428,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
       } else {
         setError(outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason))
       }
+      return true
     } finally {
       if (openGeneration.current === generation) {
         openingRef.current = false
@@ -374,8 +437,34 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     }
   }, [props.sessionId, remember, t, workspaces])
 
+  useEffect(() => {
+    if (navigation === undefined) return
+    const key = `${navigation.revision}:${seededAddress(navigation.params) ?? ''}`
+    if (key === openedNavigation.current) return
+    openedNavigation.current = key
+    const address = seededAddress(navigation.params)
+    if (address !== undefined) pendingNavigation.current = { key, address }
+  }, [navigation])
+
+  useEffect(() => {
+    const pending = pendingNavigation.current
+    if (pending === null) return
+    const known = workspaces.find(workspace => workspace.address === pending.address)
+    if (known !== undefined
+      && runtime?.workspaceId === known.id
+      && runtime.page.address === pending.address) {
+      pendingNavigation.current = null
+      setActiveWorkspaceId(known.id)
+      setShowingList(false)
+      setError(null)
+      return
+    }
+    if (opening || openingRef.current) return
+    pendingNavigation.current = null
+    void openWorkspace(pending.address)
+  }, [navigation, opening, openWorkspace, runtime, workspaces])
+
   const backToList = useCallback((): void => {
-    setRuntime(null)
     setShowingList(true)
     void scan()
   }, [scan])
@@ -442,7 +531,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
               <path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h7M3 4.5h.01M3 8h.01M3 11.5h.01" />
             </svg>
           </button>
-          {runtime === null ? null : (
+          {runtime === null || listVisible ? null : (
             <button type="button" className="da-service-refresh"
               disabled={opening}
               aria-label={t('liveRefresh')}
@@ -568,6 +657,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
             onDraft={rememberDraft}
             onSummary={rememberSummary}
             refreshToken={refreshToken}
+            hidden={listVisible}
           />
         ) : null}
       </div>

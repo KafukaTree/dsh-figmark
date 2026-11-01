@@ -384,10 +384,11 @@ describe('browser entry', () => {
     const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
       readonly sessionId: string
       readonly localeId: string
-      readonly open: (path: string) => void
+      readonly open: (path: string, html: boolean) => boolean
+      readonly canOpen: (path: string, html: boolean) => boolean
     }
     const injected = factory('s7')
-    expect(Object.keys(injected).sort()).toEqual(['localeId', 'open', 'sessionId'])
+    expect(Object.keys(injected).sort()).toEqual(['canOpen', 'localeId', 'open', 'sessionId'])
     expect(injected.sessionId).toBe('s7')
     expect(injected.localeId).toBe('en-US')
   })
@@ -421,31 +422,109 @@ describe('browser entry', () => {
 
   it('opens the annotated figure as a Session file the Sidebar can place', () => {
     const opened: string[] = []
-    const stub = stubContext({ sidebarRight: { openResource: (address: string) => { opened.push(address) } } })
+    const tabs: string[] = []
+    const stub = stubContext({
+      sidebarRight: {
+        openResource: (address: string) => { opened.push(address) },
+        openTab: (kind: string, options?: { readonly params?: { readonly url?: string } }) => {
+          tabs.push(`${kind}:${options?.params?.url ?? ''}`)
+        },
+      },
+    })
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
-    factory('s1').open('/w/fig.svg')
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+    }
+    factory('s1').open('/w/fig.svg', false)
     // A Session-relative address, because that is the only kind the document panel
     // resolves: an absolute one is refused before it can be placed in a column.
     expect(opened).toEqual(['dsh-resource://file/session/s1//w/fig.svg'])
+    expect(tabs).toEqual([])
+  })
+
+  it('returns a live annotation to the local-pages tab instead of opening its URL as a file', () => {
+    const opened: string[] = []
+    const tabs: string[] = []
+    const stub = stubContext({
+      sidebarRight: {
+        openResource: (address: string) => { opened.push(address) },
+        openTab: (kind: string, options?: { readonly params?: { readonly url?: string } }) => {
+          tabs.push(`${kind}:${options?.params?.url ?? ''}`)
+        },
+      },
+    })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+    }
+    factory('s1').open('http://127.0.0.1:8811/deck/index.html?clean=1', true)
+    expect(tabs).toEqual([`${SERVICE_KIND}:http://127.0.0.1:8811/deck/index.html?clean=1`])
+    expect(opened).toEqual([])
   })
 
   it('shows the card without a Sidebar rather than failing the bubble', () => {
     const stub = stubContext()
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+      canOpen: (path: string, html: boolean) => boolean
+    }
     // Nothing to click through to is not an error: the card still says what it is.
-    expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
+    expect(factory('s1').canOpen('/w/fig.svg', false)).toBe(false)
+    expect(() => { factory('s1').open('/w/fig.svg', false) }).not.toThrow()
   })
 
   it('keeps a refusal to open out of the transcript', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const stub = stubContext({ sidebarRight: { openResource: () => { throw new Error('no mounted session') } } })
     apply(stub.ctx)
-    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => { open: (path: string) => void }
-    expect(() => { factory('s1').open('/w/fig.svg') }).not.toThrow()
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+    }
+    expect(() => { factory('s1').open('/w/fig.svg', false) }).not.toThrow()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it('does not route a live page through the broken file fallback when openTab is absent', () => {
+    const opened: string[] = []
+    const stub = stubContext({
+      sidebarRight: { openResource: (address: string) => { opened.push(address) } },
+    })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+      canOpen: (path: string, html: boolean) => boolean
+    }
+    const path = 'http://127.0.0.1:8811/deck/index.html'
+    expect(factory('s1').canOpen(path, true)).toBe(false)
+    expect(factory('s1').open(path, true)).toBe(false)
+    expect(opened).toEqual([])
+  })
+
+  it('does not offer a card whose Session or subject is empty', () => {
+    const stub = stubContext({
+      sidebarRight: { openResource: () => {} },
+    })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      canOpen: (path: string, html: boolean) => boolean
+    }
+    expect(factory('').canOpen('/w/fig.svg', false)).toBe(false)
+    expect(factory('s1').canOpen('', false)).toBe(false)
+  })
+
+  it('uses the HTML annotation type, not merely an HTTP-looking path, to find a live page', () => {
+    const opened: string[] = []
+    const stub = stubContext({
+      sidebarRight: { openResource: (address: string) => { opened.push(address) } },
+    })
+    apply(stub.ctx)
+    const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
+      open: (path: string, html: boolean) => boolean
+    }
+    factory('s1').open('http://127.0.0.1:8811/export.svg', false)
+    expect(opened).toEqual(['dsh-resource://file/session/s1/http://127.0.0.1:8811/export.svg'])
   })
 
   it('draws nothing into the transcript when the conversation package is absent', () => {

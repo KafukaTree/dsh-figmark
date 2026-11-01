@@ -5068,6 +5068,7 @@ describe('a rendered document', () => {
       await go('localhost:5173')
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
         configurable: true,
         value: () => {},
@@ -5245,6 +5246,7 @@ describe('a rendered document', () => {
       await report({ kind: 'pick', ...PICKED })
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      await drawOnDocument(document.body)
       answerCapture()
       await click(button(document.body, zh.sendToAgent))
       const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
@@ -5304,6 +5306,7 @@ describe('a rendered document', () => {
       await go('localhost:5173')
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       answerCapture()
       await click(button(document.body, zh.sendToAgent))
       // Nothing was written: what the reader marked is a page, not a file beside it.
@@ -5577,7 +5580,7 @@ describe('a rendered document', () => {
       expect(document.querySelector('.da-live-back')).toBeNull()
     })
 
-    it('picks an element, lists its source signature, and sends without a sidecar write', async () => {
+    it('sends element and pin marks without paying for a screenshot', async () => {
       const { sessions, prompts } = stubSessions()
       const result = await serviceBody({ sessions })
       mounted = result
@@ -5588,14 +5591,23 @@ describe('a rendered document', () => {
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
       expect(document.querySelector('.da-mark-title')?.textContent).toBe('<p#lead.lead.intro = "第一段">')
-      answerCapture()
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
       await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
       expect(result.calls.filter(call =>
         call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
       const parts = defined(prompts[0]) as { readonly type?: string; readonly text?: string }[]
-      expect(parts[0]?.type).toBe('image')
-      expect(parts[1]?.text).toContain(SERVICE_ADDRESS)
-      expect(parts[1]?.text).toContain('当前页面截图已随消息发送')
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.type).toBe('text')
+      expect(parts[0]?.text).toContain(SERVICE_ADDRESS)
+      expect(parts[0]?.text).not.toContain('当前页面截图')
+      expect(posted.some(message => message['kind'] === 'capture')).toBe(false)
     })
 
     it('stages a live screenshot as a real composer attachment', async () => {
@@ -5618,6 +5630,7 @@ describe('a rendered document', () => {
       mounted = await serviceBody({ sessions, conversation })
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       answerCapture()
       await click(button(document.body, zh.sendToComposer))
       await act(async () => {
@@ -5631,12 +5644,13 @@ describe('a rendered document', () => {
     })
 
     it('settles the capture wait as soon as a malformed answer names its request', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       vi.useFakeTimers()
       try {
-        const { sessions, prompts } = stubSessions()
-        mounted = await serviceBody({ sessions })
-        await click(button(document.body, zh.toolElement))
-        await report({ kind: 'pick', ...PICKED })
         const view = defined(frame().contentWindow)
         const posted: Record<string, unknown>[] = []
         Object.defineProperty(view, 'postMessage', {
@@ -5666,6 +5680,7 @@ describe('a rendered document', () => {
       mounted = await serviceBody({ sessions })
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       answerCapture({ status: 'failed', reason: 'canvas refused' })
       await click(button(document.body, zh.sendToAgent))
       await act(async () => {
@@ -5684,6 +5699,7 @@ describe('a rendered document', () => {
       mounted = await serviceBody({ sessions })
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       const view = defined(frame().contentWindow)
       const post = view.postMessage.bind(view)
       Object.defineProperty(view, 'postMessage', {
@@ -5708,6 +5724,7 @@ describe('a rendered document', () => {
       mounted = await serviceBody({ sessions })
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       Object.defineProperty(frame(), 'contentWindow', { configurable: true, value: null })
       await click(button(document.body, zh.sendToAgent))
       await act(async () => {
@@ -5725,6 +5742,7 @@ describe('a rendered document', () => {
       mounted = await serviceBody({ sessions })
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       answerCapture()
       await click(button(document.body, zh.sendToAgent))
       await act(async () => {
@@ -5737,12 +5755,13 @@ describe('a rendered document', () => {
     })
 
     it('stops waiting for a screenshot that the page never answers', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       vi.useFakeTimers()
       try {
-        const { sessions, prompts } = stubSessions()
-        mounted = await serviceBody({ sessions })
-        await click(button(document.body, zh.toolElement))
-        await report({ kind: 'pick', ...PICKED })
         Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
           configurable: true,
           value: () => {},
@@ -5767,6 +5786,7 @@ describe('a rendered document', () => {
       mounted = result
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      await drawOnDocument(document.body)
       Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
         configurable: true,
         value: () => {},

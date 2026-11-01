@@ -122,7 +122,7 @@ export interface ParkInput {
   /** Marked pages that travel as image parts when there is no whole-file upload. */
   readonly pageImages?: number | undefined
   /** Whether the current live-page picture travelled with this parked review. */
-  readonly pageCapture?: 'none' | 'attached' | 'failed' | undefined
+  readonly pageCapture?: 'none' | 'omitted' | 'attached' | 'failed' | undefined
   /** Message language. */
   readonly locale: SummaryLocale
   /** Hand the message to the session directly, for when nothing could be armed. */
@@ -499,6 +499,7 @@ export function parkInComposer(input: ParkInput): void {
       target: '',
       instruction: '',
       html: false,
+      pageCapture: 'none',
       marks: [],
     },
     raw: message,

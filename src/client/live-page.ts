@@ -226,6 +226,47 @@ export function pickName(picked: LivePick): string {
 }
 
 /**
+ * Whether a live review needs a screenshot.
+ *
+ * A pin carries its own coordinate, and a picker mark carries the element's selector
+ * and live box. The text is enough to act on both without making the reader wait for
+ * a DOM render and PNG encode. A drawn arrow, region, or stroke is the case where the
+ * shape itself is evidence the words cannot reproduce.
+ * When the current surface, scroll, and viewport are known, marks belonging to
+ * another surface and marks outside the visible window are excluded. The post-capture
+ * pass uses those facts so a drawing on slide two does not cause a screenshot of
+ * slide three.
+ * @param marks - the marks being delivered.
+ * @param surface - the current logical surface, when the page reports one.
+ * @param scroll - the frame's current scroll offset.
+ * @param viewport - the frame's current visible size.
+ * @returns true when at least one visible mark has drawn geometry.
+ */
+export function liveMarksNeedScreenshot(
+  marks: readonly AnnotationMark[],
+  surface?: string | null,
+  scroll?: readonly [number, number],
+  viewport?: readonly [number, number],
+): boolean {
+  return marks.some(mark => {
+    if (mark.kind === 'point' || mark.kind === 'element') return false
+    if (surface === undefined || scroll === undefined || viewport === undefined) return true
+    if (mark.surface !== undefined) {
+      if (mark.surface !== surface) return false
+    } else if (surface !== null && mark.anchor?.selector === undefined) {
+      return false
+    }
+    return touchesViewport(
+      mark.points,
+      scroll[0],
+      scroll[1],
+      scroll[0] + viewport[0],
+      scroll[1] + viewport[1],
+    )
+  })
+}
+
+/**
  * The marks that belong in one screenshot of a live page.
  *
  * The page's bounds are read at capture time, because an element can move after the

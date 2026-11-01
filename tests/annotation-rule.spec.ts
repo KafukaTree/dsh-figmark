@@ -147,6 +147,32 @@ describe('the annotation rule', () => {
     expect(block?.data.target).toBe('')
   })
 
+  it('reads the live-page screenshot state for the card', () => {
+    const rendered: AnnotationDocument = {
+      ...FIGURE,
+      figure: { ...FIGURE.figure, mediaType: 'text/html', path: '/w/page.html' },
+      marks: [{
+        id: 'p1',
+        kind: 'point',
+        color: '#1971c2',
+        points: [[1, 2]],
+        surface: 'section:nth-of-type(2)',
+        detail: '这里',
+      }],
+    }
+    const states = [
+      ['omitted', '本次未附页面截图'],
+      ['failed', '当前页面截图未能生成'],
+      ['attached', '当前页面截图已随消息发送'],
+    ] as const
+    for (const locale of ['zh', 'en'] as const) {
+      for (const [state] of states) {
+        const text = buildAnnotationMessage(rendered, NO_PATHS, locale, false, 0, state)
+        expect(matchAnnotation(text, 0)?.data.pageCapture).toBe(state)
+      }
+    }
+  })
+
   it('finds the second block after the first, and nothing after the last', () => {
     const first = buildAnnotationMessage(FIGURE, NO_PATHS, 'zh', false)
     const second = message(LINE)

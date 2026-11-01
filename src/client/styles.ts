@@ -896,6 +896,8 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
 .da-card-type{flex:0 0 auto;padding:0 5px;border-radius:4px;background:var(--da-accent-soft,rgba(23,109,242,.14));
   color:var(--da-accent,#176df2);font-size:8.5px;font-weight:750;line-height:15px;letter-spacing:.06em}
+.da-card-capture{flex:0 0 auto;padding:0 5px;border-radius:4px;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
+  color:var(--dsw-alias-label-tertiary,inherit);font-size:8.5px;font-weight:650;line-height:15px}
 .da-card-scope{display:flex;align-items:center;gap:6px;min-width:0;font-size:10px;line-height:1.35;
   color:var(--dsw-alias-label-tertiary,inherit)}
 .da-card-meta{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
@@ -980,6 +982,8 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 .da-staged-title{min-width:0;flex:1 1 auto;font-size:11.5px;font-weight:650;line-height:1.3;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-staged-capture{flex:0 0 auto;font-size:8.5px;font-weight:650;line-height:1.3;
+  color:var(--dsw-alias-label-tertiary,inherit);white-space:nowrap}
 .da-staged-count{flex:0 0 auto;min-width:16px;padding:0 4px;border-radius:99px;font-size:9px;line-height:15px;
   text-align:center;font-weight:700;font-variant-numeric:tabular-nums;
   background:var(--dsw-alias-bg-layer-3,rgba(0,0,0,.06));color:var(--da-accent,#176df2);

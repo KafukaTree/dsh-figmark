@@ -10,6 +10,7 @@ const data: FigmarkAnnotation = {
   target: '',
   instruction: '逐条改生成源。',
   html: false,
+  pageCapture: 'none' as const,
   marks: [],
 }
 

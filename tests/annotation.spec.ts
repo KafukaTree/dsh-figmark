@@ -821,6 +821,21 @@ describe('model-facing summary', () => {
     expect(describeMarks(paged(), 'en')[1]).toContain('page 3 arrow 1')
   })
 
+  it('names the logical surface so a pin stays locatable without a screenshot', () => {
+    const mark: AnnotationMark = {
+      id: 'p',
+      kind: 'point',
+      color: '#1971c2',
+      points: [[12, 24]],
+      surface: 'section:nth-of-type(2)',
+      detail: '这里继续',
+    }
+    expect(describeMark(mark, 1, 'zh'))
+      .toBe('单点1 位于 (12,24)（surface: section:nth-of-type(2)），批注：这里继续')
+    expect(describeMark(mark, 1, 'en'))
+      .toBe('point 1 at (12,24) (surface: section:nth-of-type(2)), note: 这里继续')
+  })
+
   it('names the element a mark on a rendered document points at', () => {
     const mark: AnnotationMark = {
       id: 'h1',

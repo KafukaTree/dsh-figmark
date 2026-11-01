@@ -29,6 +29,7 @@ import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
 import { HtmlPreviewBody } from './html-preview'
 import { NAMESPACE, en, zh } from './locales'
+import { loopbackAddressOf } from './live-page'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
 import { PendingCard } from './pending-card'
@@ -131,13 +132,49 @@ interface PendingInjected {
 /** The Sidebar's navigation controller, as far as a card needs it. */
 interface SidebarRightLike {
   openResource(address: string): void
+  /**
+   * Open a registered page type, such as the local-pages browser.
+   *
+   * Optional because a host may expose only resource navigation; a live-page card
+   * then stays inert rather than trying to turn its URL into a file address.
+   */
+  openTab?(kind: string, options?: {
+    readonly params?: { readonly url?: string } | undefined
+    readonly revealIfOpened?: boolean | undefined
+  }): void
 }
 
 /** What the keyed card slot injects. */
 interface CardInjected {
   readonly sessionId: string
   readonly localeId: string
-  readonly open: (path: string) => void
+  readonly open: (path: string, html: boolean) => boolean
+  readonly canOpen: (path: string, html: boolean) => boolean
+}
+
+/**
+ * Whether this card names a loopback page opened by the live service browser.
+ * @param path - the subject printed by the annotation message.
+ * @param html - whether the message is the live/HTML form.
+ * @returns true only for a loopback URL from an HTML annotation.
+ */
+function isLivePage(path: string, html: boolean): boolean {
+  return html && loopbackAddressOf(path) !== undefined
+}
+
+/**
+ * Whether the Sidebar can open this annotation subject.
+ * @param ctx - the plugin's client context.
+ * @param sessionId - Session the bubble belongs to.
+ * @param path - the figure's path or page URL.
+ * @param html - whether the message is the live/HTML form.
+ * @returns true when a matching Sidebar entry point exists.
+ */
+function canOpenFigure(ctx: Context, sessionId: string, path: string, html: boolean): boolean {
+  if (sessionId === '' || path === '') return false
+  const sidebar = ctx.get('sidebarRight') as SidebarRightLike | undefined
+  if (sidebar === undefined) return false
+  return !isLivePage(path, html) || sidebar.openTab !== undefined
 }
 
 /**
@@ -149,16 +186,31 @@ interface CardInjected {
  * @param ctx - the plugin's client context.
  * @param sessionId - Session the bubble belongs to.
  * @param path - the figure's path, as the message spells it.
+ * @param html - whether the message is the live/HTML form.
+ * @returns whether the Sidebar accepted the navigation.
  */
-function openFigure(ctx: Context, sessionId: string, path: string): void {
+function openFigure(ctx: Context, sessionId: string, path: string, html: boolean): boolean {
   const sidebar = ctx.get('sidebarRight') as SidebarRightLike | undefined
-  if (sidebar === undefined || sessionId === '' || path === '') return
+  if (!canOpenFigure(ctx, sessionId, path, html) || sidebar === undefined) return false
   try {
+    // A live page is a service, not a file. Opening its URL as a file resource is
+    // guaranteed to fail because that scheme names a path resolved by the Session;
+    // the service browser owns the page's tab and its in-memory draft.
+    if (isLivePage(path, html)) {
+      // canOpenFigure proved the method exists; the assertion keeps the branch local.
+      sidebar.openTab?.(SERVICE_KIND, {
+        params: { url: path },
+        revealIfOpened: true,
+      })
+      return true
+    }
     sidebar.openResource(fileAddress(sessionId, path))
+    return true
   } catch (reason) {
     // The column has no mounted Session to place a tab in, which is a composition
     // fact rather than a fault of this message.
     console.warn('[figmark] cannot open the annotated figure', reason)
+    return false
   }
 }
 
@@ -305,7 +357,12 @@ export function apply(ctx: Context): void {
         inject: (sessionId: unknown): CardInjected => ({
           sessionId: String(sessionId),
           localeId: locale.getLocale().locale ?? 'zh',
-          open: (path: string) => { openFigure(ctx, String(sessionId), path) },
+          canOpen: (path: string, html: boolean) => {
+            return canOpenFigure(ctx, String(sessionId), path, html)
+          },
+          open: (path: string, html: boolean) => {
+            return openFigure(ctx, String(sessionId), path, html)
+          },
         }),
       }, AnnotationCard)
     })

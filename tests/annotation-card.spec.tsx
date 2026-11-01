@@ -27,6 +27,7 @@ const DATA = {
   target: '把右上角的线拉直',
   instruction: '逐条改生成源。',
   html: false,
+  pageCapture: 'none',
   marks: [
     { label: '箭头1 (10,20) → (30,40)', comment: '往右上拉一点', missing: false, page: undefined },
     { label: '矩形1 (1,2)-(3,4)', comment: '', missing: true, page: 2 },
@@ -270,7 +271,19 @@ describe('the card in a sent bubble', () => {
     const button = defined(host.querySelector('button.da-card')) as HTMLButtonElement
     expect(button.getAttribute('title')).toContain('/w/fig.svg')
     act(() => { button.click() })
-    expect(open).toHaveBeenCalledWith('/w/fig.svg')
+    expect(open).toHaveBeenCalledWith('/w/fig.svg', false)
+  })
+
+  it('treats a live-page URL as a page, and keeps its state out of the title', () => {
+    const open = vi.fn()
+    const file = 'http://127.0.0.1:8811/deck/index.html?clean=1#slide-2'
+    mount(<AnnotationCard node={node({ ...DATA, file, html: true })} raw={RAW} open={open} />)
+    const button = defined(host.querySelector('button.da-card')) as HTMLButtonElement
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('index.html')
+    expect(button.getAttribute('title')).toContain(zh['cardOpenLive'])
+    expect(button.getAttribute('title')).not.toContain('?clean=1')
+    act(() => { button.click() })
+    expect(open).toHaveBeenCalledWith(file, true)
   })
 
   it('opens the figure from its picture too, which is the copy the bubble keeps', () => {
@@ -281,7 +294,40 @@ describe('the card in a sent bubble', () => {
     rememberThumb(RAW, 'data:image/webp;base64,AAAA')
     mount(<AnnotationCard node={node(DATA)} raw={RAW} open={open} />)
     act(() => { (defined(host.querySelector('.da-card-shot img')) as HTMLElement).click() })
-    expect(open).toHaveBeenCalledWith('/w/fig.svg')
+    expect(open).toHaveBeenCalledWith('/w/fig.svg', false)
+  })
+
+  it('says when a live review is intentionally location-only, and when capture failed', () => {
+    const file = 'http://127.0.0.1:8811/deck/index.html'
+    mount(<AnnotationCard
+      node={node({ ...DATA, file, html: true, pageCapture: 'omitted' })}
+      raw={RAW}
+    />)
+    expect(host.querySelector('.da-card-capture')?.textContent).toBe(zh.cardCaptureOmitted)
+
+    mount(<AnnotationCard
+      node={node({ ...DATA, file, html: true, pageCapture: 'failed' })}
+      raw={RAW}
+    />)
+    expect(host.querySelector('.da-card-capture')?.textContent).toBe(zh.cardCaptureFailed)
+
+    mount(<AnnotationCard
+      node={node({ ...DATA, file, html: true, pageCapture: 'attached' })}
+      raw={RAW}
+    />)
+    expect(host.querySelector('.da-card-capture')).toBeNull()
+  })
+
+  it('is inert when the host says it cannot open this subject', () => {
+    const open = vi.fn()
+    mount(<AnnotationCard
+      node={node(DATA)}
+      raw={RAW}
+      open={open}
+      canOpen={() => false}
+    />)
+    expect(host.querySelector('button')).toBeNull()
+    expect(card().hasAttribute('data-static')).toBe(true)
   })
 
   it('is inert where the message is not a sent bubble yet', () => {

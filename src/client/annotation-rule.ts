@@ -95,6 +95,27 @@ const CLOSERS: ReadonlySet<string> = new Set([
 const TARGETS: readonly string[] = ['目标：', 'goal: ']
 
 /**
+ * Read the message's one statement about a live-page screenshot.
+ * @param line - one non-empty line before the mark list.
+ * @returns the capture state that line reports, or undefined for every other line.
+ */
+function pageCaptureOf(line: string): FigmarkPageCapture | undefined {
+  if (line.startsWith('当前页面截图已随消息发送')
+    || line.startsWith('A screenshot of the current page travels with this message')) {
+    return 'attached'
+  }
+  if (line.startsWith('当前页面截图未能生成')
+    || line.startsWith('The current page could not be captured')) {
+    return 'failed'
+  }
+  if (line.startsWith('本次未附页面截图')
+    || line.startsWith('No page screenshot travels with this message')) {
+    return 'omitted'
+  }
+  return undefined
+}
+
+/**
  * The nouns a mark line can open with, in either language.
  *
  * A line has to start with one of these to count as a mark. That is what keeps a
@@ -127,6 +148,9 @@ export interface FigmarkMarkLine {
   readonly missing: boolean
 }
 
+/** Whether a live-page review carried a screenshot, could not make one, or needed none. */
+export type FigmarkPageCapture = 'none' | 'omitted' | 'attached' | 'failed'
+
 /** One annotation block, in the terms a card needs. */
 export interface FigmarkAnnotation {
   /** The figure's path, as the header names it. */
@@ -139,6 +163,8 @@ export interface FigmarkAnnotation {
   readonly instruction: string
   /** Whether the marks were made on a rendered document rather than a figure. */
   readonly html: boolean
+  /** What the message says about a live-page screenshot. */
+  readonly pageCapture: FigmarkPageCapture
   /** The mark list, in the order the message numbers it. */
   readonly marks: readonly FigmarkMarkLine[]
 }
@@ -234,6 +260,7 @@ function readBlock(text: string, start: number, form: HeaderForm): FigmarkTextNo
   const marks: FigmarkMarkLine[] = []
   let target = ''
   let instruction = ''
+  let pageCapture: FigmarkPageCapture = 'none'
   let end = headerEnd
   let cursor = first === -1 ? text.length : first + 1
   for (let step = 0; step < MAX_LINES && cursor < text.length; step++) {
@@ -252,7 +279,12 @@ function readBlock(text: string, start: number, form: HeaderForm): FigmarkTextNo
       }
       const opened = TARGETS.find(token => line.startsWith(token))
       const mark = opened === undefined ? readMark(line, header.zh) : undefined
-      if (opened !== undefined) {
+      const capture = pageCaptureOf(line)
+      if (capture !== undefined) {
+        pageCapture = capture
+        end = contentEnd
+      }
+      else if (opened !== undefined) {
         target = line.slice(opened.length).trim()
         end = contentEnd
       }
@@ -279,7 +311,15 @@ function readBlock(text: string, start: number, form: HeaderForm): FigmarkTextNo
     end,
     // The block ends where its last line did, not where its last line's newline was,
     // so the text this reports never carries a trailing blank into the card.
-    data: { file: header.file, scope: header.scope, target, instruction, html: header.html, marks },
+    data: {
+      file: header.file,
+      scope: header.scope,
+      target,
+      instruction,
+      html: header.html,
+      pageCapture,
+      marks,
+    },
   }
 }
 

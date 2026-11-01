@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIVE_MESSAGE } from '../src/shared/live'
 import { ServiceBrowser } from '../src/client/ServiceBrowser'
 import { zh } from '../src/client/locales'
+import { LIVE_DRAFT_KEY_PREFIX } from '../src/client/live-drafts'
 import { defined, installDom } from './dom'
 
 interface Call {
@@ -80,7 +81,17 @@ function stubNetwork(options: {
 }
 
 /** One picker for a session. */
-function browser(sessionId: string): ReactNode {
+function browser(
+  sessionId: string,
+  useTabInfo?: () => {
+    readonly tab: {
+      readonly navigation: {
+        readonly revision: number
+        readonly params: unknown
+      }
+    }
+  },
+): ReactNode {
   return (
     <ServiceBrowser
       sessionId={sessionId}
@@ -88,14 +99,25 @@ function browser(sessionId: string): ReactNode {
       sessions={undefined}
       conversation={undefined}
       remote={undefined}
+      useTabInfo={useTabInfo}
     />
   )
 }
 
 /** Mount the picker and let its initial scan settle. */
-async function mount(sessionId = 's1'): Promise<void> {
+async function mount(
+  sessionId = 's1',
+  useTabInfo?: () => {
+    readonly tab: {
+      readonly navigation: {
+        readonly revision: number
+        readonly params: unknown
+      }
+    }
+  },
+): Promise<void> {
   await act(async () => {
-    root.render(browser(sessionId))
+    root.render(browser(sessionId, useTabInfo))
     await Promise.resolve()
     await Promise.resolve()
   })
@@ -231,6 +253,175 @@ describe('the local-pages picker', () => {
         'http://localhost:5180/',
       ],
     })
+  })
+
+  it('opens the page named by an annotation card, with that page draft', async () => {
+    const address = 'http://127.0.0.1:8811/deck/index.html?clean=1'
+    localStorage.setItem(`${LIVE_DRAFT_KEY_PREFIX}s1`, JSON.stringify({
+      version: 1,
+      entries: [[address, [{
+        id: 'seeded',
+        kind: 'point',
+        color: '#1971c2',
+        points: [[12, 24]],
+        detail: '从这里继续',
+      }], '继续这页', 100]],
+    }))
+    stubNetwork({
+      services: { ok: true, services: [] },
+      live: { ok: true, url: 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/' },
+    })
+    await mount('s1', () => ({
+      tab: { navigation: { revision: 1, params: { url: address } } },
+    }))
+    const open = defined(calls.find(call => call.url.includes('/live') && call.init?.method === 'POST'))
+    expect(open.init?.body).toBe(JSON.stringify({ url: address }))
+    expect(host.querySelector('.da-dock-count')?.textContent).toBe('1')
+  })
+
+  it('accepts revision zero as the first navigation request', async () => {
+    const address = 'http://127.0.0.1:8811/deck/index.html'
+    stubNetwork({ services: { ok: true, services: [] } })
+    const useTabInfo = (): {
+      readonly tab: {
+        readonly navigation: {
+          readonly revision: number
+          readonly params: unknown
+        }
+      }
+    } => ({
+      tab: { navigation: { revision: 0, params: { url: address } } },
+    })
+    await mount('s1', useTabInfo)
+    expect(calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST'))
+      .toHaveLength(1)
+    await act(async () => {
+      root.render(browser('s1', useTabInfo))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST'))
+      .toHaveLength(1)
+    expect(host.querySelector('.da-service-live')).not.toBeNull()
+  })
+
+  it('brings an already-open page to the front without replacing its proxy', async () => {
+    const address = 'http://127.0.0.1:5173/'
+    let navigation = { revision: 0, params: null as unknown }
+    const useTabInfo = vi.fn((): {
+      readonly tab: {
+        readonly navigation: {
+          readonly revision: number
+          readonly params: unknown
+        }
+      }
+    } => ({ tab: { navigation } }))
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: address, title: 'Deck', source: 'common' }],
+      },
+    })
+    await mount('s1', useTabInfo)
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('kept')
+    const original = frame()
+    const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST').length
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(false)
+
+    navigation = { revision: 1, params: { url: address } }
+    await act(async () => {
+      root.render(browser('s1', useTabInfo))
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    expect(useTabInfo.mock.calls.length).toBeGreaterThan(1)
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(true)
+    expect(frame()).toBe(original)
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(calls.filter(call =>
+      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts)
+  })
+
+  it('does not lose a card seed while another page is still opening', async () => {
+    const first = 'http://127.0.0.1:5173/'
+    const second = 'http://127.0.0.1:8000/'
+    const pendingFirst = deferred<StubResponse>()
+    let navigation = { revision: 0, params: null as unknown }
+    const useTabInfo = (): {
+      readonly tab: {
+        readonly navigation: {
+          readonly revision: number
+          readonly params: unknown
+        }
+      }
+    } => ({ tab: { navigation } })
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (url.includes('/services')) {
+        return Promise.resolve(response({
+          ok: true,
+          services: [
+            { url: first, title: 'First', source: 'common' },
+            { url: second, title: 'Second', source: 'common' },
+          ],
+        }))
+      }
+      if (url.includes('/live') && init?.method === 'POST') {
+        const body = typeof init.body === 'string'
+          ? JSON.parse(init.body) as { readonly url?: string }
+          : {}
+        return body.url === first
+          ? pendingFirst.promise
+          : Promise.resolve(response({
+            ok: true,
+            url: 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/second/',
+          }))
+      }
+      return Promise.resolve(response({ ok: true }))
+    })
+    await mount('s1', useTabInfo)
+    await act(async () => {
+      defined(host.querySelector<HTMLButtonElement>('.da-service-row')).click()
+      await Promise.resolve()
+    })
+
+    navigation = { revision: 1, params: { url: second } }
+    await act(async () => {
+      root.render(browser('s1', useTabInfo))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST'))
+      .toHaveLength(1)
+
+    await act(async () => {
+      pendingFirst.resolve(response({
+        ok: true,
+        url: 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/first/',
+      }))
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+    const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST')
+    expect(posts.map(call => jsonBody(call))).toEqual([{ url: first }, { url: second }])
+    expect(frame().getAttribute('src')).toBe('http://127.0.0.1:9444/__dsh_figmark_live/proxy/second/')
+  })
+
+  it('ignores navigation seeds that do not name a loopback page', async () => {
+    stubNetwork({ services: { ok: true, services: [] } })
+    await mount('s1', () => ({
+      tab: { navigation: { revision: 1, params: null } },
+    }))
+    await mount('s1', () => ({
+      tab: { navigation: { revision: 2, params: 'not-a-page' } },
+    }))
+    await mount('s1', () => ({
+      tab: { navigation: { revision: 3, params: { url: 'https://example.com/' } } },
+    }))
+    expect(calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST'))
+      .toHaveLength(0)
   })
 
   it('filters by title or address and says when nothing matches', async () => {
@@ -377,7 +568,10 @@ describe('the local-pages picker', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(calls.some(call => call.url.includes('/live?url=') && call.init?.method === 'DELETE')).toBe(true)
+    // Returning to the picker keeps the proxy and the page's transient state alive;
+    // the tab can come back without a second POST.
+    expect(calls.some(call => call.url.includes('/live?url=') && call.init?.method === 'DELETE')).toBe(false)
+    expect(defined(host.querySelector<HTMLElement>('.da-service-live')).hidden).toBe(true)
     expect(host.querySelector('.da-services')).not.toBeNull()
   })
 

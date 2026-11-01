@@ -23,6 +23,7 @@ const DATA = {
   target: '',
   instruction: '逐条改生成源。',
   html: false,
+  pageCapture: 'none' as const,
   marks: [{ label: '箭头1 (10,20) → (30,40)', comment: '往右上拉一点', missing: false, page: undefined }],
 }
 
@@ -173,6 +174,45 @@ describe('the attachment card above the composer', () => {
     park({ data: { ...DATA, file: 'http://localhost:5173/deck/index.html?clean=1' } })
     mount()
     expect(host.querySelector('.da-staged-title')?.textContent).toBe('index.html')
+  })
+
+  it('marks an intentionally screenshot-free live attachment', () => {
+    park({
+      data: {
+        ...DATA,
+        file: 'http://localhost:5173/deck/index.html',
+        html: true,
+        pageCapture: 'omitted',
+      },
+    })
+    mount()
+    expect(host.querySelector('.da-staged-capture')?.textContent).toBe(zh.cardCaptureOmitted)
+  })
+
+  it('marks a failed live-page screenshot', () => {
+    park({
+      data: {
+        ...DATA,
+        file: 'http://localhost:5173/deck/index.html',
+        html: true,
+        pageCapture: 'failed',
+      },
+    })
+    mount()
+    expect(host.querySelector('.da-staged-capture')?.textContent).toBe(zh.cardCaptureFailed)
+  })
+
+  it('does not add a capture badge when the screenshot is present', () => {
+    park({
+      data: {
+        ...DATA,
+        file: 'http://localhost:5173/deck/index.html',
+        html: true,
+        pageCapture: 'attached',
+      },
+    })
+    mount()
+    expect(host.querySelector('.da-staged-capture')).toBeNull()
   })
 
   it('keeps the size and the coordinates off the face, in the hover titles', () => {

@@ -421,6 +421,16 @@ describe('the message the agent reads', () => {
     expect(en).not.toContain('A screenshot of the current page travels with this message')
   })
 
+  it('explains an intentional live-page screenshot omission', () => {
+    const zh = buildAnnotationMessage(htmlDocument, htmlPaths, 'zh', false, 0, 'omitted')
+    expect(zh).toContain('本次未附页面截图，因为当前可见标注无需图片即可定位')
+    expect(zh).toContain('surface、元素选择器、坐标与说明')
+
+    const en = buildAnnotationMessage(htmlDocument, htmlPaths, 'en', false, 0, 'omitted')
+    expect(en).toContain('No page screenshot travels with this message because the visible marks do not need one')
+    expect(en).toContain('surface selectors, element selectors, positions and notes')
+  })
+
   it('says a live screenshot did travel in English', () => {
     const en = buildAnnotationMessage(htmlDocument, htmlPaths, 'en', false, 1, 'attached')
     expect(en).toContain('A screenshot of the current page travels with this message')

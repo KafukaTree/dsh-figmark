@@ -14,9 +14,10 @@
  * @module dsh-figmark/client/annotation-card
  */
 import { useEffect, useState, type ReactElement } from 'react'
-import type { FigmarkAnnotation, FigmarkMarkLine } from './annotation-rule'
+import type { FigmarkAnnotation, FigmarkMarkLine, FigmarkPageCapture } from './annotation-rule'
 import { thumbFor } from './annotation-thumb'
 import { resolveTranslate } from './annotator-contract'
+import { loopbackAddressOf } from './live-page'
 import { ensureStyles } from './styles'
 import type { Translate } from './translate'
 
@@ -91,7 +92,9 @@ export interface AnnotationCardProps {
   /** Locale tag the seat fell back from. */
   readonly localeId?: string | undefined
   /** Open one figure in the Sidebar; absent when this composition has no Sidebar. */
-  readonly open?: ((path: string) => void) | undefined
+  readonly open?: ((path: string, html: boolean) => void) | undefined
+  /** Whether this composition has the matching Sidebar entry point. */
+  readonly canOpen?: ((path: string, html: boolean) => boolean) | undefined
 }
 
 /**
@@ -130,7 +133,7 @@ function readMark(value: unknown): FigmarkMarkLine | undefined {
  */
 export function readAnnotation(data: unknown): FigmarkAnnotation | undefined {
   if (!isRecord(data)) return undefined
-  const { file, scope, marks, target, instruction, html } = data
+  const { file, scope, marks, target, instruction, html, pageCapture } = data
   if (typeof file !== 'string' || file === '' || typeof scope !== 'string') return undefined
   if (!Array.isArray(marks)) return undefined
   const parsed: FigmarkMarkLine[] = []
@@ -139,6 +142,11 @@ export function readAnnotation(data: unknown): FigmarkAnnotation | undefined {
     if (mark === undefined) return undefined
     parsed.push(mark)
   }
+  const capture: FigmarkPageCapture = pageCapture === 'omitted'
+    || pageCapture === 'attached'
+    || pageCapture === 'failed'
+    ? pageCapture
+    : 'none'
   return {
     file,
     scope,
@@ -148,6 +156,7 @@ export function readAnnotation(data: unknown): FigmarkAnnotation | undefined {
     target: typeof target === 'string' ? target : '',
     instruction: typeof instruction === 'string' ? instruction : '',
     html: html === true,
+    pageCapture: capture,
   }
 }
 
@@ -223,12 +232,24 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
   const thumb = shot ? thumbFor(raw) : undefined
   const shown = data.marks.slice(0, MAX_ROWS)
   const rest = data.marks.length - shown.length
+  const liveFile = data.html && loopbackAddressOf(data.file) !== undefined
+  const displayFile = liveFile ? data.file.replace(/[?#].*$/u, '') : data.file
+  const captureNotice = liveFile && thumb === undefined
+    ? data.pageCapture === 'omitted'
+      ? resolveTranslate(props, 'cardCaptureOmitted')
+      : data.pageCapture === 'failed'
+        ? resolveTranslate(props, 'cardCaptureFailed')
+        : ''
+    : ''
+  const canOpen = interactive
+    && open !== undefined
+    && (props.canOpen?.(data.file, data.html) ?? true)
   // The block names a path; a reader scanning the transcript needs the file's own
   // name more than the directory it lives in, which is the same for every figure
   // this session saved. The scope the header wrote (size, pages, count) stays after
   // it, because that is what a mark's coordinates are read against.
-  const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
-  const name = data.file.slice(cut + 1)
+  const cut = Math.max(displayFile.lastIndexOf('/'), displayFile.lastIndexOf('\\'))
+  const name = displayFile.slice(cut + 1)
   // The message's scope has to remain in the model-facing text. On the card, its
   // dimensions and count are enough for a glance; the complete phrase stays in the
   // row's tooltip instead of wrapping across two Chinese sentences.
@@ -250,6 +271,9 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
         <span className="da-card-title-row">
           <span className="da-card-title">{name}</span>
           <span className="da-card-type">{data.html ? 'HTML' : 'FIG'}</span>
+          {captureNotice === '' ? null : (
+            <span className="da-card-capture">{captureNotice}</span>
+          )}
         </span>
         <span className="da-card-scope">
           {size === '' ? null : <span className="da-card-meta" title={data.scope}>{size}</span>}
@@ -262,7 +286,7 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
           </span>
         </span>
       </span>
-      {interactive ? (
+      {canOpen ? (
         <span className="da-card-go" aria-hidden="true">
           <svg viewBox="0 0 16 16" focusable="false">
             <path d="m6 3.5 4.5 4.5L6 12.5" />
@@ -294,8 +318,8 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
       )}
     </span>
   )
-  const onClick = interactive && open !== undefined
-    ? () => { open(data.file) }
+  const onClick = canOpen && open !== undefined
+    ? () => { open(data.file, data.html) }
     : undefined
   if (onClick === undefined) {
     return <span className="da-card" data-static="">{head}{body}</span>
@@ -304,7 +328,7 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
     <button
       type="button"
       className="da-card"
-      title={`${resolveTranslate(props, 'cardOpen')} — ${data.file}`}
+      title={`${resolveTranslate(props, liveFile ? 'cardOpenLive' : 'cardOpen')} — ${displayFile}`}
       onClick={onClick}
     >
       {head}

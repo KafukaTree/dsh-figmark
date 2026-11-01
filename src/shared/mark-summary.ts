@@ -397,9 +397,15 @@ export function describeMark(
   // A mark that names a page carries it, so one list can span the pages of a
   // document without its coordinates becoming ambiguous.
   const page = mark.page === undefined ? '' : (zh ? `第 ${mark.page} 页 ` : `page ${mark.page} `)
+  // A deck can keep several logical surfaces at the same coordinates. The selector
+  // is the only fact that still identifies a pin or drawing when no screenshot was
+  // sent, so it belongs in the model-facing line even when a picture also travels.
+  const surface = mark.surface === undefined
+    ? ''
+    : (zh ? `（surface: ${mark.surface}）` : ` (surface: ${mark.surface})`)
   const detail = flattenNote(mark.detail)
   const escape = figure === undefined ? '' : overhang(mark, figure, locale)
-  const named = `${page}${markName(mark, ordinal, locale)}${describeGeometry(mark, locale)}${describeAnchor(mark, locale, figure)}${escape}`
+  const named = `${page}${markName(mark, ordinal, locale)}${describeGeometry(mark, locale)}${describeAnchor(mark, locale, figure)}${surface}${escape}`
   const parts: string[] = [named]
   if (detail !== '') parts.push(zh ? `批注：${detail}` : `note: ${detail}`)
   if (detail === '') parts.push(zh ? '（未写说明）' : '(no detail)')

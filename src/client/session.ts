@@ -68,10 +68,11 @@ export interface DeliveryInput {
   /**
    * Whether the current live-page picture travelled with the message.
    *
-   * Omitted for file-backed figures; a live page sets `failed` when the capture was
-   * attempted and the text alone still has to carry the review.
+   * Omitted for file-backed figures; a live page sets `omitted` when its visible
+   * marks need no picture, and `failed` when the capture was attempted and the text
+   * alone still has to carry the review.
    */
-  readonly pageCapture?: 'none' | 'attached' | 'failed' | undefined
+  readonly pageCapture?: 'none' | 'omitted' | 'attached' | 'failed' | undefined
   /**
    * A 120px picture of the review, for the bubble this message lands in.
    *

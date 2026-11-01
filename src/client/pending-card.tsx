@@ -167,6 +167,13 @@ function ParkedChip(props: {
   const cut = Math.max(shownFile.lastIndexOf('/'), shownFile.lastIndexOf('\\'))
   const name = shownFile.slice(cut + 1)
   const first = data.marks[0]
+  const captureNotice = data.html && thumb === undefined
+    ? data.pageCapture === 'omitted'
+      ? resolveTranslate(props, 'cardCaptureOmitted')
+      : data.pageCapture === 'failed'
+        ? resolveTranslate(props, 'cardCaptureFailed')
+        : ''
+    : ''
   const detail = first === undefined
     ? name
     : first.comment === '' ? first.label : `${first.label} · ${first.comment}`
@@ -196,6 +203,9 @@ function ParkedChip(props: {
           <span className="da-staged-text">
             <span className="da-staged-head">
               <span className="da-staged-title" title={name}>{name}</span>
+              {captureNotice === '' ? null : (
+                <span className="da-staged-capture">{captureNotice}</span>
+              )}
               <span
                 className="da-staged-count"
                 aria-label={resolveTranslate(props, 'cardCount', { n: data.marks.length })}

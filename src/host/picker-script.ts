@@ -611,7 +611,9 @@ ${MODERN_SCREENSHOT}
       ? [rect.left + scroll[0], rect.top + scroll[1], width, height]
       : [0, 0, width, height]
     var target = surface || root
-    var scale = Math.min(2, 2400 / Math.max(width, height))
+    // The parent composes at no more than 1.5x, so a larger source only costs a DOM
+    // clone and PNG encode without adding pixels the delivered picture keeps.
+    var scale = Math.min(1.5, 1800 / Math.max(width, height))
     var screenshot = window.modernScreenshot
     if (!screenshot || typeof screenshot.domToDataUrl !== 'function') {
       send({

@@ -686,7 +686,7 @@ describe('screenshotting the live page', () => {
     expect(domToDataUrl).toHaveBeenCalledTimes(1)
     const options = domToDataUrl.mock.calls[0]?.[1] ?? {}
     const filter = options['filter'] as (node: Node) => boolean
-    expect(options).toMatchObject({ width: 1280, height: 1800, scale: 2400 / 1800 })
+    expect(options).toMatchObject({ width: 1280, height: 1800, scale: 1 })
     const pickerStyle = page.window.document.createElement('style')
     pickerStyle.setAttribute('data-dsh-figmark-style', '')
     const spotlight = page.window.document.createElement('style')
@@ -704,7 +704,7 @@ describe('screenshotting the live page', () => {
       imageRect: [0, 0, 1280, 1800],
       viewport: [640, 360],
       scroll: [12, 340],
-      scale: 2400 / 1800,
+      scale: 1,
       surface: null,
       bounds: [{ selector: '#title', bbox: [22, 380, 100, 30], visible: true }],
     })
@@ -739,7 +739,7 @@ describe('screenshotting the live page', () => {
       expect(page.said.some(message => message['kind'] === 'capture-result')).toBe(true)
     })
     expect(domToDataUrl.mock.calls[0]?.[0]).toBe(surface)
-    expect(domToDataUrl.mock.calls[0]?.[1]).toMatchObject({ width: 400, height: 300, scale: 2 })
+    expect(domToDataUrl.mock.calls[0]?.[1]).toMatchObject({ width: 400, height: 300, scale: 1.5 })
     expect(page.said.find(message => message['kind'] === 'capture-result')).toMatchObject({
       document: [1200, 900],
       imageRect: [25, 37, 400, 300],

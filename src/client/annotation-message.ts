@@ -39,8 +39,9 @@ export type DeliveredPaths = SidecarWriteResult
  *   alone.
  * @param pageImages - how many annotated pages travel as image parts. A paged
  *   document sends these instead of uploading the whole PDF.
- * @param pageCapture - whether the current live-page picture travelled, or was tried
- *   and failed. File-backed documents leave this at `none`.
+ * @param pageCapture - whether the current live-page picture travelled, was omitted
+ *   because the visible marks did not need one, or was tried and failed. File-backed
+ *   documents leave this at `none`.
  * @returns the message text.
  */
 export function buildAnnotationMessage(
@@ -49,7 +50,7 @@ export function buildAnnotationMessage(
   locale: SummaryLocale,
   attachment = true,
   pageImages = 0,
-  pageCapture: 'none' | 'attached' | 'failed' = 'none',
+  pageCapture: 'none' | 'omitted' | 'attached' | 'failed' = 'none',
 ): string {
   // The paths themselves are never printed: the sidecars are deleted once the
   // annotation has been delivered, so a path in the message would be a dead
@@ -99,13 +100,17 @@ export function buildAnnotationMessage(
   const captureLines = rendered
     ? pageCapture === 'attached'
       ? [zh
-        ? '当前页面截图已随消息发送；截图中的框线对应下方逐条的元素选择器和位置。'
-        : 'A screenshot of the current page travels with this message; its boxes correspond to the selectors and positions below.']
+        ? '当前页面截图已随消息发送；它只覆盖当前可见页面，框线也只对应截图中的可见标注，其余位置请按下方定位处理。'
+        : 'A screenshot of the current page travels with this message. It covers only the visible page, and its boxes mark only the annotations visible in that screenshot; use the positions below for everything else.']
       : pageCapture === 'failed'
         ? [zh
           ? '当前页面截图未能生成；请按下方逐条的元素选择器与位置处理。'
           : 'The current page could not be captured; use the element selectors and positions below.']
-        : []
+        : pageCapture === 'omitted'
+          ? [zh
+            ? '本次未附页面截图，因为当前可见标注无需图片即可定位；请按下方逐条的 surface、元素选择器、坐标与说明处理。'
+            : 'No page screenshot travels with this message because the visible marks do not need one; use the surface selectors, element selectors, positions and notes below.']
+          : []
     : []
   // Only point marks: one coordinate and a sentence each. There is nothing for a
   // picture to add, so none was rendered — the figure's own path above is the index.

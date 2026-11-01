@@ -48,7 +48,7 @@ import {
   sameShownMarks, shownMarksOf, useShownMarks, type ShownMarks,
 } from './shown-marks'
 import {
-  anchorOfPick, closeLivePage, liveAddressOf, liveScreenshotMarks, openLivePage, pickName,
+  anchorOfPick, closeLivePage, liveAddressOf, liveMarksNeedScreenshot, liveScreenshotMarks, openLivePage, pickName,
   shownAddress, type LivePage,
 } from './live-page'
 import { elementMark } from './canvas/marks'
@@ -2193,15 +2193,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    */
   const exportLiveScreenshot = useCallback(async (
     capture: LiveCaptureSucceeded,
-    scope: readonly AnnotationMark[],
+    shown: readonly AnnotationMark[],
   ): Promise<RasterizedReview> => {
-    const shown = liveScreenshotMarks(
-      scope,
-      capture.surface,
-      capture.bounds,
-      capture.scroll,
-      capture.viewport,
-    )
     const svg = composeLiveScreenshotSvg({
       imageDataUrl: capture.dataUrl,
       documentWidth: capture.document[0],
@@ -2924,16 +2917,30 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         // A live page is captured at the moment of the hand-off, while the frame is
         // still in exactly the state the reader is reviewing. A screenshot failure
         // never blocks the text: selectors and boxes are still enough to act on.
+        const wantsScreenshot = livePage !== null
+          && liveMarksNeedScreenshot(scope, liveSurface, [htmlScroll.x, htmlScroll.y], [size.width, size.height])
         let screenshot: RasterizedReview | undefined
-        if (livePage !== null) {
+        let pageCapture: 'none' | 'omitted' | 'attached' | 'failed' = livePage === null ? 'none' : 'omitted'
+        if (wantsScreenshot) {
           const capture = await requestLiveScreenshot(livePage.url)
           if (capture !== undefined) {
-            try {
-              screenshot = await exportLiveScreenshot(capture, scope)
-            } catch {
-              // The message below says that the picture did not travel; there is no
-              // second send to trigger, because the review itself is still complete.
+            const shown = liveScreenshotMarks(
+              scope,
+              capture.surface,
+              capture.bounds,
+              capture.scroll,
+              capture.viewport,
+            )
+            if (liveMarksNeedScreenshot(shown)) {
+              try {
+                screenshot = await exportLiveScreenshot(capture, shown)
+                pageCapture = 'attached'
+              } catch {
+                pageCapture = 'failed'
+              }
             }
+          } else {
+            pageCapture = 'failed'
           }
         }
         // A picture is only needed when the marks claim an extent. A figure whose
@@ -2955,9 +2962,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         setStale(false)
         const sentImage = screenshot?.image ?? review
         const pageImages = sentImage === undefined ? [] : [{ page: 1, image: sentImage }]
-        const pageCapture = livePage === null
-          ? 'none'
-          : screenshot === undefined ? 'failed' : 'attached'
         const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
         // The bubble this message lands in is handed the message's text and nothing
         // else — the attachments beside it are not reachable from there. So a small

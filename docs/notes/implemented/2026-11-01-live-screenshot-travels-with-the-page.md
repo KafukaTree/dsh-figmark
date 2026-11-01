@@ -45,6 +45,9 @@ stale picture to a newer view. A malformed answer carrying the matching request 
 also settles immediately instead of waiting for the timeout, and the picker fails
 locally before posting a data URL above the protocol limit.
 
+For the later rule that element-only and pin-only reviews skip the capture entirely,
+see `2026-11-01-live-screenshots-follow-mark-geometry.md`.
+
 This supersedes the "rejected for now" screenshot alternative in
 `2026-11-01-only-served-pages-are-annotated.md`. It keeps that note's rule that a
 live page never gains a file-backed annotation artifact.
