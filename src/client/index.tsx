@@ -1,12 +1,10 @@
 /**
  * Browser half of the annotator.
  *
- * It registers one document renderer per annotatable kind — images and PDFs —
- * so opening either in the right Sidebar offers the annotator, and registers
- * each renderer's body in the keyed document slot. The PDF body lives in a
- * package-local chunk that is fetched only when a PDF opens. Markdown is
- * registered the same way, but its body edits the source in place and delivers
- * the difference instead of drawing on a surface.
+ * It registers one document renderer per previewable kind — images, PDFs, and
+ * static HTML — so opening either in the right Sidebar offers the matching
+ * body, and registers each body in the keyed document slot. The PDF body lives
+ * in a package-local chunk that is fetched only when a PDF opens.
  * Everything else — reading the figure bytes, storing marks, reaching the agent —
  * happens inside a body through the owner and the injected session service.
  *
@@ -30,13 +28,12 @@ import type { ComposerLike } from './composer'
 import { createDocumentSeat } from './document-seat'
 import { LazyPdfBody } from './LazyPdfBody'
 import { HtmlPreviewBody } from './html-preview'
-import { MarkdownBody, type MarkdownInjected } from './markdown/MarkdownBody'
 import { NAMESPACE, en, zh } from './locales'
 import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
 import { PendingCard } from './pending-card'
 import { ServiceBrowser, type ServiceBrowserInjected } from './ServiceBrowser'
-import type { FileUploadLike, SessionsLike } from './session'
+import type { SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
 export const name = 'dsh-figmark-client'
@@ -50,9 +47,6 @@ export const BODY_ID = 'dsh-figmark/image'
 /** Implementation identity of the PDF renderer, shared by its metadata and its slot entry. */
 export const PDF_BODY_ID = 'dsh-figmark/pdf'
 
-/** Implementation identity of the Markdown editor, shared by its metadata and its slot entry. */
-export const MD_BODY_ID = 'dsh-figmark/markdown'
-
 /** Implementation identity of the read-only static HTML preview. */
 export const HTML_BODY_ID = 'dsh-figmark/html-preview'
 
@@ -61,9 +55,6 @@ export const SERVICE_BODY_ID = 'dsh-figmark/services'
 
 /** Page kind the service browser occupies. */
 export const SERVICE_KIND = 'dsh-figmark-services'
-
-/** Suffixes the Markdown editor claims for whole-file text documents. */
-const MD_EXTENSIONS = ['md', 'markdown'] as const
 
 /** Suffixes the annotator claims for whole-file figures, matching the shell's builtin image renderer. */
 const EXTENSIONS = ['svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'] as const
@@ -270,27 +261,6 @@ export function apply(ctx: Context): void {
       }),
     }),
   }, LazyPdfBody)), 'dsh-figmark: pdf document body')
-  ctx.effect(() => previews.register({
-    id: MD_BODY_ID,
-    extensions: MD_EXTENSIONS,
-    priority: 'extension',
-    title: () => locale.bind(NAMESPACE)('mdTitle'),
-    loading: 'text-pages',
-    wrap: true,
-  }), 'dsh-figmark: markdown renderer metadata')
-  ctx.effect(() => slots.inject('sidebar.right.tab.document', () => slots.register({
-    name: 'sidebar.right.tab.document',
-    key: MD_BODY_ID,
-    locale: NAMESPACE,
-    // The editor never writes the document: it hands the Session the difference
-    // between what it loaded and what the reader made of it.
-    inject: (sessionId: unknown): MarkdownInjected => ({
-      sessions: ctx.get('sessions') as SessionsLike | undefined,
-      fileUpload: ctx.get('fileUpload') as FileUploadLike | undefined,
-      sessionId: String(sessionId),
-      localeId: locale.getLocale().locale ?? 'zh',
-    }),
-  }, MarkdownBody)), 'dsh-figmark: markdown document body')
   ctx.effect(() => previews.register({
     id: HTML_BODY_ID,
     extensions: HTML_EXTENSIONS,

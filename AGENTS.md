@@ -15,7 +15,7 @@ DSH（DeepSeek Harness）第三方插件包，一个 npm 包、两个半：
 | Host | `src/index.ts` | `lib/index.js`（ESM） | Node，注册 HTTP 路由 + 智能体系统提示段 |
 | Client | `src/client/index.tsx` | `lib/client.js`（单文件 CJS）+ `lib/client.pdf.js`（懒加载分块，含 PDF.js 与 pdf-lib） | 浏览器，注册文档预览器与标注画布 |
 
-`src/shared/` 是两半共用的纯逻辑。数据模型与侧车格式见 `src/shared/annotation.ts`、`src/host/sidecar.ts`；行级差异见 `src/shared/text-diff.ts`。可标注类型：图片（PNG/JPEG/WebP/BMP/GIF/ICO）、SVG、PDF，以及右侧栏「本机网页」里打开的 **loopback `http://` 服务页**。静态 `html`/`htm` 文件由 `src/client/html-preview.tsx` 只读预览：不加载标注、不渲染工具栏、不产生侧车；服务页通过 Host 的一次性 live proxy 和注入 picker 工作，它不是文件，没有侧车，也没有标注图。另有 **Markdown（`md`/`markdown`）**：不标注、只编辑——预览里改源文本，改动作为 unified diff 送进会话，**插件不写这个文件**（写入面仍只有那两个侧车，见 §2.2）；正文在 `src/client/markdown/`。
+`src/shared/` 是两半共用的纯逻辑。数据模型与侧车格式见 `src/shared/annotation.ts`、`src/host/sidecar.ts`。可标注类型：图片（PNG/JPEG/WebP/BMP/GIF/ICO）、SVG、PDF，以及右侧栏「本机网页」里打开的 **loopback `http://` 服务页**。静态 `html`/`htm` 文件由 `src/client/html-preview.tsx` 只读预览：不加载标注、不渲染工具栏、不产生侧车；服务页通过 Host 的一次性 live proxy 和注入 picker 工作，它不是文件，没有侧车，也没有标注图。Markdown 不注册预览、不编辑、不生成 diff，仍由宿主内置预览器打开。
 
 PDF 是**整份文档一份标注**：`figure.pageCount` 记页数，每条 mark 用 `page` 记自己在第几页，坐标以那一页的页面单位（PDF 点）计；保存时浏览器半边把标注写成**原生 PDF 注释对象**（`/Ink` `/Square` `/Circle` `/Line` `/FreeText`，各自带自绘外观流）并写出一份 `<名>.annotated.pdf`，会话收到的是这一份副本作为附件（外加每页的标注位图与文本清单）。分块内代码分布：`pdf/runtime.ts`（PDF.js 接缝与每页视口变换）、`pdf/annotate.ts`（pdf-lib 写入器）、`pdf/PdfBody.tsx`（文档级控制器）。
 

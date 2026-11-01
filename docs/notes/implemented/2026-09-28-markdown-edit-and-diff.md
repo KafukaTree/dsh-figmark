@@ -2,6 +2,8 @@
 
 Status: implemented
 
+> Superseded by: [2026-11-01-remove-markdown-editing.md](./2026-11-01-remove-markdown-editing.md)。Markdown 编辑、差异与投递已于 2026-11-01 整体移除；本文只保留当时的决策背景。
+
 > 已落地 **期一**（2026-09-28）：md 预览实现、源文本编辑、行级差异、差异送进会话，全程**不落盘**。落地时的三个决定都由用户拍定：**只送会话不改盘**、**接管 md 默认预览**、**期一用零依赖 `<textarea>`**。期二（CodeMirror 高亮、逐行加注）、期三（写回原文件）未做。
 
 ## Problem

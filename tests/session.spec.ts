@@ -5,20 +5,9 @@ import { ANNOTATION_VERSION } from '../src/shared/annotation'
 import {
   MAX_PAGE_IMAGES,
   deliverAnnotation,
-  deliverEdit,
-  type FileUploadLike,
   type SessionsLike,
 } from '../src/client/session'
 import { buildAnnotationMessage } from '../src/client/annotation-message'
-import { hunkKey } from '../src/shared/text-diff'
-import { defined } from './dom'
-import {
-  MAX_DIFF_LINES,
-  buildEditMessage,
-  describeNotes,
-  fitDiff,
-} from '../src/client/edit-message'
-import { EMPTY_DIFF, diffLines } from '../src/shared/text-diff'
 
 const document_: AnnotationDocument = {
   version: ANNOTATION_VERSION,
@@ -80,7 +69,6 @@ interface Part {
   readonly mediaType?: string
   readonly data?: string
   readonly name?: string
-  readonly attachment?: { readonly attachmentId: string }
 }
 
 /** One PNG blob of a size a spec chooses. */
@@ -88,26 +76,8 @@ function blobOf(bytes = 3): Blob {
   return new Blob([new Uint8Array(bytes).fill(1)], { type: 'image/png' })
 }
 
-/** One upload service stub. */
-function stubUpload(outcome: 'ok' | 'refused' | 'throws' | 'missing' = 'ok'): {
-  readonly fileUpload: FileUploadLike | undefined
-  readonly uploads: { readonly sessionId: string; readonly bytes: number; readonly name: string }[]
-} {
-  const uploads: { sessionId: string; bytes: number; name: string }[] = []
-  if (outcome === 'missing') return { fileUpload: undefined, uploads }
-  const fileUpload: FileUploadLike = {
-    upload: async (sessionId, data, name) => {
-      uploads.push({ sessionId, bytes: data.byteLength, name })
-      if (outcome === 'throws') throw new Error('upload transport failed')
-      if (outcome === 'refused') return { ok: false, error: {} }
-      return { ok: true, value: { file: { attachmentId: 'a'.repeat(64), name, bytes: data.byteLength } } }
-    },
-  }
-  return { fileUpload, uploads }
-}
-
 /** A sessions service stub with one live session. */
-function stubSessions(subagent = false): {
+function stubSessions(): {
   readonly sessions: SessionsLike
   /** The same service seen from a session with no live binding. */
   readonly detached: SessionsLike
@@ -124,7 +94,6 @@ function stubSessions(subagent = false): {
       modes.push(mode)
       return { ok: true }
     },
-    ...(subagent ? { address: { parentSessionId: 'p', childSessionId: 'c' } } : {}),
   }
   const using = async (
     _id: string,
@@ -225,7 +194,6 @@ describe('delivering an annotation', () => {
     await expect(deliverAnnotation(delivery({ sessions }))).rejects.toThrow('the session refused the annotation message')
   })
 })
-
 describe('a document that has pages', () => {
   it('sends one image per annotated page and leaves the whole PDF local', async () => {
     const stub = stubSessions()
@@ -279,7 +247,6 @@ describe('a document that has pages', () => {
     expect(capped[0]).toContain('the PDF itself is not uploaded')
   })
 })
-
 describe('a message that carries no picture', () => {
   /** An annotation whose marks are all points: one coordinate and one sentence each. */
   const pointsOnly: AnnotationDocument = {
@@ -371,408 +338,5 @@ describe('the message the agent reads', () => {
     expect(en).not.toContain('.annot.json')
     expect(en).toContain('selector #s > p:nth-of-type(1)')
     expect(en).toContain('Edit the HTML source, mark by mark.')
-  })
-})
-
-/** One line changed in a three-line document. */
-function editedDiff(): ReturnType<typeof diffLines> {
-  return diffLines('a\nb\nc', 'a\nB\nc')
-}
-
-/** A difference with more hunks than a message's budget holds. */
-function wideDiff(): ReturnType<typeof diffLines> {
-  const before = Array.from({ length: 400 }, (_, index) => `line ${index}`)
-  const after = [...before]
-  for (let index = 5; index < 400; index += 8) after[index] = `changed ${index}`
-  return diffLines(before.join('\n'), after.join('\n'))
-}
-
-describe('fitting a difference into a message', () => {
-  it('carries every hunk that fits', () => {
-    const fitted = fitDiff('/w/docs/report.md', editedDiff())
-    expect(fitted.hidden).toBe(0)
-    expect(fitted.text).toContain('--- a/report.md')
-    expect(fitted.text).toContain('+++ b/report.md')
-    expect(fitted.text).toContain('-b')
-    expect(fitted.text).toContain('+B')
-    expect(MAX_DIFF_LINES).toBe(400)
-  })
-
-  it('keeps the first hunk however large it is', () => {
-    const huge = diffLines('a', Array.from({ length: 500 }, (_, index) => `x${index}`).join('\n'))
-    const fitted = fitDiff('/w/docs/report.md', huge, 3)
-    expect(fitted.hidden).toBe(0)
-    expect(fitted.text.split('\n').length).toBeGreaterThan(3)
-  })
-
-  it('drops trailing hunks once the budget is spent, and counts them', () => {
-    const diff = wideDiff()
-    const fitted = fitDiff('/w/docs/report.md', diff, 20)
-    expect(diff.hunks.length).toBeGreaterThan(2)
-    expect(fitted.hidden).toBeGreaterThan(0)
-    // What it does carry is whole hunks: the text never stops mid-hunk.
-    expect(fitted.text).toContain('@@')
-  })
-
-  it('writes the file header alone for a difference with no hunk', () => {
-    const fitted = fitDiff('/w/docs/report.md', EMPTY_DIFF)
-    expect(fitted.text).toBe('--- a/report.md\n+++ b/report.md')
-    expect(fitted.hidden).toBe(0)
-  })
-})
-
-describe('the edit message the agent reads', () => {
-  it('names the document, its hunk count, and both line counts', () => {
-    const diff = editedDiff()
-    const fitted = fitDiff('/w/docs/report.md', diff)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' })
-    expect(zh).toContain('【文档修改建议】/w/docs/report.md（Markdown，改动 1 处，+1 −1 行）')
-    expect(zh).toContain('```diff')
-    expect(zh).toContain('-b')
-    expect(zh).toContain('+B')
-    expect(zh).toContain('没有落盘')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' })
-    expect(en).toContain('[document edits] /w/docs/report.md (Markdown, 1 hunks, +1 -1 lines)')
-    expect(en).toContain('did **not** write them to disk')
-  })
-
-  it('warns that the loaded version moved while the reader was editing', () => {
-    const diff = editedDiff()
-    const fitted = fitDiff('/w/docs/report.md', diff)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, attached: true, locale: 'zh' })
-    expect(zh).toContain('文件在编辑期间被改动过')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: true, attached: true, locale: 'en' })
-    expect(en).toContain('the file changed while it was being edited')
-  })
-
-  it('names the attachment when the message could not carry every hunk', () => {
-    const diff = wideDiff()
-    const fitted = fitDiff('/w/docs/report.md', diff, 20)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' })
-    expect(zh).toContain(`另有 ${fitted.hidden} 处改动未在本消息里展开`)
-    expect(zh).toContain('report.md.edited.md')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' })
-    expect(en).toContain(`${fitted.hidden} more hunks are not expanded here`)
-    expect(en).toContain('report.md.edited.md')
-  })
-
-  it('says the copy did not travel, rather than pointing at a file that is not there', () => {
-    // The message is composed before anyone knows whether this session takes a file
-    // part. Telling the agent to read the attachment when the upload was declined left
-    // the hidden hunks with no instructions at all — the diff is capped, the copy never
-    // arrived, and the only place that knew was the reader's status line.
-    const diff = wideDiff()
-    const fitted = fitDiff('/w/docs/report.md', diff, 20)
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: false, locale: 'zh' })
-    expect(zh).toContain(`另有 ${fitted.hidden} 处改动未展开`)
-    expect(zh).not.toContain('随本消息发送的 report.md.edited.md')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: false, locale: 'en' })
-    expect(en).not.toContain('is attached as report.md.edited.md')
-    expect(en).toContain('could not be attached')
-  })
-
-  it('says a difference too large for the exact algorithm reads as one block', () => {
-    const diff = { ...editedDiff(), coarse: true }
-    const fitted = fitDiff('/w/docs/report.md', diff)
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' }))
-      .toContain('diff 以整块替换呈现')
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'en' }))
-      .toContain('reads as one replacement block')
-  })
-})
-
-describe('delivering an edit proposal', () => {
-  it('queues the difference as text, and attaches nothing when it fits', async () => {
-    const upload = stubUpload()
-    const stub = stubSessions()
-    const warnings = await deliverEdit({
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: editedDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(warnings).toEqual([])
-    expect(upload.uploads).toEqual([])
-    expect(stub.modes).toEqual(['queue'])
-    const parts = stub.prompts[0] ?? []
-    expect(parts).toHaveLength(1)
-    expect(parts[0]?.type).toBe('text')
-    expect(parts[0]?.text).toContain('【文档修改建议】/w/docs/report.md')
-  })
-
-  it('attaches the edited text when the difference did not fit', async () => {
-    const upload = stubUpload()
-    const stub = stubSessions()
-    const warnings = await deliverEdit({
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(warnings).toEqual([])
-    expect(upload.uploads).toHaveLength(1)
-    expect(upload.uploads[0]?.name).toBe('report.md.edited.md')
-    expect(upload.uploads[0]?.bytes).toBe(6)
-    const parts = stub.prompts[0] ?? []
-    expect(parts[0]).toMatchObject({ type: 'file', attachment: { attachmentId: 'a'.repeat(64) } })
-    expect(parts[1]?.type).toBe('text')
-  })
-
-  it('warns instead of failing when the composition has no upload service', async () => {
-    const english = stubSessions()
-    const warnings = await deliverEdit({
-      sessions: english.sessions,
-      fileUpload: undefined,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: true,
-      locale: 'en',
-    })
-    expect(warnings[0]).toBe('This composition has no upload service, so the edited copy was not attached.')
-    expect(english.prompts[0]?.[0]?.type).toBe('text')
-    const chinese = stubSessions()
-    const localized = await deliverEdit({
-      sessions: chinese.sessions,
-      fileUpload: undefined,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(localized[0]).toBe('本次组合没有附件服务，编辑后的副本未随消息发送。')
-  })
-
-  it('does not attach a file to a subagent continuation, which refuses one', async () => {
-    const upload = stubUpload()
-    const stub = stubSessions(true)
-    const warnings = await deliverEdit({
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(upload.uploads).toEqual([])
-    expect(warnings[0]).toContain('子会话')
-    const english = stubSessions(true)
-    const localized = await deliverEdit({
-      sessions: english.sessions,
-      fileUpload: stubUpload().fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'en',
-    })
-    expect(localized[0]).toContain('subagent continuation')
-  })
-
-  it('keeps the edit when the upload service refuses or throws', async () => {
-    const refused = stubUpload('refused')
-    const firstStub = stubSessions()
-    const first = await deliverEdit({
-      sessions: firstStub.sessions,
-      fileUpload: refused.fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(first[0]).toContain('编辑后的副本未能随消息发送：the upload was refused')
-    expect(defined(firstStub.prompts[0]).some(part => (part as Part).type === 'text')).toBe(true)
-
-    const thrown = { upload: async () => { throw 'the socket died' } }
-    const secondStub = stubSessions()
-    const second = await deliverEdit({
-      sessions: secondStub.sessions,
-      fileUpload: thrown,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'en',
-    })
-    expect(second[0]).toBe('The edited copy was not attached: the socket died')
-    expect(defined(secondStub.prompts[0]).some(part => (part as Part).type === 'text')).toBe(true)
-  })
-
-  it('opens the session through the service when no live binding exists', async () => {
-    const stub = stubSessions()
-    await deliverEdit({
-      sessions: stub.detached,
-      fileUpload: undefined,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: editedDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })
-    expect(stub.sources).toEqual(['dsh-figmark'])
-    expect(stub.prompts).toHaveLength(1)
-  })
-
-  it('reports the reason the session refused the message', async () => {
-    const sessions = {
-      scope: () => ({ live: true }),
-      sessionOf: () => ({ prompt: async () => ({ ok: false, error: { message: 'session is closed' } }) }),
-      using: async () => { throw new Error('unused') },
-    } as unknown as SessionsLike
-    await expect(deliverEdit({
-      sessions,
-      fileUpload: undefined,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: editedDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })).rejects.toThrow('session is closed')
-  })
-
-  it('falls back to a plain message when the refusal carries no reason', async () => {
-    const sessions = {
-      scope: () => ({ live: true }),
-      sessionOf: () => ({ prompt: async () => ({ ok: false }) }),
-      using: async () => { throw new Error('unused') },
-    } as unknown as SessionsLike
-    await expect(deliverEdit({
-      sessions,
-      fileUpload: undefined,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: editedDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: {},
-      stale: false,
-      locale: 'zh',
-    })).rejects.toThrow('the session refused the edit message')
-  })
-})
-
-describe('the notes a reader attaches to a change', () => {
-  it('pairs a note with the hunk it was written about', () => {
-    const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    const [hunk] = diff.hunks
-    const lines = describeNotes(diff, { [hunkKey(defined(hunk))]: '为什么这么改' }, 'zh')
-    // The number names the change, not the hunk's first context line: line 2 is what
-    // was edited, and it is the number the reader was offered when they typed this.
-    expect(lines).toEqual(['1. 第 2 行（@@ -1,3 +1,3 @@）：为什么这么改'])
-    expect(describeNotes(diff, { [hunkKey(defined(hunk))]: 'why' }, 'en'))
-      .toEqual(['1. line 2 (@@ -1,3 +1,3 @@): why'])
-  })
-
-  it('names the changed line, not the hunk first context line', () => {
-    // A change on baseline line 9 lands in a hunk that starts at 6, because three
-    // lines of context come before it. The reader typed the note beside a change at
-    // line 9 and the sentence used to lead with "第 6 行".
-    const before = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`)
-    const after = [...before]
-    after[8] = 'changed nine'
-    const diff = diffLines(before.join('\n'), after.join('\n'))
-    const [hunk] = diff.hunks
-    expect(defined(hunk).oldStart).toBe(6)
-    expect(describeNotes(diff, { [hunkKey(defined(hunk))]: '改这里' }, 'zh'))
-      .toEqual(['1. 第 9 行（@@ -6,7 +6,7 @@）：改这里'])
-  })
-
-  it('names the line an insertion follows, because an inserted line has no number', () => {
-    // Pure insertion: there is no older line holding the new text, so the note says
-    // which line comes before it. In an empty file that is line 0 — one-based counting
-    // has no line zero, and the sentence used to say "第 0 行".
-    const prepend = diffLines('alpha\nbeta\ngamma', 'inserted\nalpha\nbeta\ngamma')
-    const [hunk] = prepend.hunks
-    expect(describeNotes(prepend, { [hunkKey(defined(hunk))]: 'note for prepend' }, 'zh'))
-      .toEqual(['1. 第 1 行之后（@@ -1,3 +1,4 @@）：note for prepend'])
-    expect(describeNotes(prepend, { [hunkKey(defined(hunk))]: 'n' }, 'en'))
-      .toEqual(['1. after line 1 (@@ -1,3 +1,4 @@): n'])
-    const intoEmpty = diffLines('', 'first')
-    const [only] = intoEmpty.hunks
-    // Nothing precedes line 1, so the note names line 1 rather than a phantom 0.
-    expect(describeNotes(intoEmpty, { [hunkKey(defined(only))]: 'n' }, 'zh'))
-      .toEqual(['1. 第 1 行之后（@@ -0,0 +1,1 @@）：n'])
-  })
-
-  it('drops a note whose change the reader has since dropped', () => {
-    // The note was filed under a hunk that is no longer in the difference: it has
-    // nothing left to be about, and sending it would name a line nobody touched.
-    const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    expect(describeNotes(diff, { '99,1,99,1': '这一行也要看' }, 'zh')).toEqual([])
-    expect(describeNotes(diff, { '99,1,99,1': 'read this too' }, 'en')).toEqual([])
-  })
-
-  it('skips notes the reader emptied and keeps the rest in hunk order', () => {
-    const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    const [hunk] = diff.hunks
-    const key = hunkKey(defined(hunk))
-    expect(describeNotes(diff, { [key]: '  ' }, 'zh')).toEqual([])
-    expect(describeNotes(diff, { [key]: 'first' }, 'zh'))
-      .toEqual(['1. 第 2 行（@@ -1,3 +1,3 @@）：first'])
-    expect(describeNotes(diff, {}, 'zh')).toEqual([])
-  })
-
-  it('counts them in the message header and lists them under the diff', () => {
-    const diff = diffLines('a\nb\nc', 'a\nB\nc')
-    const fitted = fitDiff('/w/docs/report.md', diff)
-    const key = hunkKey(defined(diff.hunks[0]))
-    const zh = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: '参数要留空' }, stale: false, attached: true, locale: 'zh' })
-    expect(zh).toContain('改动 1 处，+1 −1 行，说明 1 条')
-    expect(zh).toContain('我的说明：')
-    expect(zh).toContain('1. 第 2 行（@@ -1,3 +1,3 @@）：参数要留空')
-    const en = buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: { [key]: 'leave it empty' }, stale: false, attached: true, locale: 'en' })
-    expect(en).toContain('1 hunks, +1 -1 lines, 1 notes')
-    expect(en).toContain('My notes:')
-    expect(en).toContain('1. line 2 (@@ -1,3 +1,3 @@): leave it empty')
-    // No notes, no section: the message stays as short as it was.
-    expect(buildEditMessage({ documentPath: '/w/docs/report.md', diff, fitted, notes: {}, stale: false, attached: true, locale: 'zh' }))
-      .not.toContain('我的说明')
-  })
-
-  it('carries the notes of every hunk into the delivery', async () => {
-    const stub = stubSessions()
-    const upload = stubUpload()
-    await deliverEdit({
-      sessions: stub.sessions,
-      fileUpload: upload.fileUpload,
-      sessionId: 's1',
-      documentPath: '/w/docs/report.md',
-      diff: wideDiff(),
-      editedText: 'a\nB\nc\n',
-      notes: { [hunkKey(defined(wideDiff().hunks[0]))]: '这一处先别改' },
-      stale: false,
-      locale: 'zh',
-    })
-    const text = (stub.prompts[0] ?? []).find(part => part.type === 'text')?.text ?? ''
-    expect(text).toContain('说明 1 条')
-    expect(text).toContain('这一处先别改')
   })
 })

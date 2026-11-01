@@ -26,7 +26,6 @@ describe('the annotator stylesheet', () => {
     // that would fix what it is reporting.
     expect(STYLES).toContain('.da-toasts{position:absolute;z-index:11;top:14px;right:14px')
     expect(STYLES).toContain('.da-toast{position:absolute;top:0;right:0')
-    expect(STYLES).toContain('.da-md > .da-toasts{top:10px;right:10px}')
     expect(STYLES).not.toContain('.da-toasts{position:absolute;z-index:11;top:14px;left:14px')
   })
 
@@ -151,16 +150,6 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('color:var(--da-quiet,var(--dsw-alias-label-tertiary')
   })
 
-  it('shows the caret in the Markdown editor, the one field with no border to recolour', () => {
-    // Every other text field keeps a focus cue — the note textarea and the page field
-    // recolour their border, the page button draws a ring. The editor has `border:none`
-    // and `outline:none`, so a keyboard user could not see that the keyboard was there
-    // on the one surface whose whole subject is text.
-    expect(STYLES).toContain('.da-md-editor:focus-visible')
-    // Drawn inside the box: the editor fills its pane, so a ring outside it is clipped.
-    expect(STYLES).toContain('outline-offset:-2px')
-  })
-
   it('gives both hand-offs off the pill the same neutral chip', () => {
     // The reader put the two buttons side by side in a screenshot — the paper plane
     // filled blue, the speech bubble grey — and asked for one background. Which
@@ -211,7 +200,7 @@ describe('the annotator stylesheet', () => {
       'label-primary', 'label-secondary', 'label-tertiary',
       'bg-layer-2', 'bg-base', 'bg-document-preview', 'interactive-bg-hover',
       'border-l2', 'border-l3', 'border-l4',
-      'state-error-primary', 'state-success-primary', 'label-error',
+      'state-error-primary', 'label-error',
     ]) {
       expect(STYLES).toContain(`var(--dsw-alias-${token},`)
     }

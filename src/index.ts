@@ -18,7 +18,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { EDIT_GUIDANCE, EDIT_GUIDANCE_NAME, EDIT_GUIDANCE_ORDER, GUIDANCE, GUIDANCE_NAME, GUIDANCE_ORDER } from './host/guidance'
+import { GUIDANCE, GUIDANCE_NAME, GUIDANCE_ORDER } from './host/guidance'
 import { ROUTE_PREFIX, createHandlers } from './host/routes'
 import { resolveSessionCwd, type AgentsFace, type SessionCwdSources, type SessionPersistenceFace, type WorkspaceRegistryFace } from './host/session-cwd'
 import { missingService } from './missing-service'
@@ -89,14 +89,5 @@ export function apply(ctx: Context): void {
       stable: true,
     }),
     'dsh-figmark: guidance',
-  )
-  ctx.effect(
-    () => systemPrompt.section({
-      name: EDIT_GUIDANCE_NAME,
-      order: EDIT_GUIDANCE_ORDER,
-      text: EDIT_GUIDANCE,
-      stable: true,
-    }),
-    'dsh-figmark: edit guidance',
   )
 }

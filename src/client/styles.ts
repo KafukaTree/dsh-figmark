@@ -861,40 +861,9 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
      not to see — the buttons stay put and the click still lands. */
   .da-bar .da-btn,.da-bar .da-dock-btn,.da-palette .da-btn{transition:none!important;transform:none!important}
 }
-/* The editor has no bar over its top edge either, so its bubbles sit a little closer
-   to the corner than the annotator's, whose canvas starts under a strip of its own. */
-.da-md > .da-toasts{top:10px;right:10px}
 .da-hint{padding:10px 2px;font-size:12px;line-height:1.6;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit))}
 /* The grey above is for "still working". A failure is not quieter than a wait. */
 .da-hint[data-tone="error"]{color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor))}
-
-/* --- the Markdown body: an editor over the source, or the diff it produced --- */
-.da-md{display:flex;flex-direction:column;height:100%;min-height:0}
-.da-md-stats{flex:0 0 auto;font-size:12px;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit)}
-/* The editor pane: the textarea, and the gutter that only exists while the
-   document toolbar's wrap preference is off (a wrapped line has no one row). */
-.da-md-pane{flex:1 1 auto;display:flex;min-height:0;background:var(--dsw-alias-bg-base,transparent)}
-.da-md-gutter{flex:0 0 auto;overflow:hidden;padding:8px 6px 8px 10px;text-align:right;color:var(--da-quiet,var(--dsw-alias-label-tertiary,inherit));font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);user-select:none}
-.da-md-editor{flex:1 1 auto;min-height:0;width:100%;padding:8px 10px;border:none;outline:none;resize:none;background:var(--dsw-alias-bg-base,transparent);color:inherit;font-size:12px;line-height:1.6;tab-size:2;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
-/* The one field a reader types a document edit into, and the one surface whose text
-   becomes a diff an agent applies. It draws no border of its own to recolour the way
-   the note fields do, so the cue is a ring on the inside edge: drawn outside it would
-   be clipped by the pane, and drawn as a background tint it would be lost against the
-   pane's own background. */
-.da-md-editor:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:-2px}
-.da-diff{flex:1 1 auto;min-height:0;overflow:auto;padding:4px 0;font-size:12px;line-height:1.6;font-family:var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
-.da-diff-head{padding:2px 8px;color:var(--dsw-alias-label-tertiary,inherit);background:var(--dsw-alias-bg-layer-2,transparent)}
-.da-diff-line{display:flex;gap:6px;padding:0 8px}
-.da-diff-no{flex:0 0 auto;min-width:32px;text-align:right;color:var(--dsw-alias-label-tertiary,inherit);user-select:none}
-.da-diff-sign{flex:0 0 auto;width:8px}
-.da-diff-text{flex:1 1 auto;white-space:pre-wrap;word-break:break-word}
-.da-diff-line[data-kind="add"] .da-diff-sign{color:var(--dsw-alias-state-success-primary,currentColor)}
-.da-diff-line[data-kind="remove"] .da-diff-sign{color:var(--dsw-alias-state-error-primary,currentColor)}
-/* One note field per hunk: the reader's explanation of that change. */
-.da-diff-note{display:flex;align-items:center;gap:6px;padding:2px 8px 8px 8px;color:var(--dsw-alias-label-tertiary,inherit);font-size:12px}
-.da-diff-note-label{flex:0 0 auto;white-space:nowrap}
-.da-diff-note input{flex:1 1 auto;min-width:0;border:0.5px solid var(--dsw-alias-border-l2,currentColor);border-radius:var(--dsw-radius-sm,6px);background:var(--dsw-alias-bg-base,transparent);color:inherit;font:inherit;font-size:12px;padding:3px 6px}
-
 /* --- the card a sent annotation block becomes in the transcript ---
    The block is one paragraph of text the model reads; in the bubble it is a small
    sheet instead. Everything here is inline-level on purpose: the slot it draws into

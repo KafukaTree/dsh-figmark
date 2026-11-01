@@ -1,13 +1,11 @@
 /**
- * Characterisation harness for the document bodies the panel harness cannot see.
+ * Characterisation harness for the document body the panel harness cannot see.
  *
  * `golden.spec.tsx` renders the figure body, which is the one with the overlay,
  * the marks and the geometry — the surface a split is most likely to break. The
- * two document bodies sit behind it and render their own chrome: the PDF body
- * holds a pager, a page field, keyboard paging and one seat for the whole
- * document; the Markdown body holds an editor, a gutter, a difference and its
- * delivery. Both were split in this refactor, and neither is reachable from the
- * figure harness.
+ * PDF body sits behind it and renders its own chrome: a pager, a page field,
+ * keyboard paging and one seat for the whole document. It was split in this
+ * refactor and is not reachable from the figure harness.
  *
  * Like `golden.spec.tsx`, this file asserts nothing on its own. It writes each
  * state's DOM to the file named by `DOCUMENTS_OUT` and is skipped unless that
@@ -29,8 +27,6 @@ import type { DocumentSeat } from '../../src/client/document-seat'
 import type { PdfBodyProps } from '../../src/client/pdf/PdfBody'
 import { PdfBody } from '../../src/client/pdf/PdfBody'
 import type { ToastStackProps, Toasts } from '../../src/client/annotator/toasts'
-import { MarkdownBody } from '../../src/client/markdown/MarkdownBody'
-import type { SessionsLike } from '../../src/client/session'
 import { zh } from '../../src/client/locales'
 import { defined } from '../dom'
 
@@ -189,14 +185,6 @@ async function mount(render: (host: HTMLElement) => ReactNode): Promise<HTMLElem
   return host
 }
 
-/** Re-render the mounted host with new props. */
-async function rerender(render: (host: HTMLElement) => ReactNode): Promise<void> {
-  await act(async () => {
-    root?.render(render(host))
-    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
-  })
-}
-
 /** One button, found by its accessible label. */
 function labelled(target: HTMLElement, label: string): HTMLButtonElement {
   return defined([...target.querySelectorAll('button')].find(
@@ -220,48 +208,9 @@ async function key(target: string): Promise<void> {
   })
 }
 
-/** Type into the Markdown editor the way a reader does, through the prototype's setter. */
-async function typeInto(target: HTMLElement, text: string): Promise<void> {
-  const editor = defined(target.querySelector('textarea')) as HTMLTextAreaElement
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(editor, text)
-    editor.dispatchEvent(new Event('input', { bubbles: true }))
-    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
-  })
-}
-
-/** Type into a plain text input the same way, through the prototype's setter. */
-async function typeIntoField(field: Element, text: string): Promise<void> {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, text)
-    field.dispatchEvent(new Event('input', { bubbles: true }))
-    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
-  })
-}
-
-/** The text a Markdown document carries. */
-const MARKDOWN = 'title\n\nbody\n'
-
-/** A sessions stub that accepts every prompt, so a delivery is not an error path. */
-const sessions = {
-  scope: () => ({ live: true }),
-  sessionOf: () => ({ prompt: async () => ({ ok: true }) }),
-  using: async () => { throw new Error('unused') },
-} as unknown as SessionsLike
-
-/** Everything the Markdown body renders with. */
-function markdownProps(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    content: { kind: 'text', text: MARKDOWN, eof: true },
-    resourceAddress: 'dsh-resource://file/session/s1/docs/report.md',
-    sessions,
-    ...overrides,
-  }
-}
-
 const capture = (name: string, target: HTMLElement): void => { dumps[name] = target.innerHTML }
 
-describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document bodies', () => {
+describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document body', () => {
   it('a pdf waiting for its first raster', async () => {
     const target = await mount(() => <PdfBody {...pdfProps()} />)
     capture('pdf-waiting', target)
@@ -328,69 +277,6 @@ describe.skipIf(process.env['DOCUMENTS_OUT'] === undefined)('document bodies', (
   it('a pdf given no bytes', async () => {
     const target = await mount(() => <PdfBody {...pdfProps({ content: { kind: 'text' } })} />)
     capture('pdf-no-bytes', target)
-  })
-
-  it('a markdown document just loaded', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    capture('md-loaded', target)
-  })
-
-  it('a markdown document with its line gutter out', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps({ wrap: false })} />)
-    capture('md-gutter', target)
-  })
-
-  it('a markdown document being edited', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    await typeInto(target, 'title\n\nchanged body\n')
-    capture('md-edited', target)
-  })
-
-  it('a markdown document showing its difference', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    await typeInto(target, 'title\n\nchanged body\n')
-    await click(labelled(target, zh.diffMode))
-    capture('md-diff', target)
-  })
-
-  it('a markdown difference carrying a note', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    await typeInto(target, 'title\n\nchanged body\n')
-    await click(labelled(target, zh.diffMode))
-    const field = defined(target.querySelector('.da-diff-note input') as Element | null)
-    await typeIntoField(field, 'please fix')
-    capture('md-diff-note', target)
-  })
-
-  it('a markdown difference with nothing changed', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    await click(labelled(target, zh.diffMode))
-    capture('md-empty-diff', target)
-  })
-
-  it('a markdown document with an edit in hand when the owner sends new text', async () => {
-    const target = await mount(() => <MarkdownBody {...markdownProps()} />)
-    await typeInto(target, 'changed\n')
-    await rerender(() => (
-      <MarkdownBody {...markdownProps({ content: { kind: 'text', text: 'new\n', eof: false } })} />
-    ))
-    capture('md-stale', target)
-  })
-
-  it('a markdown document still arriving', async () => {
-    const target = await mount(() => (
-      <MarkdownBody {...markdownProps({ content: { kind: 'text', text: '', eof: false } })} />
-    ))
-    capture('md-loading', target)
-  })
-
-  it('a markdown document reporting the copy it asks for', async () => {
-    // The dictionary is not the point: echoing the key records *which* key every
-    // spot on the surface asks for, which is what a split can quietly rewire.
-    const target = await mount(() => (
-      <MarkdownBody {...markdownProps({ t: (copyKey: string) => copyKey })} />
-    ))
-    capture('md-copy-keys', target)
   })
 
   it('write the dump', () => {

@@ -25,7 +25,6 @@ dsh-figmark 把三样东西一起交给智能体：
 | PDF | `pdf` | ✅ 整份文档一份批注：逐页画、一次保存，写回**原生 PDF 注释对象** |
 | 静态 HTML | `html` `htm` | ✅ 只读预览，可运行自包含页面脚本；不加载、不写入标注侧车 |
 | 本机网页 | `http://localhost` / `127.0.0.1` / `[::1]` | ✅ 在右侧栏「本机网页」里发现并打开；真实脚本、路由、媒体与元素锚定可用 |
-| Markdown | `md` `markdown` | ✅ **编辑**而非批注：改动作为 unified diff 交给智能体，插件不落盘 |
 | Office | `doc` `docx` `ppt` `pptx` `xls` `xlsx` | ⏳ 待接入，仍由内置预览器打开 |
 
 ## 安装
@@ -109,7 +108,6 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 | `<名>.<后缀>.annotated.pdf` | PDF：原件副本，批注写成**原生 PDF 注释对象**，作为附件随消息发送 |
 | —— | 本机服务页：**不留文件**；消息携带页面地址与每条 `anchor.selector` |
 | —— | 静态 HTML：只读预览，不产生任何文件或消息 |
-| —— | Markdown：**不留任何文件**，改动以 unified diff 进会话 |
 
 名字**带着被批注文件自己的扩展名**（`fig1.svg` → `fig1.svg.annot.json`），所以同目录下同主名不同后缀的两份文件各有各的批注、绝不会互相读错。
 
@@ -133,8 +131,6 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - **PDF 一次一页**，无文本层、无连续滚动。
 - **本机网页必须有正在运行的 loopback 服务**：静态文件只有 Figmark 的只读预览；Figmark 不替用户扫描全部端口，也不执行任意 workspace 命令。
 - **服务页标注没有快照附件**：浏览器不能把任意运行页稳定栅格化成一份可交付副本，所以消息只带页面地址、元素 selector、坐标与文字。
-- **Markdown 的差异基线是「你打开时的那一版」**，不是 git HEAD。
-- **Markdown 没有语法高亮**：编辑框是原生 `<textarea>`（插件因此至今零新增运行时依赖）。
 - **Office 尚未接入。**
 
 ## 开发

@@ -30,23 +30,3 @@ export const GUIDANCE = [
   '7. 若消息以【HTML 标注】开头，那是**本机 loopback 服务页**：消息会给出页面地址。标注画在当时的真实页面视口里，`points` 只是当时的视口坐标，页面重排、滚动或更换视口后可能失准；回源定位以 `marks[].anchor.selector` 为主——每段是 `tag:nth-of-type(n)`，遇到 `#id` 就在那里截断，因此它要么以 `body > …` 开头，要么直接是 `#id > …`；`anchor.text` 是该元素当时的文字。SVG 的元素标注同理，只是那条路径以 `<svg>` 元素本身为根（`svg > g:nth-of-type(2) > …`），遇到 `#id` 同样在那里截断——所以它要么以 `svg > …` 开头，要么直接是 `#id > …`。',
   '8. 处理 HTML 标注时，改的是**服务这个页面的源**（模板、组件、样式、生成脚本或静态资源），不是浏览器里的渲染结果。live preview 保留了真实脚本、路由和资源加载，所以页面里的状态与视觉是该服务实际给出的；若页面依赖登录态、外部 API 或一个未启动的服务，先按消息里的地址核对运行条件再改源。',
 ].join('\n')
-
-/** Section order used for the Markdown edit-proposal guidance (after the annotation one). */
-export const EDIT_GUIDANCE_ORDER = 8991
-
-/** Stable section name, unique in the assembled prompt. */
-export const EDIT_GUIDANCE_NAME = 'dsh-figmark:markdown-edits'
-
-/** The guidance text appended for messages that carry a Markdown difference. */
-export const EDIT_GUIDANCE = [
-  '## Markdown 修改建议（dsh-figmark）',
-  '',
-  '用户可能在文档预览里直接编辑 Markdown，保存后你会收到一条【文档修改建议】开头、正文是一段 unified diff 的用户消息（`--- a/<文件名>`、`+++ b/<文件名>`，`@@` 头给出两侧的起始行与行数）。收到时按下列纪律处理：',
-  '',
-  '1. 先读文件（消息里给出路径）。**用户没有把改动写进磁盘**：磁盘上的文件仍是旧版，`a` 侧是用户打开时的那一版，`b` 侧是用户改完的结果。',
-  '2. 把 diff 应用到源文件：`-` 行删除、`+` 行写入、空格开头的是上下文（保持原样），逐处落地；不要重写整个文件，diff 之外的部分保持不动。',
-  '3. 消息里若说「另有 N 处改动未在本消息里展开」，完整结果就是随消息发送的 `<文件名>.edited.md` 附件；以它为准。',
-  '4. 消息里若带「我的说明：」清单，那是用户对某一行/某一处改动写的理由（形如 `1. 第 6 行（@@ -3,7 +3,7 @@）：…`）；落地时按它判断意图，说明里提到的行号是**基线（a 侧）**的行号。',
-  '5. 消息里若说文件在编辑期间被改动过、或 diff 以整块替换呈现，先核对再落地；无法安全应用时说明原因，不要猜着改。',
-  '6. 落地后逐处回应（顺序与 diff 一致），并说明哪些改动你没有采纳以及为什么。',
-].join('\n')

@@ -4,9 +4,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import { apply, inject, name } from '../src/index'
 import {
-  EDIT_GUIDANCE,
-  EDIT_GUIDANCE_NAME,
-  EDIT_GUIDANCE_ORDER,
   GUIDANCE,
   GUIDANCE_NAME,
   GUIDANCE_ORDER,
@@ -70,7 +67,7 @@ describe('host entry', () => {
     expect(inject).toEqual(['webServer', 'systemPrompt'])
   })
 
-  it('mounts the guard-protected route prefix and both guidance sections', () => {
+  it('mounts the guard-protected route prefix and the annotation guidance', () => {
     const stub = stubContext()
     apply(stub.ctx)
     expect(stub.routes).toHaveLength(1)
@@ -78,12 +75,9 @@ describe('host entry', () => {
     expect(typeof stub.routes[0]?.handler).toBe('function')
     expect(stub.sections).toEqual([
       { name: GUIDANCE_NAME, order: GUIDANCE_ORDER, text: GUIDANCE, stable: true },
-      // The agent has to know the difference a Markdown message carries, and that
-      // the file on disk is still the old version until it applies it.
-      { name: EDIT_GUIDANCE_NAME, order: EDIT_GUIDANCE_ORDER, text: EDIT_GUIDANCE, stable: true },
     ])
     expect(stub.labels).toEqual([
-      'dsh-figmark: annotation route', 'dsh-figmark: guidance', 'dsh-figmark: edit guidance',
+      'dsh-figmark: annotation route', 'dsh-figmark: guidance',
     ])
   })
 
@@ -107,7 +101,7 @@ describe('host entry', () => {
     const stub = stubContext()
     apply(stub.ctx)
     for (const cleanup of stub.cleanups) cleanup()
-    expect(stub.disposed).toEqual(['route', 'guidance', 'guidance'])
+    expect(stub.disposed).toEqual(['route', 'guidance'])
   })
 
   it('fails loudly when the composition provides no Web server', () => {
