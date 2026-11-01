@@ -52,6 +52,23 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).not.toMatch(/\.da-live-bar\[data-open="true"\]\{[^}]*left:/u)
   })
 
+  it('lets the back action receive a real pointer outside the address field', () => {
+    // The action is a sibling of the field. The bar deliberately ignores pointers so
+    // its empty width does not cover the page, which means the action must opt back in
+    // or a real mouse can never hit it even though a programmatic click can.
+    const back = /\.da-live-back\{[^}]*\}/u.exec(STYLES)?.[0] ?? ''
+    expect(back).toContain('pointer-events:auto')
+    expect(STYLES).toContain('.da-live-refresh{display:flex')
+  })
+
+  it('keeps open service pages in one compact, scrollable tab strip', () => {
+    expect(STYLES).toContain('.da-service-shell{display:flex;flex-direction:column;height:100%')
+    expect(STYLES).toContain('.da-service-tabs{display:flex;flex:0 0 auto')
+    expect(STYLES).toContain('overflow-x:auto;overflow-y:hidden;scrollbar-width:none')
+    expect(STYLES).toContain('.da-service-tab[data-active="true"]')
+    expect(STYLES).toContain('.da-service-live[hidden],.da-services[hidden]{display:none}')
+  })
+
   it('keeps the HTML-only address drawer hidden on every other document', () => {
     // The drawer is always absolutely positioned. `hidden` must still win so the
     // HTML-only control never floats over a PDF or SVG preview.

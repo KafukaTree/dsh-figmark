@@ -443,8 +443,14 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   background:var(--dsw-alias-bg-layer-3,rgba(127,127,127,.1));
   color:var(--dsw-alias-label-tertiary,inherit);font-size:8.5px;font-weight:750;line-height:13px;
   letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
-.da-live-field[data-live="true"] .da-live-badge{background:var(--da-accent-soft,rgba(23,109,242,.14));
-  color:var(--da-accent,#176df2)}
+.da-live-refresh{display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:24px;height:24px;padding:0;border:0;border-radius:7px;background:transparent;
+  color:var(--dsw-alias-label-tertiary,inherit);cursor:pointer}
+.da-live-refresh:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));
+  color:var(--dsw-alias-label-primary,inherit)}
+.da-live-refresh:focus-visible{outline:1.5px solid var(--da-accent,#176df2);outline-offset:1px}
+.da-live-refresh svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.45;
+  stroke-linecap:round;stroke-linejoin:round}
 /* A scriptless deck turns one page at a time. The pager is deliberately a small chip
    in the opposite corner from the closed address control: it leaves the slide itself
    clear and still gives the reader a visible way to turn a page. */
@@ -469,7 +475,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    would have to be learned, and there is exactly one of these. */
 .da-live-back{flex:0 0 auto;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-line-soft,rgba(127,127,127,.28));
   border-radius:8px;background:var(--dsw-alias-bg-base,rgba(255,255,255,.7));color:inherit;
-  font-size:11.5px;line-height:1;cursor:pointer}
+  font-size:11.5px;line-height:1;cursor:pointer;pointer-events:auto}
 .da-live-back:hover{background:rgba(127,127,127,.12)}
 .da-live-back[hidden]{display:none}
 /* An address that did not open says why under the field, in the reader's own words:
@@ -1064,6 +1070,50 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 [data-message-attachments]:has(~ * .da-card:not([data-static])){display:none}
 
 /* --- local service browser ------------------------------------------------ */
+.da-service-shell{display:flex;flex-direction:column;height:100%;min-height:0}
+.da-service-tabs{display:flex;flex:0 0 auto;align-items:center;gap:4px;box-sizing:border-box;
+  min-height:39px;padding:5px 7px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+  border-bottom:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));
+  background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 92%,transparent);
+  box-shadow:inset 0 -1px 0 rgba(255,255,255,.35)}
+.da-service-tabs::-webkit-scrollbar{display:none}
+.da-service-list-tab,.da-service-tab{flex:0 0 auto;height:29px;box-sizing:border-box;border-radius:9px}
+.da-service-list-tab{display:flex;align-items:center;justify-content:center;width:29px;padding:0;
+  border:0.5px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary,#787d85);
+  cursor:pointer}
+.da-service-list-tab:hover,.da-service-list-tab[data-active="true"]{background:rgba(76,138,99,.09);
+  border-color:rgba(76,138,99,.2);color:#2f7049}
+.da-service-list-tab:focus-visible,.da-service-tab-open:focus-visible,.da-service-tab-close:focus-visible{
+  outline:1.5px solid rgba(76,138,99,.55);outline-offset:1px}
+.da-service-list-tab svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.45;
+  stroke-linecap:round;stroke-linejoin:round}
+.da-service-tab{display:flex;align-items:center;min-width:74px;max-width:min(210px,46vw);
+  border:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2));
+  background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#f6f7f8) 84%,transparent);
+  overflow:hidden;transition:border-color .15s ease,background .15s ease}
+.da-service-tab:hover{border-color:rgba(76,138,99,.34);background:rgba(76,138,99,.055)}
+.da-service-tab[data-active="true"]{border-color:rgba(76,138,99,.38);
+  background:rgba(76,138,99,.1);box-shadow:inset 0 -1.5px 0 #4c8a63}
+.da-service-tab-open{display:flex;align-items:center;gap:6px;min-width:0;height:100%;padding:0 4px 0 9px;
+  border:0;background:transparent;color:var(--dsw-alias-label-secondary,#555b63);
+  font:11px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
+  text-align:left;cursor:pointer}
+.da-service-tab-dot{width:5px;height:5px;flex:0 0 auto;border-radius:50%;background:#6c727a;opacity:.55}
+.da-service-tab[data-active="true"] .da-service-tab-dot{background:#4c9a67;opacity:1;
+  box-shadow:0 0 0 3px rgba(76,154,103,.12)}
+.da-service-tab-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.da-service-tab-close{display:flex;align-items:center;justify-content:center;flex:0 0 auto;width:23px;
+  height:23px;margin-right:2px;padding:0;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-tertiary,#787d85);cursor:pointer;opacity:.7}
+.da-service-tab-close:hover{background:rgba(127,127,127,.13);color:var(--dsw-alias-label-primary,#1b1d20);
+  opacity:1}
+.da-service-tab-close svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.5;
+  stroke-linecap:round}
+.da-service-tab-open:disabled,.da-service-tab-close:disabled{opacity:.45;cursor:default}
+.da-service-errorbar{flex:0 0 auto;padding:7px 11px;border-bottom:0.5px solid rgba(180,35,24,.16);
+  background:color-mix(in srgb,var(--dsw-alias-label-error,#b42318) 7%,transparent);
+  color:var(--dsw-alias-label-error,#b42318);font-size:11px;line-height:1.4}
+.da-service-work{display:flex;flex:1 1 auto;min-height:0}
 .da-services{--da-service-ink:var(--dsw-alias-label-primary,#1b1d20);
   --da-service-muted:var(--dsw-alias-label-tertiary,#787d85);
   --da-service-line:color-mix(in srgb,var(--dsw-alias-border-l2,#c9cbd0) 66%,transparent);
@@ -1131,7 +1181,8 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 .da-services-empty{display:flex;flex-direction:column;align-items:center;gap:7px;padding:34px 16px;border:1px dashed var(--da-service-line);
   border-radius:16px;color:var(--da-service-muted);text-align:center;font-size:11.5px;line-height:1.5}
 .da-services-empty strong{color:var(--da-service-ink);font-size:13px;font-weight:600}
-.da-service-live{height:100%;min-height:0}
+.da-service-live{flex:1 1 auto;width:100%;height:100%;min-height:0}
+.da-service-live[hidden],.da-services[hidden]{display:none}
 .da-service-live>.da-root{height:100%}
 @keyframes da-service-rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
 /* A static HTML file gets a window, not the annotator. Its scripts may run inside an
@@ -1143,7 +1194,7 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
   color:var(--dsw-alias-label-error,var(--dsw-alias-state-error-primary,currentColor));
   font-size:12px;text-align:center}
 @media (prefers-reduced-motion:reduce){
-  .da-live-bar,.da-live-field,.da-service-row{transition:none;animation:none}
+  .da-live-bar,.da-live-field,.da-service-row,.da-service-tab{transition:none;animation:none}
 }
 `
 

@@ -59,6 +59,13 @@ export interface FigureRoomProps {
    * that page and not a copy of it.
    */
   readonly pageUrl?: string | undefined
+  /**
+   * Changes when the reader asks the same page to load again.
+   *
+   * The proxy URL is stable across a refresh, so it is the revision rather than the
+   * URL that gives the frame a new browsing context.
+   */
+  readonly frameRevision: number
   /** The mark surface's own draggable area. */
   readonly stageClass: StageCursor
   /**
@@ -138,7 +145,7 @@ export function FigureRoom(props: FigureRoomProps): ReactNode {
                 // A frame pointed at another origin can never be written into again, so
                 // going back to the file remounts it rather than reusing a window the
                 // panel has lost.
-                key={props.pageUrl ?? 'file'}
+                key={`${props.pageUrl ?? 'file'}\u0000${props.frameRevision}`}
                 ref={props.frameRef}
                 className="da-html"
                 title={t('htmlFrame')}

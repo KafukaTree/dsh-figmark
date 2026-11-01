@@ -223,6 +223,14 @@ export interface AnnotatorBodyProps {
    * than reading bytes from a file address that does not exist.
    */
   readonly livePage?: LivePage | undefined
+  /**
+   * Reports a page opened from this body's own address field.
+   *
+   * A service browser owns the tabs, so it has to learn the new address when the
+   * reader navigates inside the active frame. The callback does not reopen the page;
+   * it only updates the workspace that already owns this body.
+   */
+  readonly onLivePageChange?: ((page: LivePage) => void) | undefined
   /** Leaves a service page that was opened without a file behind it. */
   readonly onLiveBack?: (() => void) | undefined
   /**

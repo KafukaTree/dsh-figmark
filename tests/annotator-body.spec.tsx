@@ -4980,12 +4980,38 @@ describe('a rendered document', () => {
       await revealAddress()
       // A proxied page keeps the same field but changes its icon and badge.
       expect(field.dataset['live']).toBe('true')
-      expect(document.querySelector('.da-live-badge')?.textContent).toBe(zh.livePage)
+      expect(document.querySelector('.da-live-badge')).toBeNull()
+      const refresh = defined(document.querySelector<HTMLButtonElement>('.da-live-refresh'))
+      expect(refresh.getAttribute('aria-label')).toBe(zh.liveRefresh)
+      expect(refresh.getAttribute('title')).toBe(zh.liveRefresh)
       expect(document.querySelector('.da-live-icon circle')).not.toBeNull()
       // A page is the reader's own while nothing is being drawn on it.
       expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
       // The file's marks were locators in a document nobody is looking at any more.
       expect(document.querySelectorAll('.da-mark')).toHaveLength(0)
+    })
+
+    it('refreshes the frame without losing marks or reopening the proxy', async () => {
+      const result = await htmlBody({ liveUrl: LIVE_URL })
+      mounted = result
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      // Locating a mark starts a reveal timeout. Refreshing has to cancel that
+      // pending navigation as well as remounting the frame, or a stale timer can
+      // clear the selection and toast after the page has already reloaded.
+      await click(defined(document.querySelector('.da-mark-text')))
+      const original = frame()
+      const liveCalls = result.calls.filter(call => call.url.includes('/dsh-figmark/live')).length
+      await revealAddress()
+      await click(defined(document.querySelector('.da-live-refresh')) as HTMLElement)
+      const refreshed = frame()
+      expect(refreshed).not.toBe(original)
+      expect(refreshed.getAttribute('src')).toBe(LIVE_URL)
+      expect(result.calls.filter(call => call.url.includes('/dsh-figmark/live'))).toHaveLength(liveCalls)
+      expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
     })
 
     it('omits the breadcrumb when the file has no parent directory', async () => {

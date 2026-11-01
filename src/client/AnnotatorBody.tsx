@@ -242,6 +242,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const [liveAddressOpen, setLiveAddressOpen] = useState(false)
   /** The address field, focused when its compact icon is opened. */
   const liveAddressRef = useRef<HTMLInputElement | null>(null)
+  /** A fresh browsing context for the same live page, without reopening its proxy. */
+  const [frameRevision, setFrameRevision] = useState(0)
 
   useEffect(() => {
     if (!liveAddressOpen) return
@@ -1998,6 +2000,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         void closeLivePage(page.url).catch(() => { /* the Host may already have replaced it. */ })
         return
       }
+      props.onLivePageChange?.(page)
       fileBeforeLive.current ??= { marks, summary, createdAt }
       resetMarks([])
       writeSummary('')
@@ -3550,9 +3553,34 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                   }
                 }}
               />
-              <span className="da-live-badge" aria-hidden="true">
-                {livePage === null ? 'HTML' : t('livePage')}
-              </span>
+              {livePage === null ? (
+                <span className="da-live-badge" aria-hidden="true">HTML</span>
+              ) : (
+                <button type="button" className="da-live-refresh"
+                  aria-label={t('liveRefresh')}
+                  title={t('liveRefresh')}
+                  onClick={() => {
+                    pendingReveal.current = null
+                    temporaryReveal.current = null
+                    revealSerial.current += 1
+                    if (revealTimer.current !== null) {
+                      window.clearTimeout(revealTimer.current)
+                      revealTimer.current = null
+                    }
+                    setLiveHover(null)
+                    setPickLevel(undefined)
+                    setPreviewShown(null)
+                    setLiveSurface(null)
+                    setLiveSurfaceKnown(false)
+                    setHtmlScroll({ x: 0, y: 0 })
+                    setSelectedId(null)
+                    setFrameRevision(revision => revision + 1)
+                  }}>
+                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path d="M13 5.5V2.8m0 0H10.2M13 2.8A6 6 0 1 0 14 9" />
+                  </svg>
+                </button>
+              )}
             </>
           ) : null}
         </div>
@@ -3620,6 +3648,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         // takes the pointer, the overlay steps aside, and only the marks stay pressable.
         passing={passing}
         pageUrl={pageUrl}
+        frameRevision={frameRevision}
         onContextMenu={openMenu}
         onRasterLoad={setFileRasterSize}
         overlay={paper === null || size === null ? null : (

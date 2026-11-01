@@ -3,7 +3,9 @@
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIVE_MESSAGE } from '../src/shared/live'
 import { ServiceBrowser } from '../src/client/ServiceBrowser'
+import { zh } from '../src/client/locales'
 import { defined, installDom } from './dom'
 
 interface Call {
@@ -100,14 +102,55 @@ async function mount(sessionId = 's1'): Promise<void> {
 }
 
 /** Type into a field the way React sees it. */
-async function type(input: HTMLInputElement, value: string): Promise<void> {
-  // oxlint-disable-next-line typescript/unbound-method -- A DOM setter is invoked below with the input as its receiver.
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set as
-    | ((this: HTMLInputElement, value: string) => void)
+async function type(input: HTMLInputElement | HTMLTextAreaElement, value: string): Promise<void> {
+  const prototype = input.tagName === 'TEXTAREA'
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype
+  // oxlint-disable-next-line typescript/unbound-method -- The setter is invoked below with the input as its receiver.
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set as
+    | ((this: HTMLInputElement | HTMLTextAreaElement, value: string) => void)
     | undefined
   await act(async () => {
     setter?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+/** Press one control and let the opened page's effects settle. */
+async function click(element: Element): Promise<void> {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+  })
+}
+
+/** The live frame currently mounted by the service browser. */
+function frame(): HTMLIFrameElement {
+  return defined(host.querySelector<HTMLIFrameElement>('iframe.da-html'))
+}
+
+/** Report one element pick from the framed service page. */
+async function reportPick(id: string): Promise<void> {
+  const current = frame()
+  const origin = new URL(defined(current.getAttribute('src'))).origin
+  await act(async () => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        figmark: LIVE_MESSAGE,
+        kind: 'pick',
+        tag: 'p',
+        id,
+        selector: `#${id}`,
+        bbox: [10, 20, 100, 40],
+        scroll: [0, 0],
+        level: 1,
+        count: 1,
+      },
+      origin,
+      source: current.contentWindow,
+    }))
+    for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
   })
 }
 
@@ -129,11 +172,15 @@ beforeEach(() => {
     observe(): void {}
     disconnect(): void {}
   }
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 800 })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
 })
 
 afterEach(() => {
   act(() => { root.unmount() })
   host.remove()
+  delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth
+  delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
   vi.unstubAllGlobals()
 })
 
@@ -335,6 +382,346 @@ describe('the local-pages picker', () => {
     })
     expect(calls.some(call => call.url.includes('/live?url=') && call.init?.method === 'DELETE')).toBe(true)
     expect(host.querySelector('.da-services')).not.toBeNull()
+  })
+
+  it('keeps a live workspace when returning to the list, then restores its marks', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+      },
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('lead')
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(false)
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(1)
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(true)
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+  })
+
+  it('keeps two page workspaces independent without running two proxies', async () => {
+    const pages = new Map([
+      ['http://127.0.0.1:5173/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/first/'],
+      ['http://127.0.0.1:8000/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/second/'],
+    ])
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (url.includes('/services')) {
+        return response({
+          ok: true,
+          services: [
+            { url: 'http://127.0.0.1:5173/', title: 'First', source: 'common' },
+            { url: 'http://127.0.0.1:8000/', title: 'Second', source: 'common' },
+          ],
+        })
+      }
+      if (url.includes('/live') && init?.method === 'POST') {
+        const body = typeof init.body === 'string'
+          ? JSON.parse(init.body) as { readonly url?: string }
+          : {}
+        return response({ ok: true, url: defined(pages.get(body.url ?? '')) })
+      }
+      return response({ ok: true })
+    })
+    await mount()
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('.da-service-row')]
+    await click(defined(rows[0]))
+    await reportPick('first')
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(rows[1]))
+    await reportPick('second')
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(2)
+
+    const tabs = [...host.querySelectorAll<HTMLButtonElement>('.da-service-tab-open')]
+    await click(defined(tabs[0]))
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    await click(defined(host.querySelectorAll<HTMLButtonElement>('.da-service-tab-open')[1]))
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    // Every switch replaces the one Host proxy instead of asking it to run both.
+    const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST')
+    expect(posts.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('keeps the current page when pressing its active tab or reopening its address', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+      },
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('kept')
+    const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST').length
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+
+    const input = defined(host.querySelector<HTMLInputElement>('.da-service-search input'))
+    await type(input, '127.0.0.1:5173')
+    await act(async () => {
+      defined(host.querySelector<HTMLFormElement>('.da-service-search')).requestSubmit()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(calls.filter(call =>
+      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts)
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+  })
+
+  it('updates one workspace when its own address field navigates', async () => {
+    const proxies = new Map([
+      ['http://127.0.0.1:5173/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/first/'],
+      ['http://127.0.0.1:8000/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/second/'],
+      ['http://127.0.0.1:5173/next', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/next/'],
+    ])
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (url.includes('/services')) {
+        return response({
+          ok: true,
+          services: [
+            { url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' },
+            { url: 'http://127.0.0.1:8000/', title: 'Notes', source: 'common' },
+          ],
+        })
+      }
+      if (url.includes('/live') && init?.method === 'POST') {
+        const body = typeof init.body === 'string'
+          ? JSON.parse(init.body) as { readonly url?: string }
+          : {}
+        return response({ ok: true, url: defined(proxies.get(body.url ?? '')) })
+      }
+      return response({ ok: true })
+    })
+    await mount()
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('.da-service-row')]
+    await click(defined(rows[0]))
+    await reportPick('first')
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(rows[1]))
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-live-toggle')))
+    const address = defined(host.querySelector<HTMLInputElement>('input.da-live-addr'))
+    await type(address, '127.0.0.1:5173/next')
+    await act(async () => {
+      address.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Enter', bubbles: true, cancelable: true,
+      }))
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    })
+
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(2)
+    expect([...host.querySelectorAll('.da-service-tab-name')].map(node => node.textContent))
+      .toEqual(['/next', 'Notes'])
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(0)
+    expect(frame().getAttribute('src')).toBe(proxies.get('http://127.0.0.1:5173/next'))
+  })
+
+  it('shows a failed tab switch without covering or losing the current page', async () => {
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (url.includes('/services')) {
+        return response({
+          ok: true,
+          services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+        })
+      }
+      if (url.includes('/live') && init?.method === 'POST') {
+        const body = typeof init.body === 'string'
+          ? JSON.parse(init.body) as { readonly url?: string }
+          : {}
+        return body.url === 'http://127.0.0.1:5173/'
+          ? response({ ok: true, url: 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/first/' })
+          : response({ ok: false, error: 'second page refused' }, 400)
+      }
+      return response({ ok: true })
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('still here')
+    const current = frame()
+
+    const input = defined(host.querySelector<HTMLInputElement>('.da-service-search input'))
+    await type(input, 'localhost:7999')
+    await act(async () => {
+      defined(host.querySelector<HTMLFormElement>('.da-service-search')).requestSubmit()
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+      for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    })
+
+    expect(host.querySelector('.da-service-errorbar')?.textContent).toBe('second page refused')
+    expect(frame()).toBe(current)
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+  })
+
+  it('closes the active workspace, promotes another, then leaves an empty list', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [
+          { url: 'http://127.0.0.1:5173/', title: 'First', source: 'common' },
+          { url: 'http://127.0.0.1:8000/', title: 'Second', source: 'common' },
+        ],
+      },
+    })
+    await mount()
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('.da-service-row')]
+    await click(defined(rows[0]))
+    await reportPick('first')
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(rows[1]))
+    await reportPick('second')
+
+    const closeButtons = [...host.querySelectorAll<HTMLButtonElement>('.da-service-tab-close')]
+    await click(defined(closeButtons[1]))
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(1)
+    expect(host.querySelector('.da-service-tab-name')?.textContent).toBe('First')
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(false)
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-close')))
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(0)
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(false)
+  })
+
+  it('keeps an untitled page untitled on an address open, then adopts a scanned title', async () => {
+    let scans = 0
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      if (url.includes('/services')) {
+        scans += 1
+        return response({
+          ok: true,
+          services: [{
+            url: 'http://127.0.0.1:5173/guide',
+            ...(scans === 1 ? {} : { title: 'Guide' }),
+            source: 'common',
+          }],
+        })
+      }
+      if (url.includes('/live') && init?.method === 'POST') {
+        return response({ ok: true, url: 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/guide/' })
+      }
+      return response({ ok: true })
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    expect(host.querySelector('.da-service-tab-name')?.textContent).toBe('/guide')
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    const input = defined(host.querySelector<HTMLInputElement>('.da-service-search input'))
+    await type(input, '127.0.0.1:5173/guide')
+    await act(async () => {
+      defined(host.querySelector<HTMLFormElement>('.da-service-search')).requestSubmit()
+      await new Promise(resolve => { setTimeout(resolve, 0) })
+      for (let turn = 0; turn < 6; turn += 1) await Promise.resolve()
+    })
+    expect(host.querySelector('.da-service-tab-name')?.textContent).toBe('/guide')
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    expect(host.querySelector('.da-service-tab-name')?.textContent).toBe('Guide')
+  })
+
+  it('uses the endpoint for a root page without a title and resets drafts with the session', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [
+          { url: 'http://127.0.0.1:5173/', source: 'common' },
+          { url: 'http://127.0.0.1:8000/', title: '', source: 'common' },
+        ],
+      },
+    })
+    await mount()
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('.da-service-row')]
+    await click(defined(rows[0]))
+    await reportPick('untitled root')
+    expect(host.querySelector('.da-service-tab-name')?.textContent).toBe('127.0.0.1:5173')
+
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
+    await click(defined(rows[1]))
+    expect([...host.querySelectorAll('.da-service-tab-name')].map(node => node.textContent))
+      .toEqual(['127.0.0.1:5173', '127.0.0.1:8000'])
+
+    await act(async () => {
+      root.render(browser('s2'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(0)
+    expect(defined(host.querySelector<HTMLElement>('.da-services')).hidden).toBe(false)
+  })
+
+  it('restores a live page draft after the service browser is remounted', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+      },
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('persisted')
+    act(() => { root.unmount() })
+    host.remove()
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+  })
+
+  it('keeps a page note beside marks and restores both together', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+      },
+    })
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('noted')
+    await act(async () => {
+      ;[...host.querySelectorAll<HTMLButtonElement>('button')]
+        .find(button => button.getAttribute('aria-label') === zh.summary
+          || button.textContent === zh.summary)?.click()
+      await Promise.resolve()
+    })
+    const note = defined(host.querySelector<HTMLTextAreaElement>('.da-float-goal textarea'))
+    await type(note, 'page-level note')
+    await act(async () => {
+      await new Promise(resolve => { setTimeout(resolve, 300) })
+    })
+
+    act(() => { root.unmount() })
+    host.remove()
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    await mount()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await act(async () => {
+      ;[...host.querySelectorAll<HTMLButtonElement>('button')]
+        .find(button => button.getAttribute('aria-label') === zh.summary
+          || button.textContent === zh.summary)?.click()
+      await Promise.resolve()
+    })
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(host.querySelector<HTMLTextAreaElement>('.da-float-goal textarea')?.value)
+      .toBe('page-level note')
   })
 
   it('locks row opens so the first clicked page wins', async () => {
