@@ -6,6 +6,30 @@ DeepSeek Harness 插件：在右侧栏的文档预览里**直接圈画批注**�
 
 > annotate a figure (image / SVG / PDF) or a locally served web page in the right-sidebar preview and hand the marks to the agent as one user message. Original files are never modified: file marks live in a sidecar next to them.
 
+<p align="center">
+  <img src="./docs/images/readme/html-element-annotation.png" width="100%" alt="在右侧栏直接选中本机网页元素并添加评论">
+</p>
+<p align="center"><sub>本机网页：直接在运行中的页面上选择元素、写评论；页面仍保留自己的脚本、布局和交互。</sub></p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="./docs/images/readme/raster-annotation.png" alt="在图片上添加箭头、区域和 pin 评论"><br>
+      <sub>图片：箭头、区域和 pin 评论留在原图之上，批注文字不会被烧进图片。</sub>
+    </td>
+    <td width="50%">
+      <img src="./docs/images/readme/svg-element-annotation.png" alt="在 SVG 中直接选中元素并添加评论"><br>
+      <sub>SVG：不只画框，直接选中图元或分组，拿到可回源码定位的锚点。</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2">
+      <img src="./docs/images/readme/pdf-annotation.png" alt="在 PDF 页面中圈选并添加评论"><br>
+      <sub>PDF：逐页批注，保存时写成阅读器可继续编辑和删除的原生注释对象。</sub>
+    </td>
+  </tr>
+</table>
+
 ## 它解决的问题
 
 科研图的返工意见大多是**位置性的**：「这个标号指错了」「这里少一条图例」「这条误差棒太长了」。用文字描述既慢又容易误解，而只发一张截图给模型，它只知道「图上有个红框」，不知道红框框的是哪一行元素。
@@ -76,6 +100,7 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - 触控板捏合缩放，缩放中心跟指针；「选择」工具下直接拖动就是平移。
 - 双击图上的标注 = 打开它的说明框；`Esc` 取消选中；`Delete`/`Backspace` 删除选中标注。
 - 编辑会**自动保存**（防抖 600ms），刷新、重开都不丢；只有点「发送」成功后才清空面板并删掉磁盘上的批注文件。
+- 点击已发送批注卡片会回到对应的文件或「本机网页」标签；已经打开的 live page 保持原 frame、滚动位置和页内状态，不会被重新打开。
 
 ### 本机网页：只标注正在运行的服务
 
@@ -87,6 +112,7 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - 元素模式下，悬停会预览将选中的元素，`↑↓` 调整层级，点击落一条可回源定位的元素标注；箭头 / 框 / 圈 / 手绘仍叠在页面上。标注清单会显示 `<tag#id.class = "text">`，点击后先让页面定位，页面确认可见才选中。
 - 左上地址抽屉默认收成一个图标，展开只从原位置向右生长；Enter 打开地址，Esc 恢复当前页地址，打开或返回后自动收起。
 - 服务页的批注没有侧车文件可写：页面地址就是消息里的路径，元素 `selector` 是回源定位的主锚点。
+- **只有当前可见的绘图标注才触发页面截图**：只有元素选择或 pin 时不生成、也不等待截图；箭头 / 框 / 圆 / 手绘会截取当前可见 surface 并叠加其中可见的标注；其他 slide 或视口外的标注改由 `surface`、元素选择器和坐标定位。
 
 ### 两个发送按钮
 
@@ -95,7 +121,7 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 | **发送给智能体** | 批注+标注图作为一条用户消息**直接发进当前会话** |
 | **发送到对话框** | 只**写进输入框草稿**（连同图片附件），你自己看完再按回车 |
 
-纯单点批注（一个坐标 + 一句话，没有框和箭头）不生成标注图——消息里会写明「本条标注只有位置点，没有标注图」，让智能体按坐标去原图定位。
+本机网页的纯元素选择或纯 pin 批注不生成截图，消息会标记为「位置标注」并直接发送；包含可见绘图的批注只截当前 surface。文件图片、SVG 与 PDF 的导出规则不受这条 live-page 策略影响。
 
 ## 产物
 
@@ -130,8 +156,20 @@ DSH_HOME=/tmp/figmarkdev dsh --profile figmarkdev --port 3099 --no-open
 - **PDF 只写原生注释对象**：不做「把标记烧进页面内容」的副本。好处是标记在阅读器里仍可编辑删除；代价是只看页面内容、不渲染注释的流程看不到标记（那种场合用消息里附的每页图片）。
 - **PDF 一次一页**，无文本层、无连续滚动。
 - **本机网页必须有正在运行的 loopback 服务**：静态文件只有 Figmark 的只读预览；Figmark 不替用户扫描全部端口，也不执行任意 workspace 命令。
-- **服务页标注没有快照附件**：浏览器不能把任意运行页稳定栅格化成一份可交付副本，所以消息只带页面地址、元素 selector、坐标与文字。
+- **服务页截图只覆盖当前可见 surface**：不会为了截图重建历史页面、跨 slide 拼接或截取视口外内容；这些标注靠 `surface`、元素 selector、坐标和文字定位。
 - **Office 尚未接入。**
+
+## 最近更新
+
+`1.2.2` 聚焦本机网页批注的真实使用体验：
+
+- 元素与 pin 单独成批时跳过截图，常见审阅路径立即完成。
+- 只有可见绘图触发一次截图，跨页与视口外标注改由结构化位置描述。
+- 批注卡片会回到正确的「本机网页」标签，返回列表和刷新不销毁已打开的页面。
+- 多个 live page 各自保留草稿、滚动位置与页内状态，切换标签不会串页。
+- 「本机网页」入口新增与相邻工具一致的本地服务图标。
+
+完整构建与覆盖信息见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 开发
 

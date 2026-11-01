@@ -49,6 +49,8 @@ git 源切换只需改 `market/index.json` 里那一个 `source` 对象并推送
 - [ ] `package.json` 的 `version` 与 `market/index.json` 的 `versions[0].version` **一致**
 - [ ] `publishTimestamp` 是**这一次**的 Unix 秒（不是上一次的残留）
 - [ ] `engines.dsh` 没跟着 DSH 升级漂移（它决定装不装得上）
+- [ ] `README.md` 的展示图都存在于 `docs/images/readme/`，且画面里没有真实会话、用户名或绝对路径
+- [ ] `CHANGELOG.md` 已写下本版用户可见的变化，并作为 GitHub Release 文案的基线
 - [ ] `npm pack --dry-run` 里没有 `src/`、`tests/`、`docs/`
 - [ ] 图标改过的话，内联进 `market/index.json` 的 base64 也要重新生成
 - [ ] 新功能/新改动在 `docs/notes/implemented/` 有决策记录（AGENTS.md 要求）
