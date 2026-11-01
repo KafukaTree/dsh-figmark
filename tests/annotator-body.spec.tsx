@@ -4991,6 +4991,20 @@ describe('a rendered document', () => {
       expect(document.querySelectorAll('.da-mark')).toHaveLength(0)
     })
 
+    it('reports the live page it opened to the owner of the file', async () => {
+      const pages: { readonly address: string; readonly url: string }[] = []
+      mounted = await htmlBody(
+        { liveUrl: LIVE_URL },
+        { onLivePageChange: page => { pages.push(page) } },
+      )
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      expect(pages).toEqual([{
+        address: 'http://localhost:5173/',
+        url: LIVE_URL,
+      }])
+    })
+
     it('refreshes the frame without losing marks or reopening the proxy', async () => {
       const result = await htmlBody({ liveUrl: LIVE_URL })
       mounted = result
@@ -5440,7 +5454,6 @@ describe('a rendered document', () => {
       const result = await mountBody({
         livePage: { address: SERVICE_ADDRESS, url: SERVICE_URL },
         sessionId: 's1',
-        onLiveBack: () => {},
         ...props,
       }, { stageWidth: 800, stageHeight: 600 })
       return { ...result, calls }
@@ -5458,11 +5471,6 @@ describe('a rendered document', () => {
       })
     }
 
-    /** Open the address drawer so its direct-service back action is visible. */
-    async function revealAddress(): Promise<void> {
-      await click(defined(document.querySelector('.da-live-toggle')) as HTMLElement)
-    }
-
     it('frames the running page without reading or writing a file sidecar', async () => {
       const result = await serviceBody()
       mounted = result
@@ -5470,8 +5478,11 @@ describe('a rendered document', () => {
       expect(frame().getAttribute('sandbox')).toContain('allow-scripts')
       expect(defined(document.querySelector('.da-stage')).getAttribute('data-pass')).toBe('true')
       expect(result.calls.some(call => call.url.includes('/dsh-figmark/annotation'))).toBe(false)
-      await revealAddress()
-      expect(document.querySelector('.da-live-back')?.textContent).toBe(zh.liveBackServices)
+      // The service browser's tab strip owns list, reload, and switching. A direct
+      // live body must not repeat that navigation over the page.
+      expect((defined(document.querySelector('.da-live-bar')) as HTMLElement).hidden).toBe(true)
+      expect(document.querySelector('input.da-live-addr')).toBeNull()
+      expect(document.querySelector('.da-live-back')).toBeNull()
     })
 
     it('picks an element, lists its source signature, and sends without a sidecar write', async () => {

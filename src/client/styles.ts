@@ -1077,16 +1077,18 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
   background:color-mix(in srgb,var(--dsw-alias-bg-base,#fff) 92%,transparent);
   box-shadow:inset 0 -1px 0 rgba(255,255,255,.35)}
 .da-service-tabs::-webkit-scrollbar{display:none}
-.da-service-list-tab,.da-service-tab{flex:0 0 auto;height:29px;box-sizing:border-box;border-radius:9px}
-.da-service-list-tab{display:flex;align-items:center;justify-content:center;width:29px;padding:0;
+.da-service-list-tab,.da-service-refresh,.da-service-tab{flex:0 0 auto;height:29px;box-sizing:border-box;border-radius:9px}
+.da-service-list-tab,.da-service-refresh{display:flex;align-items:center;justify-content:center;width:29px;padding:0;
   border:0.5px solid transparent;background:transparent;color:var(--dsw-alias-label-tertiary,#787d85);
   cursor:pointer}
-.da-service-list-tab:hover,.da-service-list-tab[data-active="true"]{background:rgba(76,138,99,.09);
+.da-service-list-tab:hover,.da-service-list-tab[data-active="true"],.da-service-refresh:hover{background:rgba(76,138,99,.09);
   border-color:rgba(76,138,99,.2);color:#2f7049}
-.da-service-list-tab:focus-visible,.da-service-tab-open:focus-visible,.da-service-tab-close:focus-visible{
+.da-service-list-tab:focus-visible,.da-service-refresh:focus-visible,.da-service-tab-open:focus-visible,.da-service-tab-close:focus-visible{
   outline:1.5px solid rgba(76,138,99,.55);outline-offset:1px}
-.da-service-list-tab svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.45;
+.da-service-list-tab svg,.da-service-refresh svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.45;
   stroke-linecap:round;stroke-linejoin:round}
+.da-service-refresh svg{width:12px;height:12px}
+.da-service-refresh:disabled{opacity:.45;cursor:default}
 .da-service-tab{display:flex;align-items:center;min-width:74px;max-width:min(210px,46vw);
   border:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2));
   background:color-mix(in srgb,var(--dsw-alias-bg-layer-2,#f6f7f8) 84%,transparent);

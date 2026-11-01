@@ -372,11 +372,8 @@ describe('the local-pages picker', () => {
       'http://127.0.0.1:5173/',
     ])
     expect(host.querySelector('.da-service-live')).not.toBeNull()
-    const drawer = defined(host.querySelector<HTMLButtonElement>('.da-live-toggle'))
-    await act(async () => { drawer.click() })
-    const back = [...host.querySelectorAll('button')].find(button => button.textContent === '返回列表')
     await act(async () => {
-      defined(back).click()
+      defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')).click()
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -448,7 +445,7 @@ describe('the local-pages picker', () => {
     expect(posts.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('keeps the current page when pressing its active tab or reopening its address', async () => {
+  it('keeps the current page when pressing its active tab or reopening it from the list', async () => {
     stubNetwork({
       services: {
         ok: true,
@@ -461,8 +458,11 @@ describe('the local-pages picker', () => {
     const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST').length
 
     await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
+    expect(calls.filter(call =>
+      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts)
     expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
 
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
     const input = defined(host.querySelector<HTMLInputElement>('.da-service-search input'))
     await type(input, '127.0.0.1:5173')
     await act(async () => {
@@ -471,59 +471,34 @@ describe('the local-pages picker', () => {
       await Promise.resolve()
     })
     expect(calls.filter(call =>
-      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts)
+      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts + 1)
     expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
   })
 
-  it('updates one workspace when its own address field navigates', async () => {
-    const proxies = new Map([
-      ['http://127.0.0.1:5173/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/first/'],
-      ['http://127.0.0.1:8000/', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/second/'],
-      ['http://127.0.0.1:5173/next', 'http://127.0.0.1:9444/__dsh_figmark_live/proxy/next/'],
-    ])
-    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
-      calls.push({ url, init })
-      if (url.includes('/services')) {
-        return response({
-          ok: true,
-          services: [
-            { url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' },
-            { url: 'http://127.0.0.1:8000/', title: 'Notes', source: 'common' },
-          ],
-        })
-      }
-      if (url.includes('/live') && init?.method === 'POST') {
-        const body = typeof init.body === 'string'
-          ? JSON.parse(init.body) as { readonly url?: string }
-          : {}
-        return response({ ok: true, url: defined(proxies.get(body.url ?? '')) })
-      }
-      return response({ ok: true })
+  it('refreshes the active page from the tab strip without losing its draft', async () => {
+    stubNetwork({
+      services: {
+        ok: true,
+        services: [{ url: 'http://127.0.0.1:5173/', title: 'Deck', source: 'common' }],
+      },
     })
     await mount()
-    const rows = [...host.querySelectorAll<HTMLButtonElement>('.da-service-row')]
-    await click(defined(rows[0]))
-    await reportPick('first')
-    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
-    await click(defined(rows[1]))
-    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-list-tab')))
-    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-tab-open')))
-    await click(defined(host.querySelector<HTMLButtonElement>('.da-live-toggle')))
-    const address = defined(host.querySelector<HTMLInputElement>('input.da-live-addr'))
-    await type(address, '127.0.0.1:5173/next')
-    await act(async () => {
-      address.dispatchEvent(new KeyboardEvent('keydown', {
-        key: 'Enter', bubbles: true, cancelable: true,
-      }))
-      await new Promise(resolve => { setTimeout(resolve, 0) })
-      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
-    })
+    expect(host.querySelector('.da-service-refresh')).toBeNull()
+    await click(defined(host.querySelector<HTMLButtonElement>('.da-service-row')))
+    await reportPick('kept')
+    const original = frame()
+    const posts = calls.filter(call => call.url.includes('/live') && call.init?.method === 'POST').length
+    expect((defined(host.querySelector('.da-live-bar')) as HTMLElement).hidden).toBe(true)
 
-    expect(host.querySelectorAll('.da-service-tab')).toHaveLength(2)
-    expect([...host.querySelectorAll('.da-service-tab-name')].map(node => node.textContent))
-      .toEqual(['/next', 'Notes'])
-    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(0)
-    expect(frame().getAttribute('src')).toBe(proxies.get('http://127.0.0.1:5173/next'))
+    const refresh = defined(host.querySelector<HTMLButtonElement>('.da-service-refresh'))
+    expect(refresh.getAttribute('aria-label')).toBe(zh.liveRefresh)
+    expect(refresh.getAttribute('title')).toBe(zh.liveRefresh)
+    await click(refresh)
+    expect(frame()).not.toBe(original)
+    expect(frame().getAttribute('src')).toBe('http://127.0.0.1:9444/__dsh_figmark_live/proxy/')
+    expect(host.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    expect(calls.filter(call =>
+      call.url.includes('/live') && call.init?.method === 'POST')).toHaveLength(posts)
   })
 
   it('shows a failed tab switch without covering or losing the current page', async () => {

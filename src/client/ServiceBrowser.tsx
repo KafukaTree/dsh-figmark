@@ -91,12 +91,11 @@ function ActiveLiveBody(props: ServiceBrowserInjected & {
   readonly summary: string
   readonly onDraft: (workspaceId: string, address: string, draft: SurfaceDraft) => void
   readonly onSummary: (workspaceId: string, address: string, summary: string) => void
-  readonly onPageChange: (workspaceId: string, page: LivePage) => void
-  readonly onBack: () => void
+  readonly refreshToken: number
 }): ReactNode {
   const { id: workspaceId } = props.workspace
   const { address } = props.page
-  const { onDraft, onSummary, onPageChange } = props
+  const { onDraft, onSummary } = props
   const onDraftChange = useCallback(
     (draft: SurfaceDraft): void => { onDraft(workspaceId, address, draft) },
     [address, onDraft, workspaceId],
@@ -104,10 +103,6 @@ function ActiveLiveBody(props: ServiceBrowserInjected & {
   const onSummaryChange = useCallback(
     (summary: string): void => { onSummary(workspaceId, address, summary) },
     [address, onSummary, workspaceId],
-  )
-  const onLivePageChange = useCallback(
-    (page: LivePage): void => { onPageChange(workspaceId, page) },
-    [onPageChange, workspaceId],
   )
   return (
     <div className="da-service-live">
@@ -123,8 +118,7 @@ function ActiveLiveBody(props: ServiceBrowserInjected & {
         summary={props.summary}
         onDraftChange={onDraftChange}
         onSummaryChange={onSummaryChange}
-        onLivePageChange={onLivePageChange}
-        onLiveBack={props.onBack}
+        refreshToken={props.refreshToken}
       />
     </div>
   )
@@ -201,6 +195,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [runtime, setRuntime] = useState<LiveRuntime | null>(null)
   const [showingList, setShowingList] = useState(true)
+  const [refreshToken, setRefreshToken] = useState(0)
   const [liveDraft, setLiveDraft] = useState<LiveDraft>(EMPTY_LIVE_DRAFT)
   const scanGeneration = useRef(0)
   const openGeneration = useRef(0)
@@ -249,6 +244,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     setRuntime(null)
     setActiveWorkspaceId(null)
     setShowingList(true)
+    setRefreshToken(0)
     activeDraft.current = EMPTY_LIVE_DRAFT
     setLiveDraft(EMPTY_LIVE_DRAFT)
     for (const timer of draftTimers.current.values()) clearTimeout(timer)
@@ -317,12 +313,6 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     const known = wantedWorkspaceId === undefined
       ? workspaces.find(workspace => workspace.address === address)
       : workspaces.find(workspace => workspace.id === wantedWorkspaceId)
-    if (known !== undefined && runtime?.workspaceId === known.id && runtime.page.address === address) {
-      remember(address)
-      setActiveWorkspaceId(known.id)
-      setShowingList(false)
-      return
-    }
     const generation = openGeneration.current + 1
     openGeneration.current = generation
     openingRef.current = true
@@ -382,7 +372,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
         setOpening(false)
       }
     }
-  }, [props.sessionId, remember, runtime, t, workspaces])
+  }, [props.sessionId, remember, t, workspaces])
 
   const backToList = useCallback((): void => {
     setRuntime(null)
@@ -402,19 +392,6 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
     }
     if (remaining.length === 0) setShowingList(true)
   }, [activeWorkspaceId, flushDraft, props.sessionId, runtime, workspaces])
-
-  const learnPage = useCallback((workspaceId: string, page: LivePage): void => {
-    const installed = draftSnapshots.current.get(page.address) ?? {
-      marks: [], summary: '', updatedAt: Date.now(),
-    }
-    activeDraft.current = installed
-    draftSnapshots.current.set(page.address, installed)
-    setLiveDraft(installed)
-    setWorkspaces(current => current.map(workspace => workspace.id === workspaceId
-      ? { id: workspace.id, address: page.address }
-      : workspace))
-    setRuntime({ workspaceId, page })
-  }, [])
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
@@ -465,6 +442,17 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
               <path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h7M3 4.5h.01M3 8h.01M3 11.5h.01" />
             </svg>
           </button>
+          {runtime === null ? null : (
+            <button type="button" className="da-service-refresh"
+              disabled={opening}
+              aria-label={t('liveRefresh')}
+              title={t('liveRefresh')}
+              onClick={() => { setRefreshToken(token => token + 1) }}>
+              <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M13 5.5V2.8m0 0H10.2M13 2.8A6 6 0 1 0 14 9" />
+              </svg>
+            </button>
+          )}
           {workspaces.map(workspace => (
             <span className="da-service-tab" data-active={
               !listVisible && activeWorkspaceId === workspace.id
@@ -578,8 +566,7 @@ export function ServiceBrowser(props: ServiceBrowserInjected): ReactNode {
             remote={props.remote}
             onDraft={rememberDraft}
             onSummary={rememberSummary}
-            onPageChange={learnPage}
-            onBack={backToList}
+            refreshToken={refreshToken}
           />
         ) : null}
       </div>

@@ -231,8 +231,13 @@ export interface AnnotatorBodyProps {
    * it only updates the workspace that already owns this body.
    */
   readonly onLivePageChange?: ((page: LivePage) => void) | undefined
-  /** Leaves a service page that was opened without a file behind it. */
-  readonly onLiveBack?: (() => void) | undefined
+  /**
+   * Reloads a directly opened service page from the same proxy.
+   *
+   * The service browser owns the visible controls for those pages, so its tab strip
+   * increments this value instead of asking the body to draw an address drawer.
+   */
+  readonly refreshToken?: number | undefined
   /**
    * Each mark's number in the whole document, for a body that shows one page of it.
    *

@@ -244,6 +244,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const liveAddressRef = useRef<HTMLInputElement | null>(null)
   /** A fresh browsing context for the same live page, without reopening its proxy. */
   const [frameRevision, setFrameRevision] = useState(0)
+  /** The last owner refresh request already applied. */
+  const handledRefreshToken = useRef(props.refreshToken)
 
   useEffect(() => {
     if (!liveAddressOpen) return
@@ -1947,6 +1949,30 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   const revealTimer = useRef<number | null>(null)
   /** The mark and surface a temporary hidden-layer reveal settled on. */
   const temporaryReveal = useRef<{ readonly markId: string; readonly surface: string | null } | null>(null)
+  const refreshLiveFrame = useCallback((): void => {
+    pendingReveal.current = null
+    temporaryReveal.current = null
+    setTemporaryMark(null)
+    revealSerial.current += 1
+    if (revealTimer.current !== null) {
+      window.clearTimeout(revealTimer.current)
+      revealTimer.current = null
+    }
+    setLiveHover(null)
+    setPickLevel(undefined)
+    setPreviewShown(null)
+    setLiveSurface(null)
+    setLiveSurfaceKnown(false)
+    setHtmlScroll({ x: 0, y: 0 })
+    setSelectedId(null)
+    setFrameRevision(revision => revision + 1)
+  }, [setSelectedId])
+  useEffect(() => {
+    const token = props.refreshToken
+    if (token === undefined || token === handledRefreshToken.current) return
+    handledRefreshToken.current = token
+    refreshLiveFrame()
+  }, [props.refreshToken, refreshLiveFrame])
   useEffect(() => () => {
     if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
   }, [])
@@ -3516,7 +3542,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       {/* The address is a closed drawer by default: one location icon in the corner,
           rather than a filename card taking a slice of every HTML preview. Opening it
           gives the same file/page field as before; the icon itself closes it again. */}
-      <div className="da-live-bar" data-open={liveAddressOpen} hidden={!isHtml}>
+      <div className="da-live-bar" data-open={liveAddressOpen}
+        hidden={!isHtml || props.livePage !== undefined}>
         <div className="da-live-field" data-live={livePage !== null}
           data-open={liveAddressOpen}
           title={loaded?.path ?? undefined}>
@@ -3585,24 +3612,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 <button type="button" className="da-live-refresh"
                   aria-label={t('liveRefresh')}
                   title={t('liveRefresh')}
-                  onClick={() => {
-                    pendingReveal.current = null
-                    temporaryReveal.current = null
-                    setTemporaryMark(null)
-                    revealSerial.current += 1
-                    if (revealTimer.current !== null) {
-                      window.clearTimeout(revealTimer.current)
-                      revealTimer.current = null
-                    }
-                    setLiveHover(null)
-                    setPickLevel(undefined)
-                    setPreviewShown(null)
-                    setLiveSurface(null)
-                    setLiveSurfaceKnown(false)
-                    setHtmlScroll({ x: 0, y: 0 })
-                    setSelectedId(null)
-                    setFrameRevision(revision => revision + 1)
-                  }}>
+                  onClick={refreshLiveFrame}>
                   <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                     <path d="M13 5.5V2.8m0 0H10.2M13 2.8A6 6 0 1 0 14 9" />
                   </svg>
@@ -3615,17 +3625,16 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           <>
             <span className="da-live-note" hidden={!liveBusy}>{t('liveOpening')}</span>
             <button type="button" className="da-live-back"
-              hidden={livePage === null || (fileBeforeLive.current === null && props.onLiveBack === undefined)}
+              hidden={livePage === null || fileBeforeLive.current === null}
               onClick={() => {
                 const file = fileBeforeLive.current
                 if (file !== null) closePage(file)
-                else props.onLiveBack?.()
-              }}>{t(fileBeforeLive.current === null ? 'liveBackServices' : 'liveBack')}</button>
+              }}>{t('liveBack')}</button>
           </>
         ) : null}
       </div>
       <span className="da-live-error"
-        hidden={!liveAddressOpen || liveError === null}>{liveError}</span>
+        hidden={props.livePage !== undefined || !liveAddressOpen || liveError === null}>{liveError}</span>
 
       {deckCount < 2 || previewPage !== null ? null : (
         <div className="da-deck-pager" role="group" aria-label={t('pagerLabel')}>
