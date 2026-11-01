@@ -1,6 +1,7 @@
 /** The browser entry: the renderer registrations, the injected props, and its failures. */
 import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { AnnotatorBody } from '../src/client/AnnotatorBody'
 import { LazyPdfBody } from '../src/client/LazyPdfBody'
 import {
@@ -11,6 +12,7 @@ import { RULE_ID, annotationRule } from '../src/client/annotation-rule'
 import { AnnotationCard } from '../src/client/annotation-card'
 import { NAMESPACE, en, zh } from '../src/client/locales'
 import { ServiceBrowser } from '../src/client/ServiceBrowser'
+import { ServiceGuideIcon } from '../src/client/service-guide-icon'
 import { missingService } from '../src/missing-service'
 import { defined } from './dom'
 
@@ -42,6 +44,7 @@ interface StubSidebarTab {
     readonly order?: number
     readonly title: () => string
     readonly description?: () => string
+    readonly icon?: unknown
   }[]
 }
 
@@ -226,6 +229,16 @@ describe('browser entry', () => {
     expect(guide.order).toBe(20)
     expect(guide.title()).toBe(`${NAMESPACE}.serviceTitle`)
     expect(guide.description?.()).toBe(`${NAMESPACE}.serviceHint`)
+    expect(guide.icon).toBe(ServiceGuideIcon)
+    const defaultGlyph = renderToStaticMarkup(<ServiceGuideIcon />)
+    expect(defaultGlyph).toContain('width="36"')
+    expect(defaultGlyph).toContain('height="36"')
+    expect(defaultGlyph).toContain('viewBox="0 0 36 36"')
+    expect(defaultGlyph).toContain('stroke="#658EFF"')
+    expect(defaultGlyph).toContain('stroke="#539CFA"')
+    const hostGlyph = renderToStaticMarkup(<ServiceGuideIcon size={26} className="guide-icon" />)
+    expect(hostGlyph).toContain('width="26"')
+    expect(hostGlyph).toContain('class="guide-icon"')
   })
 
   it('lets the registry ask for each renderer title in the active locale', () => {

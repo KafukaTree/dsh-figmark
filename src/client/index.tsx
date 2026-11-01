@@ -34,6 +34,7 @@ import { missingService } from '../missing-service'
 import type { PdfBodyInjected } from './pdf/PdfBody'
 import { PendingCard } from './pending-card'
 import { ServiceBrowser, type ServiceBrowserInjected } from './ServiceBrowser'
+import { ServiceGuideIcon } from './service-guide-icon'
 import type { SessionsLike } from './session'
 
 /** Plugin name reported to the client module loader. */
@@ -266,6 +267,7 @@ export function apply(ctx: Context): void {
       order: 20,
       title: () => locale.bind(NAMESPACE)('serviceTitle'),
       description: () => locale.bind(NAMESPACE)('serviceHint'),
+      icon: ServiceGuideIcon,
     }],
   }), 'dsh-figmark: service browser tab')
   ctx.effect(() => slots.inject('sidebar.right.pane.tab', () => slots.register({
