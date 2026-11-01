@@ -58,8 +58,6 @@ export interface ToolPaletteProps {
   readonly stripRef: RefObject<HTMLDivElement>
   /** Where it sits, as fractions of the panel. */
   readonly style: CSSProperties
-  /** Which side has room for the element guide. */
-  readonly guideSide: 'left' | 'right'
   /** Its drag handlers. */
   readonly handle: StripHandle
   /** The tiles to draw, already narrowed to what this figure can use. */
@@ -96,7 +94,6 @@ export function ToolPalette(props: ToolPaletteProps): ReactNode {
   return (
     <div className="da-palette" ref={props.stripRef}
       data-dragging={handle.dragging ? 'true' : undefined}
-      data-guide={props.guideSide}
       style={props.style}
       role="toolbar" aria-label={t('tools')}>
       <div className="da-palette-scroll">
@@ -113,33 +110,30 @@ export function ToolPalette(props: ToolPaletteProps): ReactNode {
           <button key={entry.tool} type="button" className="da-btn da-tool"
             aria-pressed={props.tool === entry.tool}
             aria-label={t(entry.label)}
-            title={t(entry.label)}
+            title={entry.tool === 'element' && elementGuide !== undefined
+              ? elementGuide.label
+              : t(entry.label)}
             onClick={() => { props.onChoose(entry.tool) }}>
             <span className="da-tool-icon" aria-hidden>
               {entry.tool === 'select' ? <GrabIcon /> : ToolIcon(entry.tool)}
             </span>
           </button>
         ))}
+        {elementGuide === undefined || !('depth' in elementGuide) ? null : (
+          <div className="da-palette-depth" role="status" aria-live="polite"
+            aria-label={elementGuide.label} title={elementGuide.label}>
+            <button type="button" className="da-palette-depth-step"
+              aria-label={t('toolElementUp')} title={t('toolElementUp')}
+              disabled={elementGuide.level >= elementGuide.count}
+              onClick={() => { elementGuide.onDepth(1) }}>↑</button>
+            <span>{elementGuide.depth}</span>
+            <button type="button" className="da-palette-depth-step"
+              aria-label={t('toolElementDown')} title={t('toolElementDown')}
+              disabled={elementGuide.level <= 1}
+              onClick={() => { elementGuide.onDepth(-1) }}>↓</button>
+          </div>
+        )}
       </div>
-      {elementGuide === undefined ? null : (
-        <div className="da-palette-hint" role="status" aria-live="polite" aria-label={elementGuide.label}>
-          <span className="da-palette-hint-mode">{t('toolElementMode')}</span>
-          {'depth' in elementGuide ? (
-            <span className="da-palette-hint-depth">
-              <button type="button" className="da-palette-hint-step"
-                aria-label={t('toolElementUp')} title={t('toolElementUp')}
-                disabled={elementGuide.level >= elementGuide.count}
-                onClick={() => { elementGuide.onDepth(1) }}>↑</button>
-              <span>{elementGuide.depth}</span>
-              <button type="button" className="da-palette-hint-step"
-                aria-label={t('toolElementDown')} title={t('toolElementDown')}
-                disabled={elementGuide.level <= 1}
-                onClick={() => { elementGuide.onDepth(-1) }}>↓</button>
-            </span>
-          ) : null}
-          <span className="da-palette-hint-keys">{t('toolElementKeys')}</span>
-        </div>
-      )}
     </div>
   )
 }

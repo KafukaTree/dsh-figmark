@@ -81,14 +81,11 @@ describe('the annotator stylesheet', () => {
     expect(hidden).toBeGreaterThan(absolute)
   })
 
-  it('opens the element-mode legend from the palette toward the panel centre', () => {
-    expect(STYLES).toContain('.da-palette-hint{position:absolute')
-    expect(STYLES).toContain('white-space:nowrap')
-    expect(STYLES).toContain('.da-palette[data-guide="right"] .da-palette-hint{left:calc(100% + 8px)}')
-    expect(STYLES).toContain('.da-palette[data-guide="left"] .da-palette-hint{right:calc(100% + 8px)}')
-    expect(STYLES).toContain('.da-palette-hint-step{display:inline-flex')
-    expect(STYLES.match(/(?:^|\n)\.da-palette-hint\{/gu)).toHaveLength(1)
-    expect(STYLES).not.toContain('.da-palette-hint{display:flex;flex-direction:column;')
+  it('keeps the element-depth control inside the palette column', () => {
+    expect(STYLES).toContain('.da-palette-depth{display:flex;flex-direction:column')
+    expect(STYLES).toContain('.da-palette-depth-step{display:inline-flex')
+    expect(STYLES).not.toContain('.da-palette-hint{')
+    expect(STYLES).not.toMatch(/\.da-palette\[data-guide=/u)
     expect(STYLES).not.toContain('.da-pick-guide{position:absolute;')
   })
 
@@ -98,7 +95,7 @@ describe('the annotator stylesheet', () => {
     // palette that outer white edge looked like a broken container boundary. The cue
     // remains visible, but it is inset and uses the plugin accent.
     expect(STYLES).toContain(
-      '.da-palette .da-tool:focus-visible,.da-palette-hint-step:focus-visible{',
+      '.da-palette .da-tool:focus-visible,.da-palette-depth-step:focus-visible{',
     )
     expect(STYLES).toContain(
       'outline:none!important;box-shadow:inset 0 0 0 1.5px var(--da-accent,#4c8dff)!important',

@@ -124,33 +124,22 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
    last-pressed tile, which reads as a white edge escaping the dark palette. Keep the
    cue, but draw it inside the existing circle in the panel's own accent so focus does
    not change the strip's geometry. */
-.da-palette .da-tool:focus-visible,.da-palette-hint-step:focus-visible{
+.da-palette .da-tool:focus-visible,.da-palette-depth-step:focus-visible{
   outline:none!important;box-shadow:inset 0 0 0 1.5px var(--da-accent,#4c8dff)!important}
 .da-palette .da-tool .da-tool-icon{height:auto}
 .da-palette .da-tool .da-tool-icon svg{width:17px;height:17px;stroke-width:1.7}
-/* Element mode is a compact floating chip beside the palette, not another row
-   squeezed into a 32px column. It opens toward the centre of the panel so the chip
-   never runs off the edge it is parked against. */
-.da-palette-hint{position:absolute;top:7px;display:flex;align-items:center;gap:7px;
-  height:28px;padding:0 9px;box-sizing:border-box;border-radius:9px;white-space:nowrap;
-  background:rgba(28,28,31,.94);color:rgba(255,255,255,.94);
-  box-shadow:0 6px 18px rgba(10,14,24,.24),0 0 0 1px rgba(255,255,255,.09);
-  font-size:10.5px;line-height:1;letter-spacing:.01em}
-.da-palette[data-guide="right"] .da-palette-hint{left:calc(100% + 8px)}
-.da-palette[data-guide="left"] .da-palette-hint{right:calc(100% + 8px)}
-.da-palette-hint-mode{font-weight:650;color:#fff}
-.da-palette-hint-depth{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 2px;
-  border-radius:6px;background:rgba(255,255,255,.1)}
-.da-palette-hint-step{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+/* Element depth sits inside the palette's own column. A floating horizontal legend
+   crossed into the document and covered the thing being picked; this narrow footer
+   keeps the control in the strip that already owns the pointer. */
+.da-palette-depth{display:flex;flex-direction:column;align-items:center;gap:1px;
+  width:100%;margin-top:3px;padding-top:4px;border-top:1px solid rgba(255,255,255,.16)}
+.da-palette-depth-step{display:inline-flex;align-items:center;justify-content:center;width:100%;height:17px;
   padding:0;border:0;border-radius:4px;background:transparent;color:rgba(255,255,255,.72);
   font:10px/1 var(--dsw-font-family-mono,ui-monospace,monospace);cursor:pointer}
-.da-palette-hint-step:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff}
-.da-palette-hint-step:disabled{opacity:.28;cursor:default}
-.da-palette-hint-depth>span{min-width:24px;text-align:center;color:#fff;
-  font:10px/1 var(--dsw-font-family-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
-.da-palette-hint-keys{padding-left:1px;color:rgba(255,255,255,.55);
-  font:9.5px/1 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
-  white-space:pre}
+.da-palette-depth-step:hover:not(:disabled){background:rgba(255,255,255,.14);color:#fff}
+.da-palette-depth-step:disabled{opacity:.28;cursor:default}
+.da-palette-depth>span{min-width:28px;text-align:center;color:#fff;
+  font:9.5px/1 var(--dsw-font-family-mono,ui-monospace,monospace);font-variant-numeric:tabular-nums}
 
 /* --- the size rail ------------------------------------------------------- */
 /* A vertical rail along the left edge of the figure: how heavy the pen is, and how

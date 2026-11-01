@@ -3437,7 +3437,6 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       <ToolPalette
         stripRef={paletteRef}
         style={paletteStyle}
-        guideSide={(palette ?? DEFAULT_PALETTE).x > 0.58 ? 'left' : 'right'}
         handle={paletteHandle}
         tools={tools}
         tool={tool}

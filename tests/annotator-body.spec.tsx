@@ -1034,10 +1034,13 @@ describe('the keyboard while annotating', () => {
     mounted = await svgBody()
     await click(button(document.body, zh.toolElement))
     expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('true')
-    expect(document.querySelector('.da-palette-hint')).not.toBeNull()
+    expect(document.querySelector('.da-palette-depth')).toBeNull()
+    expect(button(document.body, zh.toolElement).getAttribute('title')).toBe(
+      `${zh.toolElementMode}, ${zh.toolElementHint}, ${zh.toolElementKeys}`,
+    )
     await pressKey('Escape', { bare: true })
     expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
-    expect(document.querySelector('.da-palette-hint')).toBeNull()
+    expect(document.querySelector('.da-palette-depth')).toBeNull()
   })
 
   it('lets Escape leave a note box without also clearing its mark', async () => {
@@ -5362,7 +5365,7 @@ describe('a rendered document', () => {
         Object.defineProperty(framed, 'contentWindow', { configurable: true, value: null })
         // Without a window there is nobody to tell, and that is not a failure: the
         // page is still framed and the field still opened it.
-        await click(defined(document.querySelector('.da-palette-hint-step')))
+        await click(defined(document.querySelector('.da-palette-depth-step')))
         // The same teardown can catch the two settled effects: changing the tool asks
         // the absent page to change mode, and drawing changes the selectors it watches.
         await click(button(document.body, zh.toolArrow))
@@ -5756,7 +5759,7 @@ describe('a rendered document', () => {
       expect(document.querySelector('.da-name')).not.toBeNull()
       await report({ kind: 'cancel' })
       expect(document.querySelector('.da-name')).toBeNull()
-      expect(document.querySelector('.da-palette-hint-depth')).toBeNull()
+      expect(document.querySelector('.da-palette-depth')).toBeNull()
       expect(document.querySelectorAll('.da-mark[data-selected="true"]')).toHaveLength(0)
       expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('false')
       expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
@@ -5882,7 +5885,7 @@ describe('a rendered document', () => {
           configurable: true,
           value: (message: Record<string, unknown>) => { posted.push(message) },
         })
-        await click(defined(document.querySelectorAll('.da-palette-hint-step')[1]))
+        await click(defined(document.querySelectorAll('.da-palette-depth-step')[1]))
         expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'depth', delta: -1 })
         const input = document.createElement('input')
         const textarea = document.createElement('textarea')
@@ -6752,7 +6755,11 @@ describe('the light the picker shines', () => {
     // drawing the rectangular box that a curve (or a diagonal line) never occupies.
     expect(document.querySelector('.da-name')?.textContent).toBe('text#lead')
     expect(document.querySelector('.da-live-hit')).toBeNull()
-    expect(document.querySelector('.da-palette-hint')?.textContent).toContain('1 / 1')
+    const hint = defined(document.querySelector('.da-palette-depth'))
+    expect(hint.textContent).toContain('1/1')
+    expect(hint.textContent).not.toContain(zh.toolElementMode)
+    expect(hint.textContent).not.toContain(zh.toolElementKeys)
+    expect(hint.getAttribute('title')).toContain('1/1')
   })
 
   it('says so when element mode lands on nothing', async () => {
