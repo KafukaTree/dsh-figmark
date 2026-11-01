@@ -1,7 +1,8 @@
 /** The vocabulary a rendered page and the panel share, and the fence around it. */
 import { describe, expect, it } from 'vitest'
 import {
-  LIVE_MESSAGE, liveDepthMessage, liveModeMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
+  LIVE_MESSAGE, liveDepthMessage, liveModeMessage, liveReleaseMessage, liveRevealMessage, liveWatchMessage,
+  parseLiveEvent,
 } from '../src/shared/live'
 
 /** A pick exactly as the injected script reports one. */
@@ -46,6 +47,10 @@ describe('the mode message', () => {
       bbox: [10, 20, 30, 40],
     })
   })
+
+  it('asks the page to restore a temporarily revealed hidden layer', () => {
+    expect(liveReleaseMessage()).toEqual({ figmark: LIVE_MESSAGE, kind: 'release-reveal' })
+  })
 })
 
 describe('parsing what a page reports', () => {
@@ -81,6 +86,19 @@ describe('parsing what a page reports', () => {
       bbox: [10, 20, 300, 40],
       scroll: [0, 120],
     })
+  })
+
+  it('keeps the slide that owns a pick, including the explicit absence of one', () => {
+    expect(parseLiveEvent({ ...PICK, surface: '#slide-2' })).toMatchObject({
+      kind: 'pick',
+      surface: '#slide-2',
+    })
+    expect(parseLiveEvent({ ...PICK, surface: null })).toMatchObject({
+      kind: 'pick',
+      surface: null,
+    })
+    expect(parseLiveEvent({ ...PICK, surface: '' })).toBeUndefined()
+    expect(parseLiveEvent({ ...PICK, surface: 'x'.repeat(2049) })).toBeUndefined()
   })
 
   it('treats an empty string as nothing said, rather than as an empty name', () => {
@@ -124,6 +142,34 @@ describe('parsing what a page reports', () => {
       kind: 'reveal-result',
       requestId: 'r1',
       status: 'elsewhere',
+    })).toBeUndefined()
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'revealed',
+      surface: 'body > section:nth-of-type(1)',
+      temporary: true,
+    })).toEqual({
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'revealed',
+      surface: 'body > section:nth-of-type(1)',
+      temporary: true,
+    })
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'revealed',
+      surface: null,
+    })).toEqual({ kind: 'reveal-result', requestId: 'r1', status: 'revealed', surface: null })
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'reveal-result',
+      requestId: 'r1',
+      status: 'revealed',
+      surface: '',
     })).toBeUndefined()
   })
 

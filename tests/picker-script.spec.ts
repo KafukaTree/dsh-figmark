@@ -1,6 +1,6 @@
 /** The picker the page loads: what it says, and — mostly — what it does not. */
 import { JSDOM } from 'jsdom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { PICKER_SCRIPT } from '../src/host/picker-script'
 import { LIVE_MESSAGE } from '../src/shared/live'
 
@@ -176,6 +176,24 @@ describe('while annotation is armed', () => {
     })
   })
 
+  it('reports the slide that owns a pick, and no slide for a cover outside them', () => {
+    const page = live(
+      '<section class="dk-slide is-live"><p id="inside">Inside</p></section>'
+      + '<div id="cover"><h1 id="cover-title">Cover</h1></div>',
+    )
+    page.arm(true)
+    fire(page.window, at(page.window, '#inside'), 'click')
+    expect(page.said.filter(told => told['kind'] === 'pick').at(-1)).toMatchObject({
+      selector: 'section:nth-of-type(1) > p:nth-of-type(1)',
+      surface: 'section:nth-of-type(1)',
+    })
+    fire(page.window, at(page.window, '#cover-title'), 'click')
+    expect(page.said.filter(told => told['kind'] === 'pick').at(-1)).toMatchObject({
+      selector: 'div:nth-of-type(1) > h1:nth-of-type(1)',
+      surface: null,
+    })
+  })
+
   it('reports Escape even when no element is currently under the pointer', () => {
     const page = live()
     page.arm(true)
@@ -255,8 +273,8 @@ describe('while annotation is armed', () => {
 describe('the page moving', () => {
   it('reports the visible slide, then none when the deck has no current page', () => {
     const page = live(
-      '<section class="slide current" id="one"></section>'
-      + '<section class="slide" id="two"></section>',
+      '<section class="slide current" id="one" style="opacity: 1"></section>'
+      + '<section class="slide" id="two" style="opacity: 0"></section>',
     )
     const one = at(page.window, '#one')
     const two = at(page.window, '#two')
@@ -274,11 +292,14 @@ describe('the page moving', () => {
     })
     one.classList.remove('current')
     two.classList.add('current')
+    one.setAttribute('style', 'opacity: 0')
+    two.setAttribute('style', 'opacity: 1')
     page.window.dispatchEvent(new page.window.Event('resize'))
     expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toMatchObject({
       selector: 'section:nth-of-type(2)',
     })
     two.classList.remove('current')
+    two.setAttribute('style', 'opacity: 0')
     page.window.dispatchEvent(new page.window.Event('resize'))
     expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toEqual({
       figmark: LIVE_MESSAGE,
@@ -287,7 +308,30 @@ describe('the page moving', () => {
     })
   })
 
-  it('scrolls a saved element into view and answers that it did', async () => {
+  it('recognises the slide a mounted deck brings forward', () => {
+    const page = live(
+      '<section class="dk-slide is-live" id="one"></section>'
+      + '<section class="dk-slide" id="two" style="opacity: 0"></section>',
+    )
+    const visible = (): DOMRect => ({
+      x: 0, y: 0, width: 640, height: 360, top: 0, right: 640, bottom: 360, left: 0,
+      toJSON: () => ({}),
+    })
+    Object.defineProperty(at(page.window, '#one'), 'getBoundingClientRect', {
+      configurable: true,
+      value: visible,
+    })
+    Object.defineProperty(at(page.window, '#two'), 'getBoundingClientRect', {
+      configurable: true,
+      value: visible,
+    })
+    page.window.dispatchEvent(new page.window.Event('resize'))
+    expect(page.said.filter(told => told['kind'] === 'surface').at(-1)).toMatchObject({
+      selector: 'section:nth-of-type(1)',
+    })
+  })
+
+  it('leaves a saved element that is already visible exactly where it is', async () => {
     const page = live()
     const title = at(page.window, '#title')
     let scrolled = 0
@@ -304,12 +348,169 @@ describe('the page moving', () => {
     })
     page.reveal({ requestId: 'r1', selector: '#title' })
     await new Promise(resolve => { setTimeout(resolve, 20) })
-    expect(scrolled).toBe(1)
+    expect(scrolled).toBe(0)
     expect(page.said.find(told => told['kind'] === 'reveal-result')).toEqual({
       figmark: LIVE_MESSAGE,
       kind: 'reveal-result',
       requestId: 'r1',
       status: 'revealed',
+      surface: null,
+    })
+  })
+
+  it('scrolls an offscreen element before confirming that it can be seen', async () => {
+    const page = live()
+    const title = at(page.window, '#title')
+    let visible = false
+    Object.defineProperty(title, 'scrollIntoView', {
+      configurable: true,
+      value: () => { visible = true },
+    })
+    Object.defineProperty(title, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: visible ? 10 : 1200,
+        y: 20,
+        width: 100,
+        height: 30,
+        top: 20,
+        right: visible ? 110 : 1300,
+        bottom: 50,
+        left: visible ? 10 : 1200,
+        toJSON: () => ({}),
+      }),
+    })
+    page.reveal({ requestId: 'offscreen', selector: '#title' })
+    await vi.waitFor(() => {
+      expect(page.said.find(told =>
+        told['kind'] === 'reveal-result' && told['requestId'] === 'offscreen'))
+        .toMatchObject({ status: 'revealed' })
+    }, { timeout: 5000, interval: 50 })
+    expect(visible).toBe(true)
+  })
+
+  it('finds the slide that owns an element when an older mark stored no surface', async () => {
+    const page = live(
+      '<section class="dk-slide is-live" id="one" style="opacity: 1"><h2>One</h2></section>'
+      + '<section class="dk-slide" id="two" style="opacity: 0"><p id="target">Two</p></section>',
+    )
+    const visible = (): DOMRect => ({
+      x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+      toJSON: () => ({}),
+    })
+    const one = at(page.window, '#one')
+    const two = at(page.window, '#two')
+    const target = at(page.window, '#target')
+    for (const element of [one, two, target]) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        configurable: true,
+        value: visible,
+      })
+    }
+    let scrolled = 0
+    Object.defineProperty(target, 'scrollIntoView', {
+      configurable: true,
+      value: () => { scrolled += 1 },
+    })
+    page.window.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowRight') return
+      one.classList.remove('is-live')
+      one.setAttribute('style', 'opacity: 0')
+      two.classList.add('is-live')
+      two.setAttribute('style', 'opacity: 1')
+    })
+    page.reveal({ requestId: 'legacy', selector: '#target' })
+    await new Promise(resolve => { setTimeout(resolve, 100) })
+    expect(scrolled).toBe(0)
+    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'legacy'))
+      .toMatchObject({ status: 'revealed' })
+  })
+
+  it('follows the element instead of a stale surface recorded with the mark', async () => {
+    const page = live(
+      '<section class="dk-slide is-live" id="one" style="opacity: 1"><h2>One</h2></section>'
+      + '<section class="dk-slide" id="two" style="opacity: 0"><p id="target">Two</p></section>',
+    )
+    const visible = (): DOMRect => ({
+      x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+      toJSON: () => ({}),
+    })
+    const one = at(page.window, '#one')
+    const two = at(page.window, '#two')
+    const target = at(page.window, '#target')
+    for (const element of [one, two, target]) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        configurable: true,
+        value: visible,
+      })
+    }
+    Object.defineProperty(target, 'scrollIntoView', { configurable: true, value: () => {} })
+    page.window.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowRight') return
+      one.classList.remove('is-live')
+      one.setAttribute('style', 'opacity: 0')
+      two.classList.add('is-live')
+      two.setAttribute('style', 'opacity: 1')
+    })
+    page.reveal({
+      requestId: 'stale-surface',
+      selector: '#target',
+      surface: 'section:nth-of-type(1)',
+    })
+    await new Promise(resolve => { setTimeout(resolve, 100) })
+    expect(page.said.find(told =>
+      told['kind'] === 'reveal-result' && told['requestId'] === 'stale-surface'))
+      .toMatchObject({ status: 'revealed' })
+    expect(two.classList.contains('is-live')).toBe(true)
+  })
+
+  it('restores a hidden overlay outside every slide and restores it on release', async () => {
+    const page = live(
+      '<style>#overlay { display: none; content-visibility: hidden; opacity: 0; visibility: hidden }</style>'
+      + '<div id="overlay"><h1 id="cover">Cover</h1></div>'
+      + '<section class="dk-slide" id="one" style="opacity: 0"><h2>One</h2></section>'
+      + '<section class="dk-slide is-live" id="two" style="opacity: 1"><h2>Two</h2></section>',
+    )
+    const visible = (): DOMRect => ({
+      x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+      toJSON: () => ({}),
+    })
+    const one = at(page.window, '#one')
+    const two = at(page.window, '#two')
+    const cover = at(page.window, '#cover')
+    const overlay = at(page.window, '#overlay') as HTMLElement
+    Object.defineProperty(cover, 'scrollIntoView', { configurable: true, value: () => {} })
+    for (const element of [one, two, cover, overlay]) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        configurable: true,
+        value: visible,
+      })
+    }
+    page.window.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowLeft') return
+      two.classList.remove('is-live')
+      two.setAttribute('style', 'opacity: 0')
+      one.classList.add('is-live')
+      one.setAttribute('style', 'opacity: 1')
+    })
+    page.reveal({ requestId: 'cover', selector: '#cover' })
+    await vi.waitFor(() => {
+      expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'cover'))
+        .toMatchObject({ status: 'revealed', temporary: true })
+    }, { timeout: 5000, interval: 50 })
+    expect(one.classList.contains('is-live')).toBe(true)
+    expect(overlay.style.opacity).toBe('1')
+    expect(overlay.style.visibility).toBe('visible')
+    expect(overlay.style.display).toBe('revert')
+    expect(overlay.style.getPropertyValue('content-visibility')).toBe('visible')
+    expect(overlay.style.pointerEvents).toBe('none')
+    page.window.postMessage({ figmark: LIVE_MESSAGE, kind: 'release-reveal' }, '*')
+    await vi.waitFor(() => {
+      expect(overlay.style.opacity).toBe('')
+      expect(overlay.style.visibility).toBe('')
+      expect(overlay.style.display).toBe('')
+      expect(overlay.style.getPropertyValue('content-visibility')).toBe('')
+      expect(overlay.style.pointerEvents).toBe('')
     })
   })
 
@@ -325,9 +526,29 @@ describe('the page moving', () => {
       }),
     })
     page.reveal({ requestId: 'offscreen', selector: '#title' })
-    await new Promise(resolve => { setTimeout(resolve, 20) })
-    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'offscreen'))
-      .toMatchObject({ status: 'hidden' })
+    await vi.waitFor(() => {
+      expect(page.said.find(told =>
+        told['kind'] === 'reveal-result' && told['requestId'] === 'offscreen'))
+        .toMatchObject({ status: 'hidden' })
+    }, { timeout: 5000, interval: 50 })
+  })
+
+  it('waits for a page entrance animation before confirming the element is there', async () => {
+    const page = live('<main><h2 id="title" style="opacity: 0">Head</h2></main>')
+    const title = at(page.window, '#title')
+    Object.defineProperty(title, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+        toJSON: () => ({}),
+      }),
+    })
+    Object.defineProperty(title, 'scrollIntoView', { configurable: true, value: () => {} })
+    page.window.setTimeout(() => { title.setAttribute('style', 'opacity: 1') }, 70)
+    page.reveal({ requestId: 'animated', selector: '#title' })
+    await new Promise(resolve => { setTimeout(resolve, 180) })
+    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'animated'))
+      .toMatchObject({ status: 'revealed' })
   })
 
   it('distinguishes a missing selector from a surface that cannot be reached', async () => {
@@ -376,14 +597,47 @@ describe('the page moving', () => {
 
   it('watches saved selectors and reports their live boxes', () => {
     const page = live()
+    Object.defineProperty(at(page.window, '#title'), 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+        toJSON: () => ({}),
+      }),
+    })
     page.watch(['#title', '[data-missing]', '#title'])
     const bounds = page.said.find(told => told['kind'] === 'bounds')
     expect(bounds).toEqual({
       figmark: LIVE_MESSAGE,
       kind: 'bounds',
       bounds: [
-        { selector: '#title', bbox: [0, 0, 0, 0], visible: true },
+        { selector: '#title', bbox: [10, 20, 100, 30], visible: true },
         { selector: '[data-missing]', bbox: [0, 0, 0, 0], visible: false },
+      ],
+    })
+  })
+
+  it('does not report an element on a slide its ancestor has faded out', () => {
+    const page = live(
+      '<section id="front"><h2 id="title">Head</h2></section>'
+      + '<section id="back" style="opacity: 0"><p id="old">Old</p></section>',
+    )
+    const visible = (): DOMRect => ({
+      x: 10, y: 20, width: 100, height: 30, top: 20, right: 110, bottom: 50, left: 10,
+      toJSON: () => ({}),
+    })
+    Object.defineProperty(at(page.window, '#title'), 'getBoundingClientRect', {
+      configurable: true,
+      value: visible,
+    })
+    Object.defineProperty(at(page.window, '#old'), 'getBoundingClientRect', {
+      configurable: true,
+      value: visible,
+    })
+    page.watch(['#title', '#old'])
+    expect(page.said.find(told => told['kind'] === 'bounds')).toMatchObject({
+      bounds: [
+        { selector: '#title', visible: true },
+        { selector: '#old', visible: false },
       ],
     })
   })

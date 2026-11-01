@@ -5466,6 +5466,47 @@ describe('a rendered document', () => {
       expect(parts[0]?.text).toContain(SERVICE_ADDRESS)
     })
 
+    it('does not pin a cover outside every slide to the slide that is open', async () => {
+      mounted = await serviceBody()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(1)' })
+      await click(button(document.body, zh.toolElement))
+      await report({
+        kind: 'pick',
+        ...PICKED,
+        id: 'cover',
+        selector: '#cover',
+        surface: null,
+      })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(defined(document.querySelector('.da-mark-text')))
+      expect(posted.find(message => message['kind'] === 'reveal')).toMatchObject({
+        kind: 'reveal',
+        selector: '#cover',
+        surface: null,
+      })
+      await click(button(document.body, zh.toolElement))
+      await report({
+        kind: 'pick',
+        ...PICKED,
+        id: 'inside',
+        selector: '#inside',
+        surface: 'body > section:nth-of-type(2)',
+      })
+      await openList(document.body)
+      await click(defined(document.querySelectorAll('.da-mark-text')[1]))
+      expect(posted.filter(message => message['kind'] === 'reveal').at(-1)).toMatchObject({
+        kind: 'reveal',
+        selector: '#inside',
+        surface: 'body > section:nth-of-type(2)',
+      })
+    })
+
     it('asks the page to reveal a mark and selects it only after the page agrees', async () => {
       mounted = await serviceBody()
       await click(button(document.body, zh.toolElement))
@@ -5478,6 +5519,7 @@ describe('a rendered document', () => {
         text: '第二段',
         bbox: [20, 100, 240, 60],
       })
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(6)' })
       await openList(document.body)
       const view = defined(frame().contentWindow)
       const posted: Record<string, unknown>[] = []
@@ -5505,6 +5547,7 @@ describe('a rendered document', () => {
       })
       // A successful reveal closes the map so it no longer covers the destination.
       expect(document.querySelector('.da-float-list')).toBeNull()
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')[0]?.getAttribute('data-selected')).toBe('true')
       expect(document.querySelectorAll('.da-mark')[1]?.getAttribute('data-selected')).toBe('false')
@@ -5550,6 +5593,114 @@ describe('a rendered document', () => {
       expect(document.querySelectorAll('.da-mark[data-selected="true"]')).toHaveLength(0)
       expect(button(document.body, zh.toolElement).getAttribute('aria-pressed')).toBe('false')
       expect(button(document.body, zh.toolSelect).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('opens a mark whose live element has gone away at its recorded box', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(defined(document.querySelector('.da-mark-text')))
+      const request = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: request['requestId'],
+        status: 'hidden',
+      })
+      expect(document.querySelector('.da-float-list')).toBeNull()
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
+      await openList(document.body)
+      expect(document.querySelector('.da-mark[data-selected="true"]')).not.toBeNull()
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'release-reveal' })
+    })
+
+    it('can close a selected live mark after its frame has gone', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(defined(document.querySelector('.da-mark-text')))
+      const request = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: request['requestId'],
+        status: 'revealed',
+      })
+      Object.defineProperty(frame(), 'contentWindow', { configurable: true, get: () => null })
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      expect(document.querySelector('.da-float-detail')).toBeNull()
+    })
+
+    it('lets go of a temporary cover reveal when the page turns', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(defined(document.querySelector('.da-mark-text')))
+      const request = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: request['requestId'],
+        status: 'revealed',
+        surface: 'body > section:nth-of-type(1)',
+        temporary: true,
+      })
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(1)' })
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(2)' })
+      expect(document.querySelector('.da-float-detail')).toBeNull()
+      expect(posted).toContainEqual({ figmark: LIVE_MESSAGE, kind: 'release-reveal' })
+    })
+
+    it('treats an older temporary reveal without a settled surface as unscoped', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await openList(document.body)
+      const view = defined(frame().contentWindow)
+      const posted: Record<string, unknown>[] = []
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => { posted.push(message) },
+      })
+      await click(defined(document.querySelector('.da-mark-text')))
+      const request = defined(posted.find(message => message['kind'] === 'reveal'))
+      await report({
+        kind: 'reveal-result',
+        requestId: request['requestId'],
+        status: 'revealed',
+        temporary: true,
+      })
+      expect(document.querySelector('.da-float-detail')).not.toBeNull()
+      await report({ kind: 'surface', selector: 'body > section:nth-of-type(1)' })
+      expect(document.querySelector('.da-float-detail')).toBeNull()
     })
 
     it('moves the picker ladder down from the palette and expires an unanswered reveal', async () => {
@@ -5601,7 +5752,7 @@ describe('a rendered document', () => {
         await click(defined(document.querySelector('.da-mark-text')))
         expect(document.querySelector('.da-mark')?.getAttribute('data-selected')).toBe('true')
         await act(async () => {
-          vi.advanceTimersByTime(1600)
+          vi.advanceTimersByTime(2600)
           for (let turn = 0; turn < 4; turn += 1) await Promise.resolve()
         })
         expect(document.querySelector('.da-toast[data-kind="note"]')?.getAttribute('data-text'))

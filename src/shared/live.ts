@@ -62,6 +62,14 @@ export interface LivePick {
   readonly text?: string | undefined
   /** Path to the element from `body`, in the selector grammar a saved mark uses. */
   readonly selector: string
+  /**
+   * Logical surface that owns the picked element, or null when it belongs to none.
+   *
+   * A deck can put a cover or modal outside every slide. Such an element is visible
+   * over the deck, but it is not part of the slide underneath it; recording the
+   * slide that happened to be open would make the mark follow every later page.
+   */
+  readonly surface?: string | null | undefined
   /** The element's box in document pixels: x, y, width, height. */
   readonly bbox: readonly [number, number, number, number]
   /** How far the page is scrolled, in document pixels: x, y. */
@@ -143,6 +151,10 @@ export interface LiveRevealResult {
   readonly requestId: string
   /** Whether the element or point is now visible. */
   readonly status: LiveRevealStatus
+  /** The logical surface the page settled on, or null when there is none. */
+  readonly surface?: string | null
+  /** Whether visibility required a temporary style override that the page will undo. */
+  readonly temporary?: boolean
 }
 
 /** What a rendered page can tell the panel. */
@@ -205,6 +217,17 @@ export function liveRevealMessage(
   bbox: readonly [number, number, number, number],
 ): Record<string, unknown> {
   return { figmark: LIVE_MESSAGE, kind: 'reveal', requestId, selector, surface, bbox }
+}
+
+/**
+ * Ask the page to undo any temporary hidden-layer reveal.
+ *
+ * Revealing a cover or modal changes only computed style while the reader is looking
+ * at the mark. Closing that mark must leave the page in the state its own code chose.
+ * @returns the message for the frame.
+ */
+export function liveReleaseMessage(): Record<string, unknown> {
+  return { figmark: LIVE_MESSAGE, kind: 'release-reveal' }
 }
 
 /**
@@ -272,7 +295,17 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
     if (status !== 'revealed' && status !== 'missing' && status !== 'hidden' && status !== 'wrong-surface') {
       return undefined
     }
-    return { kind: 'reveal-result', requestId, status }
+    const surface = fields['surface'] === null ? null : textOf(fields['surface'])
+    if (fields['surface'] !== undefined && (surface === undefined || (surface?.length ?? 0) > 2048)) {
+      return undefined
+    }
+    return {
+      kind: 'reveal-result',
+      requestId,
+      status,
+      ...(surface === undefined ? {} : { surface }),
+      ...(fields['temporary'] === true ? { temporary: true } : {}),
+    }
   }
   if (fields['kind'] === 'surface') {
     if (fields['selector'] === null) return { kind: 'surface', selector: null }
@@ -299,6 +332,10 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
   const id = textOf(fields['id'])
   const cls = textOf(fields['class'])
   const text = textOf(fields['text'])
+  const surface = fields['surface'] === null ? null : textOf(fields['surface'])
+  if (fields['surface'] !== undefined && (surface === undefined || (surface?.length ?? 0) > 2048)) {
+    return undefined
+  }
   const depth = depthOf(fields['level'], fields['count'])
   return {
     kind,
@@ -309,6 +346,7 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
     ...(id === undefined ? {} : { id }),
     ...(cls === undefined ? {} : { class: cls }),
     ...(text === undefined ? {} : { text }),
+    ...(surface === undefined ? {} : { surface }),
     ...(depth === undefined ? {} : depth),
   }
 }

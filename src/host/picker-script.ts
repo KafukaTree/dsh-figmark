@@ -60,6 +60,8 @@ export const PICKER_SCRIPT: string = `(function () {
   var lastHover = ''
   var lastSurface
   var surfaceScheduled = 0
+  var revealedStyles = []
+  var revealSeq = 0
 
   // The common spellings presentation frameworks use for the one page in front.
   // This is deliberately a small convention rather than "the largest element":
@@ -67,19 +69,20 @@ export const PICKER_SCRIPT: string = `(function () {
   var SURFACE_QUERY = [
     '[data-slide-current="true"]',
     '[data-slide-active="true"]',
-    '.slide.current',
-    '.slide.active',
-    '.slide[aria-current="true"]',
-    '.slide[aria-current="page"]',
+    '.slide',
+    '.dk-slide',
     '.page.current',
     '.page.active',
-    '.swiper-slide-active',
-    '.carousel-item.active',
-    '.reveal .slides section.present',
+    '.page.is-live',
+    '.page.live',
+    '.swiper-slide',
+    '.carousel-item',
+    '.reveal .slides section',
+    '.remark-slide',
     '.remark-visible',
     '.step.active',
-    '[role="tabpanel"]:not([hidden])',
-    '[role="tabpanel"][aria-hidden="false"]'
+    '[role="tabpanel"]',
+    '[data-slide]'
   ].join(',')
 
   doc.documentElement.setAttribute('data-dsh-figmark', 'live')
@@ -150,6 +153,10 @@ export const PICKER_SCRIPT: string = `(function () {
     if (el.id) message.id = el.id
     var cls = el.getAttribute('class')
     if (cls && cls.trim()) message['class'] = cls.trim()
+    if (kind === 'pick') {
+      var owner = surfaceOf(el)
+      message.surface = owner ? pathOf(owner) : null
+    }
     send(message)
   }
 
@@ -169,47 +176,28 @@ export const PICKER_SCRIPT: string = `(function () {
     return el === doc.documentElement ? null : el
   }
 
-  function measure(selector) {
-    var el = null
-    try { el = doc.querySelector(selector) } catch (error) { el = null }
-    if (!el) return { selector: selector, bbox: [0, 0, 0, 0], visible: false }
-    var rect = el.getBoundingClientRect()
-    var scroll = scrollOf()
-    var style = window.getComputedStyle(el)
-    var visible = style.display !== 'none' && style.visibility !== 'hidden'
-    if (typeof el.checkVisibility === 'function') {
-      try {
-        visible = el.checkVisibility({
-          checkVisibilityCSS: true,
-          visibilityProperty: true,
-          contentVisibilityAuto: true
-        })
-      } catch (error) {
-        visible = style.display !== 'none' && style.visibility !== 'hidden'
-      }
-    }
-    return {
-      selector: selector,
-      bbox: [rect.left + scroll[0], rect.top + scroll[1], rect.width, rect.height],
-      visible: visible
-    }
-  }
-
-  function shown(el) {
+  function rendered(el) {
     if (!el) return false
-    var rect = el.getBoundingClientRect()
     var style = window.getComputedStyle(el)
-    if (rect.width <= 0 || rect.height <= 0
-      || style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false
-    var viewportWidth = window.innerWidth || doc.documentElement.clientWidth || 0
-    var viewportHeight = window.innerHeight || doc.documentElement.clientHeight || 0
-    if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= viewportWidth || rect.top >= viewportHeight) {
-      return false
+    if (style.display === 'none'
+      || style.visibility === 'hidden'
+      || style.visibility === 'collapse'
+      || style.contentVisibility === 'hidden'
+      || parseFloat(style.opacity) <= 0) return false
+    // A slide is often put away by an ancestor's opacity. The element's own computed
+    // visibility stays "visible" there, so check the compositing chain as well.
+    for (var node = el.parentElement; node; node = node.parentElement) {
+      var parentStyle = window.getComputedStyle(node)
+      if (parentStyle.display === 'none'
+        || parentStyle.contentVisibility === 'hidden'
+        || parseFloat(parentStyle.opacity) <= 0) return false
     }
     if (typeof el.checkVisibility === 'function') {
       try {
         return el.checkVisibility({
+          checkOpacity: true,
           checkVisibilityCSS: true,
+          opacityProperty: true,
           visibilityProperty: true,
           contentVisibilityAuto: true
         })
@@ -220,8 +208,119 @@ export const PICKER_SCRIPT: string = `(function () {
     return true
   }
 
+  function shown(el) {
+    if (!rendered(el)) return false
+    var rect = el.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    var viewportWidth = window.innerWidth || doc.documentElement.clientWidth || 0
+    var viewportHeight = window.innerHeight || doc.documentElement.clientHeight || 0
+    if (rect.right <= 0 || rect.bottom <= 0 || rect.left >= viewportWidth || rect.top >= viewportHeight) {
+      return false
+    }
+    return true
+  }
+
+  function inViewport(el) {
+    var rect = el.getBoundingClientRect()
+    var viewportWidth = window.innerWidth || doc.documentElement.clientWidth || 0
+    var viewportHeight = window.innerHeight || doc.documentElement.clientHeight || 0
+    return rect.left >= -1 && rect.top >= -1
+      && rect.right <= viewportWidth + 1 && rect.bottom <= viewportHeight + 1
+  }
+
+  function boxInViewport(box) {
+    var scroll = scrollOf()
+    var viewportWidth = window.innerWidth || doc.documentElement.clientWidth || 0
+    var viewportHeight = window.innerHeight || doc.documentElement.clientHeight || 0
+    var x = typeof box[0] === 'number' ? box[0] : 0
+    var y = typeof box[1] === 'number' ? box[1] : 0
+    var width = typeof box[2] === 'number' ? box[2] : 0
+    var height = typeof box[3] === 'number' ? box[3] : 0
+    return x >= scroll[0] - 1 && y >= scroll[1] - 1
+      && x + width <= scroll[0] + viewportWidth + 1
+      && y + height <= scroll[1] + viewportHeight + 1
+  }
+
+  function measure(selector) {
+    var el = null
+    try { el = doc.querySelector(selector) } catch (error) { el = null }
+    if (!el) return { selector: selector, bbox: [0, 0, 0, 0], visible: false }
+    var rect = el.getBoundingClientRect()
+    var scroll = scrollOf()
+    return {
+      selector: selector,
+      bbox: [rect.left + scroll[0], rect.top + scroll[1], rect.width, rect.height],
+      visible: shown(el)
+    }
+  }
+
   function delay(ms) {
     return new Promise(function (resolve) { window.setTimeout(resolve, ms) })
+  }
+
+  function waitForRendered(el, remaining) {
+    if (rendered(el)) return Promise.resolve(true)
+    if (remaining <= 0) return Promise.resolve(false)
+    return delay(45).then(function () { return waitForRendered(el, remaining - 1) })
+  }
+
+  function restoreHidden() {
+    for (var i = revealedStyles.length - 1; i >= 0; i -= 1) {
+      var item = revealedStyles[i]
+      if (item.value) item.el.style.setProperty(item.name, item.value, item.priority)
+      else item.el.style.removeProperty(item.name)
+    }
+    revealedStyles = []
+  }
+
+  function overrideHidden(node, name, value) {
+    revealedStyles.push({
+      el: node,
+      name: name,
+      value: node.style.getPropertyValue(name),
+      priority: node.style.getPropertyPriority(name)
+    })
+    node.style.setProperty(name, value, 'important')
+  }
+
+  function revealHidden(el, stop) {
+    var outermost = null
+    for (var node = el; node && node !== doc.body && node !== doc.documentElement && node !== stop; node = node.parentElement) {
+      var style = window.getComputedStyle(node)
+      if (style.display === 'none') overrideHidden(node, 'display', 'revert')
+      if (style.visibility === 'hidden' || style.visibility === 'collapse') {
+        overrideHidden(node, 'visibility', 'visible')
+      }
+      if (style.contentVisibility === 'hidden') overrideHidden(node, 'content-visibility', 'visible')
+      if (parseFloat(style.opacity) <= 0) overrideHidden(node, 'opacity', '1')
+      outermost = node
+    }
+    if (outermost && window.getComputedStyle(outermost).pointerEvents !== 'none') {
+      overrideHidden(outermost, 'pointer-events', 'none')
+    }
+  }
+
+  function surfaceOf(el) {
+    for (var node = el; node && node !== doc.documentElement; node = node.parentElement) {
+      try {
+        if (node.matches(SURFACE_QUERY)) return node
+      } catch (error) {
+        return null
+      }
+    }
+    return null
+  }
+
+  function nearestSurface() {
+    var surfaces = []
+    try { surfaces = Array.prototype.slice.call(doc.querySelectorAll(SURFACE_QUERY)) } catch (error) { return null }
+    for (var i = 0; i < surfaces.length; i += 1) {
+      var rect = surfaces[i].getBoundingClientRect()
+      // A deck often clones every slide into its overview. Those copies keep the
+      // same classes but have no layout, so they cannot be navigation targets.
+      if (rect.width > 0 && rect.height > 0) return surfaces[i]
+    }
+    return null
   }
 
   function turnToward(target) {
@@ -251,8 +350,29 @@ export const PICKER_SCRIPT: string = `(function () {
   }
 
   function reveal(requestId, selector, surface, bbox) {
+    revealSeq += 1
+    var seq = revealSeq
+    restoreHidden()
+    function current() {
+      return seq === revealSeq
+    }
+    var requestedEl = null
+    if (selector) {
+      try { requestedEl = doc.querySelector(selector) } catch (error) { requestedEl = null }
+    }
+    var ownerSurface = null
     var surfaceEl = null
-    if (surface) {
+    if (requestedEl) {
+      // The element is the strongest evidence of where it lives. A mark made
+      // before page ownership was recorded may carry the slide that was open at
+      // creation time instead, which would leave us waiting on the wrong page.
+      ownerSurface = surfaceOf(requestedEl)
+      surfaceEl = ownerSurface
+    }
+    if (!surfaceEl && requestedEl && !shown(requestedEl)) {
+      surfaceEl = nearestSurface()
+    }
+    if (!surfaceEl && surface) {
       try { surfaceEl = doc.querySelector(surface) } catch (error) { surfaceEl = null }
       if (!surfaceEl) {
         send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'wrong-surface' })
@@ -261,32 +381,68 @@ export const PICKER_SCRIPT: string = `(function () {
     }
     var ready = shown(surfaceEl) ? Promise.resolve(true) : surfaceEl ? turnToward(surfaceEl) : Promise.resolve(true)
     ready.then(function (surfaceReady) {
+      if (!current()) return
       if (!surfaceReady) {
         send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'wrong-surface' })
         return
       }
       if (selector) {
-        var el = null
-        try { el = doc.querySelector(selector) } catch (error) { el = null }
+        var el = requestedEl
         if (!el) {
           send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'missing' })
           return
         }
-        try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'auto' }) } catch (error) { el.scrollIntoView() }
-        delay(0).then(function () {
-          sendScroll()
-          send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: shown(el) ? 'revealed' : 'hidden' })
+        waitForRendered(el, 4).then(function (elementReady) {
+          if (!current()) return false
+          if (!elementReady) {
+            // A cover, modal, or intro layer can sit outside every slide and stay
+            // hidden after the deck has advanced. Restore only the hidden ancestors
+            // below the owning surface; the source and the page's state are untouched.
+            revealHidden(el, ownerSurface)
+            return waitForRendered(el, 10)
+          }
+          return elementReady
+        }).then(function (elementReady) {
+          if (!current()) return
+          if (!elementReady) {
+            restoreHidden()
+            send({ figmark: MARKER, kind: 'reveal-result', requestId: requestId, status: 'hidden' })
+            return
+          }
+          // A fully visible element must not move. Centring used to shift decks and
+          // fixed-stage pages under the reader even when the mark was already on
+          // screen; nearest changes only what is actually clipped.
+          if (window.getComputedStyle(el).position !== 'fixed' && !inViewport(el)) {
+            try { el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' }) } catch (error) { el.scrollIntoView() }
+          }
+          delay(0).then(function () {
+            if (!current()) return
+            sendScroll()
+            var visible = shown(el)
+            var answer = {
+              figmark: MARKER,
+              kind: 'reveal-result',
+              requestId: requestId,
+              status: visible ? 'revealed' : 'hidden',
+              surface: surfaceEl ? pathOf(surfaceEl) : null
+            }
+            if (visible && revealedStyles.length > 0) answer.temporary = true
+            send(answer)
+          })
         })
         return
       }
       var x = bbox && typeof bbox[0] === 'number' ? bbox[0] : 0
       var y = bbox && typeof bbox[1] === 'number' ? bbox[1] : 0
-      window.scrollTo({
-        left: Math.max(0, x - (window.innerWidth || 0) / 2),
-        top: Math.max(0, y - (window.innerHeight || 0) / 2),
-        behavior: 'auto'
-      })
+      if (!boxInViewport(bbox || [0, 0, 0, 0])) {
+        window.scrollTo({
+          left: Math.max(0, x - (window.innerWidth || 0) / 2),
+          top: Math.max(0, y - (window.innerHeight || 0) / 2),
+          behavior: 'auto'
+        })
+      }
       delay(0).then(function () {
+        if (!current()) return
         sendScroll()
         var width = bbox && typeof bbox[2] === 'number' ? bbox[2] : 0
         var height = bbox && typeof bbox[3] === 'number' ? bbox[3] : 0
@@ -339,11 +495,7 @@ export const PICKER_SCRIPT: string = `(function () {
     try { candidates = doc.querySelectorAll(SURFACE_QUERY) } catch (error) { return null }
     for (var i = 0; i < candidates.length; i += 1) {
       var el = candidates[i]
-      var rect = el.getBoundingClientRect()
-      var style = window.getComputedStyle(el)
-      if (rect.width > 0 && rect.height > 0
-        && style.display !== 'none' && style.visibility !== 'hidden'
-        && style.opacity !== '0') return el
+      if (shown(el)) return el
     }
     return null
   }
@@ -471,6 +623,11 @@ export const PICKER_SCRIPT: string = `(function () {
         && data.surface.length > 0 && data.surface.length <= 2048 ? data.surface : null
       var requestedBox = Array.isArray(data.bbox) && data.bbox.length === 4 ? data.bbox : [0, 0, 0, 0]
       reveal(data.requestId, requestedSelector, requestedSurface, requestedBox)
+      return
+    }
+    if (data.kind === 'release-reveal') {
+      revealSeq += 1
+      restoreHidden()
     }
   })
 

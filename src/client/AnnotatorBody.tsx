@@ -49,7 +49,7 @@ import {
 } from './live-page'
 import { elementMark } from './canvas/marks'
 import {
-  liveDepthMessage, liveModeMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
+  liveDepthMessage, liveModeMessage, liveReleaseMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
 } from '../shared/live'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
@@ -1540,7 +1540,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   useEffect(() => {
     const root = rootRef.current
     const host = figureRef.current
+    // A row can still be opened after the live element has gone away (a closed
+    // cover, a removed tab). Keep its comment reachable at the last recorded box;
+    // the visible-page copy still wins whenever there is one.
     const mark = drawnMarks.find(candidate => candidate.id === selectedId)
+      ?? marks.find(candidate => candidate.id === selectedId)
     const drawn = liveMark !== null && liveMark.id === selectedId ? liveMark : mark
     const box = drawn === undefined ? undefined : markOutline(drawn, unit)
     if (root === null || host === null || box === undefined || size === null) {
@@ -1584,7 +1588,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     // idempotent, so a measured height that did not move re-renders nothing. It also
     // moves when the page turns, which is what keeps the pill off the slide that just
     // came up with a mark belonging to another one.
-  }, [drawnMarks, figure, htmlScroll, liveMark, palette, scale, selectedId, size, unit])
+  }, [drawnMarks, figure, htmlScroll, liveMark, marks, palette, scale, selectedId, size, unit])
 
   /**
    * The factor currently drawn, kept beside the state that will hold it.
@@ -1741,16 +1745,23 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * surface selector is the fact that tells one slide from the next. Static HTML can
    * be inspected directly; a running page reports the surface with its picker.
    * @param mark - the mark a gesture or picker just made.
+   * @param ownerSurface - the surface the page reported, or null for an element that
+   * belongs outside every declared surface such as a deck's cover.
    * @returns the mark carrying a surface selector when one is known.
    */
-  const scopedMark = useCallback((mark: AnnotationMark): AnnotationMark => {
+  const scopedMark = useCallback((
+    mark: AnnotationMark,
+    ownerSurface?: string | null,
+  ): AnnotationMark => {
     if (mark.surface !== undefined || figure?.kind !== 'html') return mark
     const staticRoot = frameRef.current?.contentDocument?.documentElement
-    const selector = previewPage === null
+    const selector = ownerSurface === null
+      ? undefined
+      : ownerSurface ?? (previewPage === null
       ? (staticRoot === null || staticRoot === undefined
           ? undefined
           : currentSurfaceSelector(staticRoot))
-      : liveSurface ?? undefined
+      : liveSurface ?? undefined)
     return selector === undefined ? mark : { ...mark, surface: selector }
   }, [figure?.kind, liveSurface, previewPage])
 
@@ -1764,8 +1775,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
    * on the same rectangle. An element is named once; the press picks out the mark that
    * is already there, which is the one the reader meant to write in.
    */
-  const addMark = useCallback((mark: AnnotationMark): void => {
-    const complete = scopedMark(mark)
+  const addMark = useCallback((
+    mark: AnnotationMark,
+    ownerSurface?: string | null,
+  ): void => {
+    const complete = scopedMark(mark, ownerSurface)
     const already = elementMarkOn(marks, complete)
     if (already !== undefined) {
       setTool('select')
@@ -1916,6 +1930,8 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /** Opaque token and timeout for that one reveal request. */
   const revealSerial = useRef(0)
   const revealTimer = useRef<number | null>(null)
+  /** The mark and surface a temporary hidden-layer reveal settled on. */
+  const temporaryReveal = useRef<{ readonly markId: string; readonly surface: string | null } | null>(null)
   useEffect(() => () => {
     if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
   }, [])
@@ -2059,6 +2075,13 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     view.postMessage(liveWatchMessage(selectors), new URL(url).origin)
   }, [])
 
+  /** Undo a cover or modal reveal once the mark that needed it is closed. */
+  const releasePicker = useCallback((url: string): void => {
+    const view = frameRef.current?.contentWindow
+    if (view == null) return
+    view.postMessage(liveReleaseMessage(), new URL(url).origin)
+  }, [])
+
   useEffect(() => {
     if (previewPage === null) return
     armPicker(previewPage.url, liveArmed)
@@ -2077,6 +2100,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     if (previewPage === null) return
     watchPicker(previewPage.url, watchedSelectors)
   }, [previewPage, watchedSelectors, watchPicker])
+
+  const hadSelectedMark = useRef(false)
+  useEffect(() => {
+    if (previewPage === null) return
+    if (selectedId !== null) {
+      hadSelectedMark.current = true
+      return
+    }
+    if (!hadSelectedMark.current) return
+    hadSelectedMark.current = false
+    temporaryReveal.current = null
+    releasePicker(previewPage.url)
+  }, [previewPage, releasePicker, selectedId])
+
+  useEffect(() => {
+    if (previewPage === null) return
+    return () => { releasePicker(previewPage.url) }
+  }, [previewPage, releasePicker])
 
   /**
    * Listen to the page.
@@ -2103,11 +2144,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           revealTimer.current = null
         }
         if (reported.status === 'revealed') {
+          temporaryReveal.current = reported.temporary === true
+            ? { markId: pending.markId, surface: reported.surface ?? null }
+            : null
           setSelectedId(pending.markId)
           // The list hangs over the element it just found. Once the page has
           // confirmed the destination, get out of the way so the reader can see it.
           setOpenPanel(null)
+        } else if (reported.status === 'hidden') {
+          temporaryReveal.current = null
+          // The element may belong to a state the page has since closed. The mark
+          // still has a comment to edit, so open it at its recorded box instead of
+          // making the list row feel inert.
+          setSelectedId(pending.markId)
+          setOpenPanel(null)
         } else {
+          temporaryReveal.current = null
           setStatus({ tone: 'info', text: t(`reveal_${reported.status}`) })
           setSelectedId(null)
         }
@@ -2118,7 +2170,14 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         setLiveSurfaceKnown(true)
         setSelectedId(current => {
           const selectedMark = marks.find(mark => mark.id === current)
-          return selectedMark?.surface !== undefined && selectedMark.surface !== reported.selector
+          if (selectedMark === undefined) return current
+          const temporary = temporaryReveal.current
+          if (temporary !== null && temporary.markId === current
+            && temporary.surface !== reported.selector) {
+            temporaryReveal.current = null
+            return null
+          }
+          return selectedMark.surface !== undefined && selectedMark.surface !== reported.selector
             ? null
             : current
         })
@@ -2188,7 +2247,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // they pointed, which is what a mark records: the element may move afterwards.
       setLiveHover(null)
       setPickLevel(undefined)
-      addMark(elementMark(anchorOfPick(reported), color))
+      addMark(elementMark(anchorOfPick(reported), color), reported.surface)
     }
     window.addEventListener('message', onMessage)
     return () => { window.removeEventListener('message', onMessage) }
@@ -3179,15 +3238,22 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       const bbox = mark.anchor?.bbox ?? (point === undefined ? [0, 0, 0, 0] : [point[0], point[1], 0, 0])
       const requestId = `${Date.now().toString(36)}-${(revealSerial.current += 1).toString(36)}`
       const view = frameRef.current?.contentWindow
+      temporaryReveal.current = null
       pendingReveal.current = { id: requestId, markId: mark.id }
       if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
       revealTimer.current = window.setTimeout(() => {
         pendingReveal.current = null
         setSelectedId(null)
         setStatus({ tone: 'info', text: t('reveal_timeout') })
-      }, 1600)
+        releasePicker(previewPage.url)
+      }, 2600)
       view?.postMessage(
-        liveRevealMessage(requestId, mark.anchor?.selector ?? null, mark.surface ?? liveSurface, bbox),
+        liveRevealMessage(
+          requestId,
+          mark.anchor?.selector ?? null,
+          mark.surface ?? (mark.anchor?.selector === undefined ? liveSurface : null),
+          bbox,
+        ),
         new URL(previewPage.url).origin,
       )
       revealOnPage(mark)
