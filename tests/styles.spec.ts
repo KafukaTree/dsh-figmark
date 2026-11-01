@@ -66,7 +66,7 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).toContain('.da-service-tabs{display:flex;flex:0 0 auto')
     expect(STYLES).toContain('overflow-x:auto;overflow-y:hidden;scrollbar-width:none')
     expect(STYLES).toContain('.da-service-list-tab,.da-service-refresh{display:flex')
-    expect(STYLES).toContain('.da-service-refresh svg{width:12px;height:12px}')
+    expect(STYLES).toContain('.da-service-refresh svg{width:12px;height:12px;stroke-width:1.8}')
     expect(STYLES).toContain('.da-service-refresh:disabled{opacity:.45')
     expect(STYLES).toContain('.da-service-tab[data-active="true"]')
     expect(STYLES).toContain('.da-service-live[hidden],.da-services[hidden]{display:none}')

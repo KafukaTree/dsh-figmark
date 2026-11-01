@@ -449,7 +449,7 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-live-refresh:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));
   color:var(--dsw-alias-label-primary,inherit)}
 .da-live-refresh:focus-visible{outline:1.5px solid var(--da-accent,#176df2);outline-offset:1px}
-.da-live-refresh svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.45;
+.da-live-refresh svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;
   stroke-linecap:round;stroke-linejoin:round}
 /* A scriptless deck turns one page at a time. The pager is deliberately a small chip
    in the opposite corner from the closed address control: it leaves the slide itself
@@ -1087,7 +1087,7 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
   outline:1.5px solid rgba(76,138,99,.55);outline-offset:1px}
 .da-service-list-tab svg,.da-service-refresh svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.45;
   stroke-linecap:round;stroke-linejoin:round}
-.da-service-refresh svg{width:12px;height:12px}
+.da-service-refresh svg{width:12px;height:12px;stroke-width:1.8}
 .da-service-refresh:disabled{opacity:.45;cursor:default}
 .da-service-tab{display:flex;align-items:center;min-width:74px;max-width:min(210px,46vw);
   border:0.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2));

@@ -3613,8 +3613,9 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                   aria-label={t('liveRefresh')}
                   title={t('liveRefresh')}
                   onClick={refreshLiveFrame}>
-                  <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-                    <path d="M13 5.5V2.8m0 0H10.2M13 2.8A6 6 0 1 0 14 9" />
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                    <path d="M21 3v5h-5" />
                   </svg>
                 </button>
               )}

@@ -493,6 +493,10 @@ describe('the local-pages picker', () => {
     const refresh = defined(host.querySelector<HTMLButtonElement>('.da-service-refresh'))
     expect(refresh.getAttribute('aria-label')).toBe(zh.liveRefresh)
     expect(refresh.getAttribute('title')).toBe(zh.liveRefresh)
+    expect([...refresh.querySelectorAll('path')].map(path => path.getAttribute('d'))).toEqual([
+      'M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8',
+      'M21 3v5h-5',
+    ])
     await click(refresh)
     expect(frame()).not.toBe(original)
     expect(frame().getAttribute('src')).toBe('http://127.0.0.1:9444/__dsh_figmark_live/proxy/')
