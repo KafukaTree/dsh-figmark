@@ -72,6 +72,19 @@ describe('the annotator stylesheet', () => {
     expect(STYLES).not.toContain('.da-pick-guide{position:absolute;')
   })
 
+  it('keeps keyboard focus inside the dark tool palette', () => {
+    // Pointer-picking a tool and then changing the element depth with Up/Down makes the
+    // browser paint its default two-tone ring around the last-pressed tile. On the dark
+    // palette that outer white edge looked like a broken container boundary. The cue
+    // remains visible, but it is inset and uses the plugin accent.
+    expect(STYLES).toContain(
+      '.da-palette .da-tool:focus-visible,.da-palette-hint-step:focus-visible{',
+    )
+    expect(STYLES).toContain(
+      'outline:none!important;box-shadow:inset 0 0 0 1.5px var(--da-accent,#4c8dff)!important',
+    )
+  })
+
   it('keeps the annotation count inside the toolbar scrollport', () => {
     // A corner badge lived above an overflow-hidden horizontal strip, which clipped
     // its top row in the real panel. The count is now ordinary button content.
