@@ -11,6 +11,19 @@
 import { baseNameOf } from '../shared/path-name'
 
 /**
+ * The path a browser URL should name its attachment with.
+ *
+ * Query and hash describe page state, not a different document. Keeping them would
+ * put `?chrome=1` in the file name the composer and transcript show. Filesystem paths
+ * are left untouched because `?` and `#` are legal filename characters there.
+ * @param path - the figure's path or URL.
+ * @returns the URL without query or hash, or the filesystem path verbatim.
+ */
+function attachmentPath(path: string): string {
+  return /^[a-z][a-z\d+.-]*:\/\//iu.test(path) ? path.replace(/[?#].*$/u, '') : path
+}
+
+/**
  * The review picture, as a draft attachment.
  * @param review - the PNG the surface exported, when it exported one.
  * @param path - the document the picture belongs to, for the attachment's name.
@@ -19,7 +32,7 @@ import { baseNameOf } from '../shared/path-name'
 export function reviewImageFile(review: Blob | undefined, path: string): File | undefined {
   return review === undefined
     ? undefined
-    : new File([review], `${baseNameOf(path)}.annotated.png`, { type: 'image/png' })
+    : new File([review], `${baseNameOf(attachmentPath(path))}.annotated.png`, { type: 'image/png' })
 }
 
 /**

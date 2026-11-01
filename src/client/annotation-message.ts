@@ -39,6 +39,8 @@ export type DeliveredPaths = SidecarWriteResult
  *   alone.
  * @param pageImages - how many annotated pages travel as image parts. A paged
  *   document sends these instead of uploading the whole PDF.
+ * @param pageCapture - whether the current live-page picture travelled, or was tried
+ *   and failed. File-backed documents leave this at `none`.
  * @returns the message text.
  */
 export function buildAnnotationMessage(
@@ -47,6 +49,7 @@ export function buildAnnotationMessage(
   locale: SummaryLocale,
   attachment = true,
   pageImages = 0,
+  pageCapture: 'none' | 'attached' | 'failed' = 'none',
 ): string {
   // The paths themselves are never printed: the sidecars are deleted once the
   // annotation has been delivered, so a path in the message would be a dead
@@ -93,6 +96,17 @@ export function buildAnnotationMessage(
     : pictured
       ? [zh ? '标注图已作为本条消息的附件发送。' : 'The annotated image is attached to this message.']
       : []
+  const captureLines = rendered
+    ? pageCapture === 'attached'
+      ? [zh
+        ? '当前页面截图已随消息发送；截图中的框线对应下方逐条的元素选择器和位置。'
+        : 'A screenshot of the current page travels with this message; its boxes correspond to the selectors and positions below.']
+      : pageCapture === 'failed'
+        ? [zh
+          ? '当前页面截图未能生成；请按下方逐条的元素选择器与位置处理。'
+          : 'The current page could not be captured; use the element selectors and positions below.']
+        : []
+    : []
   // Only point marks: one coordinate and a sentence each. There is nothing for a
   // picture to add, so none was rendered — the figure's own path above is the index.
   const noPicture = !pictured && !rendered && pageImages === 0 && marks.length > 0 && !needsReviewImage(document)
@@ -112,5 +126,15 @@ export function buildAnnotationMessage(
     : paged
       ? (zh ? '逐条处理该 PDF。' : 'Work through the PDF, mark by mark.')
       : (zh ? '逐条改生成源。' : 'Edit the generating source, mark by mark.')
-  return [header, ...attachmentLines, ...noPicture, '', ...summary, ...describeMarks(document, locale), '', closer].join('\n')
+  return [
+    header,
+    ...attachmentLines,
+    ...captureLines,
+    ...noPicture,
+    '',
+    ...summary,
+    ...describeMarks(document, locale),
+    '',
+    closer,
+  ].join('\n')
 }

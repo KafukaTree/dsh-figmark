@@ -152,6 +152,77 @@ describe('delivering an annotation', () => {
     expect(parts[0]?.text).toContain('[figure annotations]')
   })
 
+  it('marks a live screenshot as attached when the page supplied one', async () => {
+    const stub = stubSessions()
+    const warnings = await deliverAnnotation({
+      ...delivery(),
+      sessions: stub.sessions,
+      document: htmlDocument,
+      paths: htmlPaths,
+      pageCapture: 'attached',
+    })
+    expect(warnings).toEqual([])
+    expect(stub.prompts[0]?.[0]?.type).toBe('image')
+    expect(stub.prompts[0]?.[1]?.text).toContain('当前页面截图已随消息发送')
+  })
+
+  it('treats an HTML image as an attached live screenshot by default', async () => {
+    const stub = stubSessions()
+    const warnings = await deliverAnnotation({
+      ...delivery(),
+      sessions: stub.sessions,
+      document: htmlDocument,
+      paths: htmlPaths,
+    })
+    expect(warnings).toEqual([])
+    expect(stub.prompts[0]?.[1]?.text).toContain('当前页面截图已随消息发送')
+  })
+
+  it('does not claim an HTML screenshot when no image was supplied', async () => {
+    const stub = stubSessions()
+    const warnings = await deliverAnnotation({
+      ...delivery(),
+      sessions: stub.sessions,
+      document: htmlDocument,
+      paths: htmlPaths,
+      pageImages: [],
+    })
+    expect(warnings).toEqual([])
+    expect(stub.prompts[0]).toHaveLength(1)
+    expect(stub.prompts[0]?.[0]?.text).not.toContain('当前页面截图')
+  })
+
+  it('keeps the selectors when a live screenshot could not be made', async () => {
+    const zh = stubSessions()
+    const zhWarnings = await deliverAnnotation({
+      ...delivery(),
+      sessions: zh.sessions,
+      document: htmlDocument,
+      paths: htmlPaths,
+      pageImages: [],
+      pageCapture: 'failed',
+    })
+    expect(zhWarnings).toEqual(['当前页面截图未生成；元素选择器和位置信息仍已随消息发送。'])
+    expect(zh.prompts[0]).toHaveLength(1)
+    expect(zh.prompts[0]?.[0]?.text).toContain('当前页面截图未能生成')
+    expect(zh.prompts[0]?.[0]?.text).toContain('#s > p:nth-of-type(1)')
+
+    const en = stubSessions()
+    const enWarnings = await deliverAnnotation({
+      ...delivery(),
+      sessions: en.sessions,
+      document: htmlDocument,
+      paths: htmlPaths,
+      pageImages: [],
+      pageCapture: 'failed',
+      locale: 'en',
+    })
+    expect(enWarnings).toEqual([
+      'The current page could not be captured; its element selectors and positions still travelled with the message.',
+    ])
+    expect(en.prompts[0]?.[0]?.text).toContain('use the element selectors and positions below')
+  })
+
   it('encodes an image larger than one base64 chunk', async () => {
     const stub = stubSessions()
     await deliverAnnotation(delivery({ sessions: stub.sessions, pageImages: [{ page: 1, image: blobOf(0x8000 + 3) }] }))
@@ -338,5 +409,21 @@ describe('the message the agent reads', () => {
     expect(en).not.toContain('.annot.json')
     expect(en).toContain('selector #s > p:nth-of-type(1)')
     expect(en).toContain('Edit the HTML source, mark by mark.')
+  })
+
+  it('says a live screenshot did not travel in either language', () => {
+    const zh = buildAnnotationMessage(htmlDocument, htmlPaths, 'zh', false, 0, 'failed')
+    expect(zh).toContain('当前页面截图未能生成；请按下方逐条的元素选择器与位置处理。')
+    expect(zh).not.toContain('当前页面截图已随消息发送')
+
+    const en = buildAnnotationMessage(htmlDocument, htmlPaths, 'en', false, 0, 'failed')
+    expect(en).toContain('The current page could not be captured; use the element selectors and positions below.')
+    expect(en).not.toContain('A screenshot of the current page travels with this message')
+  })
+
+  it('says a live screenshot did travel in English', () => {
+    const en = buildAnnotationMessage(htmlDocument, htmlPaths, 'en', false, 1, 'attached')
+    expect(en).toContain('A screenshot of the current page travels with this message')
+    expect(en).toContain('selector #s > p:nth-of-type(1)')
   })
 })

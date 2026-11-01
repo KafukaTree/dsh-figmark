@@ -31,7 +31,10 @@ import { Canvas, type CanvasInput, type MarkPatch, type Tool } from './Canvas'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer } from './composer'
 import { reviewImageFile } from './review-attachment'
-import { composeReviewSvg, rasterizePng, reviewSize, type FigureLayer } from './export'
+import {
+  composeLiveScreenshotSvg, composeReviewSvg, rasterizePng, rasterizePngWithThumb, reviewScale,
+  reviewSize, type FigureLayer, type RasterizedReview,
+} from './export'
 import type { SidecarWriteResult } from '../shared/http'
 import {
   RENDER_WIDTH, anchorInDocument, currentSurfaceSelector, deckSlideOf, deckSlideSize,
@@ -45,11 +48,13 @@ import {
   sameShownMarks, shownMarksOf, useShownMarks, type ShownMarks,
 } from './shown-marks'
 import {
-  anchorOfPick, closeLivePage, liveAddressOf, openLivePage, pickName, shownAddress, type LivePage,
+  anchorOfPick, closeLivePage, liveAddressOf, liveScreenshotMarks, openLivePage, pickName,
+  shownAddress, type LivePage,
 } from './live-page'
 import { elementMark } from './canvas/marks'
 import {
-  liveDepthMessage, liveModeMessage, liveReleaseMessage, liveRevealMessage, liveWatchMessage, parseLiveEvent,
+  LIVE_MESSAGE, liveCaptureMessage, liveDepthMessage, liveModeMessage, liveReleaseMessage, liveRevealMessage,
+  liveWatchMessage, parseLiveEvent, type LiveCaptureSucceeded,
 } from '../shared/live'
 import { AUTOSAVE_DELAY_MS, annotationSignature, createAutosave, type Autosave } from './autosave'
 import { readPreferences, rememberPreferences, type PaletteSpot } from './preferences'
@@ -117,6 +122,12 @@ interface StripDrag {
   readonly origin: PaletteSpot
   readonly box: { readonly left: number; readonly top: number }
   current: PaletteSpot | null
+}
+
+/** One in-flight request for a screenshot from the framed page. */
+interface CaptureWaiter {
+  readonly resolve: (capture: LiveCaptureSucceeded | undefined) => void
+  readonly timer: number
 }
 
 /** The last directory in a file path, shortened to the part that locates it. */
@@ -444,7 +455,15 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const away = new Set(previewShown?.away ?? [])
     if (liveSurfaceKnown) {
       for (const mark of marks) {
-        if (mark.surface !== undefined && mark.surface !== liveSurface) away.add(mark.id)
+        if (mark.surface !== undefined) {
+          if (mark.surface !== liveSurface) away.add(mark.id)
+        } else if (mark.anchor?.selector === undefined && liveSurface !== null) {
+          // An older region has no way to name the slide it was drawn on. Drawing it
+          // on every reported slide puts the same box on unrelated pages, so let it
+          // appear only while no logical surface is in front. Element marks still use
+          // their own visibility report below, which can locate them precisely.
+          away.add(mark.id)
+        }
       }
     }
     return { boxes, away }
@@ -1947,10 +1966,19 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   /** Opaque token and timeout for that one reveal request. */
   const revealSerial = useRef(0)
   const revealTimer = useRef<number | null>(null)
+  /** Screenshot requests that are waiting for the page, keyed by request id. */
+  const captureWaiters = useRef(new Map<string, CaptureWaiter>())
+  /** Opaque token source shared by screenshots and other live-page requests. */
+  const liveRequestSerial = useRef(0)
   /** The mark and surface a temporary hidden-layer reveal settled on. */
   const temporaryReveal = useRef<{ readonly markId: string; readonly surface: string | null } | null>(null)
   const refreshLiveFrame = useCallback((): void => {
     pendingReveal.current = null
+    for (const waiter of captureWaiters.current.values()) {
+      window.clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
+    captureWaiters.current.clear()
     temporaryReveal.current = null
     setTemporaryMark(null)
     revealSerial.current += 1
@@ -1975,6 +2003,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
   }, [props.refreshToken, refreshLiveFrame])
   useEffect(() => () => {
     if (revealTimer.current !== null) window.clearTimeout(revealTimer.current)
+    for (const waiter of captureWaiters.current.values()) {
+      window.clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
+    captureWaiters.current.clear()
   }, [])
 
   /**
@@ -2124,6 +2157,70 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     view.postMessage(liveReleaseMessage(), new URL(url).origin)
   }, [])
 
+  /**
+   * Ask the page for the picture this send is about.
+   *
+   * A screenshot is taken only when the reader commits the review, not while they
+   * draw. The page answers with its whole document, the current scroll, and the
+   * live element boxes; the parent composes the visible part from those facts.
+   * @returns the usable capture, or undefined when the page cannot answer in time.
+   */
+  const requestLiveScreenshot = useCallback((url: string): Promise<LiveCaptureSucceeded | undefined> => {
+    const view = frameRef.current?.contentWindow
+    if (view == null) return Promise.resolve(undefined)
+    const requestId = `${Date.now().toString(36)}-${(liveRequestSerial.current += 1).toString(36)}`
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        captureWaiters.current.delete(requestId)
+        resolve(undefined)
+      }, 12_000)
+      captureWaiters.current.set(requestId, { resolve, timer })
+      try {
+        view.postMessage(liveCaptureMessage(requestId), new URL(url).origin)
+      } catch {
+        window.clearTimeout(timer)
+        captureWaiters.current.delete(requestId)
+        resolve(undefined)
+      }
+    })
+  }, [])
+
+  /**
+   * Put one live document's current viewport under its marks.
+   * @param capture - the page's screenshot and the live bounds at that moment.
+   * @param scope - the marks this hand-off is about.
+   * @returns the annotated PNG.
+   */
+  const exportLiveScreenshot = useCallback(async (
+    capture: LiveCaptureSucceeded,
+    scope: readonly AnnotationMark[],
+  ): Promise<RasterizedReview> => {
+    const shown = liveScreenshotMarks(
+      scope,
+      capture.surface,
+      capture.bounds,
+      capture.scroll,
+      capture.viewport,
+    )
+    const svg = composeLiveScreenshotSvg({
+      imageDataUrl: capture.dataUrl,
+      documentWidth: capture.document[0],
+      documentHeight: capture.document[1],
+      imageRect: capture.imageRect,
+      viewportWidth: capture.viewport[0],
+      viewportHeight: capture.viewport[1],
+      scrollX: capture.scroll[0],
+      scrollY: capture.scroll[1],
+    }, shown)
+    return await rasterizePngWithThumb(
+      svg,
+      capture.viewport[0],
+      capture.viewport[1],
+      Math.min(1.5, reviewScale(capture.viewport[0], capture.viewport[1])),
+      true,
+    )
+  }, [])
+
   useEffect(() => {
     if (previewPage === null) return
     armPicker(previewPage.url, liveArmed)
@@ -2183,8 +2280,29 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
     const onMessage = (event: MessageEvent): void => {
       const view = frameRef.current?.contentWindow
       if (event.origin !== origin || view === null || view === undefined || event.source !== view) return
+      const fields = typeof event.data === 'object' && event.data !== null
+        ? event.data as Record<string, unknown>
+        : null
+      const requestId = fields !== null && fields['figmark'] === LIVE_MESSAGE
+        && fields['kind'] === 'capture-result'
+        && typeof fields['requestId'] === 'string'
+        ? fields['requestId']
+        : undefined
+      if (requestId !== undefined) {
+        const waiter = captureWaiters.current.get(requestId)
+        if (waiter !== undefined) {
+          captureWaiters.current.delete(requestId)
+          window.clearTimeout(waiter.timer)
+          const parsed = parseLiveEvent(event.data)
+          waiter.resolve(parsed?.kind === 'capture-result' && parsed.status === 'ok'
+            ? parsed
+            : undefined)
+          return
+        }
+      }
       const reported = parseLiveEvent(event.data)
       if (reported === undefined) return
+      if (reported.kind === 'capture-result') return
       if (reported.kind === 'reveal-result') {
         const pending = pendingReveal.current
         if (pending === null || pending.id !== reported.requestId) return
@@ -2803,9 +2921,24 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         }
         const document_ = buildDocument(size, scope)
         if (document_ === null) throw new Error(t('loadFailed'))
+        // A live page is captured at the moment of the hand-off, while the frame is
+        // still in exactly the state the reader is reviewing. A screenshot failure
+        // never blocks the text: selectors and boxes are still enough to act on.
+        let screenshot: RasterizedReview | undefined
+        if (livePage !== null) {
+          const capture = await requestLiveScreenshot(livePage.url)
+          if (capture !== undefined) {
+            try {
+              screenshot = await exportLiveScreenshot(capture, scope)
+            } catch {
+              // The message below says that the picture did not travel; there is no
+              // second send to trigger, because the review itself is still complete.
+            }
+          }
+        }
         // A picture is only needed when the marks claim an extent. A figure whose
         // marks are all points carries its whole meaning in the numbered list, and a
-        // rendered document cannot be flattened at all — both travel as text.
+        // live page takes the screenshot path above.
         const review = layer === null || !needsReviewImage(document_)
           ? undefined
           // Numbered from the scope's own order, which is the order the message
@@ -2820,14 +2953,18 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
         writtenSignature.current = annotationSignature(document_.marks, document_.summary ?? '')
         setCreatedAt(document_.createdAt)
         setStale(false)
-        const pageImages = review === undefined ? [] : [{ page: 1, image: review }]
+        const sentImage = screenshot?.image ?? review
+        const pageImages = sentImage === undefined ? [] : [{ page: 1, image: sentImage }]
+        const pageCapture = livePage === null
+          ? 'none'
+          : screenshot === undefined ? 'failed' : 'attached'
         const locale = (props.localeId ?? 'zh').startsWith('en') ? 'en' : 'zh'
         // The bubble this message lands in is handed the message's text and nothing
         // else — the attachments beside it are not reachable from there. So a small
         // copy of the review is filed under the text now, and the card finds it by
         // the same text a moment later. A figure with no review picture files
         // nothing, and its card shows a glyph instead.
-        const thumb = await captureThumb(review)
+        const thumb = screenshot?.thumb ?? await captureThumb(review)
         if (target === 'composer') {
           // The card above the composer stands for this delivery, so the delivery
           // travels with it: pressing send later sends what was on screen when the
@@ -2838,9 +2975,11 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             document: document_,
             paths: saved,
             thumb,
+            pageImages: pageImages.length,
+            pageCapture,
             // Staged beside the message in the box, so the box's own send carries the
             // picture with the text instead of leaving one of them behind.
-            file: reviewImageFile(review, document_.figure.path),
+            file: reviewImageFile(sentImage, document_.figure.path),
             locale,
             send: async () => {
               return await deliverAnnotation({
@@ -2849,6 +2988,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
                 document: document_,
                 paths: saved,
                 pageImages,
+                pageCapture,
                 thumb,
                 locale,
               })
@@ -2861,6 +3001,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
             document: document_,
             paths: saved,
             pageImages,
+            pageCapture,
             thumb,
             locale,
           })
@@ -2916,7 +3057,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
       // state, which must lift whether the hand-off worked or not.
       setBusy(null)
     }
-  }, [address, buildDocument, commit, exportPng, layer, livePage, marks, props.conversation, props.localeId, props.sessions, sessionId, setSelectedId, size, summary, t, toasts, writeSummary])
+  }, [address, buildDocument, commit, exportLiveScreenshot, exportPng, layer, livePage, marks, props.conversation, props.localeId, props.sessions, requestLiveScreenshot, sessionId, setSelectedId, size, summary, t, toasts, writeSummary])
   /**
    * Hand the sentence beside one mark to someone.
    *

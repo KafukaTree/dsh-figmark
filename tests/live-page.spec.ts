@@ -2,12 +2,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   anchorOfPick, closeLivePage, discoverLiveServices, liveAddressOf, loopbackAddressOf,
-  openLivePage, pickName,
+  liveScreenshotMarks, openLivePage, pickName,
   shownAddress, type LivePage,
 } from '../src/client/live-page'
 import { AnnotatorHostError } from '../src/client/host-api'
 import { GUARD_HEADER } from '../src/shared/http'
 import { LIVE_MESSAGE, type LivePick } from '../src/shared/live'
+import type { AnnotationMark } from '../src/shared/annotation'
 
 /** A pick as the page reports one. */
 const PICKED: LivePick = {
@@ -208,6 +209,93 @@ describe('turning a pick into mark material', () => {
 
   it('lowercases the tag, which is the name a mark stores', () => {
     expect(pickName({ ...PICKED, id: undefined, class: undefined, tag: 'SECTION' })).toBe('section')
+  })
+})
+
+describe('choosing the marks in one live screenshot', () => {
+  const element = (
+    id: string,
+    selector: string,
+    bbox: readonly [number, number, number, number],
+    surface?: string,
+  ): AnnotationMark => ({
+    id,
+    kind: 'element',
+    color: '#1971c2',
+    points: [[bbox[0], bbox[1]], [bbox[0] + bbox[2], bbox[1] + bbox[3]]],
+    ...(surface === undefined ? {} : { surface }),
+    anchor: { tag: 'p', selector, bbox },
+  })
+
+  it('keeps the current surface, uses live element boxes, and drops hidden marks', () => {
+    const marks = [
+      element('live', '#live', [0, 0, 10, 10], '#slide-2'),
+      element('hidden', '#hidden', [20, 20, 10, 10], '#slide-2'),
+      element('other', '#other', [30, 30, 10, 10], '#slide-1'),
+    ]
+    const found = liveScreenshotMarks(
+      marks,
+      '#slide-2',
+      [
+        { selector: '#live', bbox: [40, 50, 200, 80], visible: true },
+        { selector: '#hidden', bbox: [0, 0, 10, 10], visible: false },
+      ],
+      [20, 30],
+      [800, 600],
+    )
+    expect(found.map(mark => mark.id)).toEqual(['live'])
+    expect(found[0]?.points).toEqual([[40, 50], [240, 130]])
+  })
+
+  it('keeps unscoped marks that touch the window and drops those beyond it', () => {
+    const marks: AnnotationMark[] = [
+      {
+        id: 'near',
+        kind: 'rect',
+        color: '#e03131',
+        points: [[790, 610], [820, 640]],
+      },
+      {
+        id: 'far',
+        kind: 'rect',
+        color: '#e03131',
+        points: [[900, 700], [940, 740]],
+      },
+      {
+        id: 'empty',
+        kind: 'rect',
+        color: '#e03131',
+        points: [],
+      },
+    ]
+    expect(liveScreenshotMarks(marks, null, [], [10, 20], [800, 600]).map(mark => mark.id))
+      .toEqual(['near'])
+  })
+
+  it('keeps a legacy region out of a screenshot taken on a reported surface', () => {
+    const mark: AnnotationMark = {
+      id: 'legacy-region',
+      kind: 'rect',
+      color: '#e03131',
+      points: [[20, 30], [220, 130]],
+    }
+    expect(liveScreenshotMarks([mark], '#slide-1', [], [0, 0], [800, 600])).toEqual([])
+    expect(liveScreenshotMarks([mark], null, [], [0, 0], [800, 600])).toEqual([mark])
+  })
+
+  it('falls back to the saved box when the page no longer watches an element', () => {
+    const saved = element('saved', '#saved', [15, 25, 40, 50])
+    expect(liveScreenshotMarks([saved], null, [], [0, 0], [800, 600])).toEqual([saved])
+  })
+
+  it('drops an element with neither a live box nor a recorded box', () => {
+    const lost: AnnotationMark = {
+      id: 'lost',
+      kind: 'element',
+      color: '#1971c2',
+      points: [[15, 25], [55, 75]],
+    }
+    expect(liveScreenshotMarks([lost], null, [], [0, 0], [800, 600])).toEqual([])
   })
 })
 

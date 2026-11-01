@@ -20,6 +20,15 @@
  * positional path — nothing it invented.
  * @module dsh-figmark/host/picker-script
  */
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { MAX_LIVE_CAPTURE_DATA_URL } from '../shared/live'
+
+const require = createRequire(import.meta.url)
+const MODERN_SCREENSHOT = readFileSync(
+  require.resolve('modern-screenshot/dist/index.js'),
+  'utf8',
+)
 
 /**
  * The picker, as the page receives it.
@@ -42,7 +51,9 @@
  * is exactly what a live page's ids do — and it is the same grammar the file
  * preview's own path builder writes, so a saved mark resolves against either.
  */
-export const PICKER_SCRIPT: string = `(function () {
+export const PICKER_SCRIPT: string = `/*! modern-screenshot v4.7.0 | MIT */
+${MODERN_SCREENSHOT}
+;(function () {
   if (window.__dshFigmarkPicker) return
   window.__dshFigmarkPicker = true
 
@@ -582,6 +593,85 @@ export const PICKER_SCRIPT: string = `(function () {
   window.addEventListener('scroll', sendScroll, true)
   window.addEventListener('resize', sendScroll)
 
+  function capture(requestId) {
+    var root = doc.documentElement
+    var documentWidth = Math.max(1, Math.ceil(root.scrollWidth || root.clientWidth || window.innerWidth || 1))
+    var documentHeight = Math.max(1, Math.ceil(root.scrollHeight || root.clientHeight || window.innerHeight || 1))
+    var bounds = []
+    for (var i = 0; i < watched.length; i += 1) bounds.push(measure(watched[i]))
+    var surface = visibleSurface()
+    // A deck keeps every slide in the same document. Cloning all of them to PNG is
+    // both slow and wrong for a screenshot of the page in front: capture the surface
+    // subtree when one exists and let the panel place it at its document offset.
+    var rect = surface ? surface.getBoundingClientRect() : null
+    var scroll = scrollOf()
+    var width = rect ? Math.max(1, Math.ceil(rect.width)) : documentWidth
+    var height = rect ? Math.max(1, Math.ceil(rect.height)) : documentHeight
+    var imageRect = rect
+      ? [rect.left + scroll[0], rect.top + scroll[1], width, height]
+      : [0, 0, width, height]
+    var target = surface || root
+    var scale = Math.min(2, 2400 / Math.max(width, height))
+    var screenshot = window.modernScreenshot
+    if (!screenshot || typeof screenshot.domToDataUrl !== 'function') {
+      send({
+        figmark: MARKER,
+        kind: 'capture-result',
+        requestId: requestId,
+        status: 'failed',
+        reason: 'the screenshot renderer is unavailable'
+      })
+      return
+    }
+    screenshot.domToDataUrl(target, {
+      width: width,
+      height: height,
+      scale: scale,
+      backgroundColor: '#ffffff',
+      maximumCanvasSize: 4096,
+      timeout: 12000,
+      filter: function (node) {
+        if (!node || node.nodeType !== 1) return true
+        return !node.hasAttribute('data-dsh-figmark-style')
+          && !node.hasAttribute('data-da-spot')
+      }
+    }).then(function (dataUrl) {
+      if (typeof dataUrl !== 'string' || dataUrl.length > ${String(MAX_LIVE_CAPTURE_DATA_URL)}) {
+        send({
+          figmark: MARKER,
+          kind: 'capture-result',
+          requestId: requestId,
+          status: 'failed',
+          reason: 'the screenshot is too large'
+        })
+        return
+      }
+      send({
+        figmark: MARKER,
+        kind: 'capture-result',
+        requestId: requestId,
+        status: 'ok',
+        dataUrl: dataUrl,
+        document: [documentWidth, documentHeight],
+        imageRect: imageRect,
+        viewport: [window.innerWidth || width, window.innerHeight || height],
+        scroll: scroll,
+        scale: scale,
+        surface: surface ? pathOf(surface) : null,
+        bounds: bounds
+      })
+    }, function (error) {
+      var reason = error && error.message ? String(error.message) : 'the page could not be captured'
+      send({
+        figmark: MARKER,
+        kind: 'capture-result',
+        requestId: requestId,
+        status: 'failed',
+        reason: reason.slice(0, 280)
+      })
+    })
+  }
+
   window.addEventListener('message', function (event) {
     var data = event.data
     if (!data || typeof data !== 'object' || data.figmark !== MARKER) return
@@ -623,6 +713,11 @@ export const PICKER_SCRIPT: string = `(function () {
         && data.surface.length > 0 && data.surface.length <= 2048 ? data.surface : null
       var requestedBox = Array.isArray(data.bbox) && data.bbox.length === 4 ? data.bbox : [0, 0, 0, 0]
       reveal(data.requestId, requestedSelector, requestedSurface, requestedBox)
+      return
+    }
+    if (data.kind === 'capture' && typeof data.requestId === 'string'
+      && data.requestId.length > 0 && data.requestId.length <= 128) {
+      capture(data.requestId)
       return
     }
     if (data.kind === 'release-reveal') {

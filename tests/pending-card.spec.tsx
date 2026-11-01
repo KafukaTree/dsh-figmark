@@ -169,6 +169,12 @@ describe('the attachment card above the composer', () => {
     expect(host.textContent).not.toContain('批注')
   })
 
+  it('shows the page filename without its query state', () => {
+    park({ data: { ...DATA, file: 'http://localhost:5173/deck/index.html?clean=1' } })
+    mount()
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe('index.html')
+  })
+
   it('keeps the size and the coordinates off the face, in the hover titles', () => {
     park()
     mount()

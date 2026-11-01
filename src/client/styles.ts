@@ -968,10 +968,10 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
    quiet fill the shipped attachment rail gives its thumbnails rather than the surface's
    own colour — on the card's surface a white tile would be a bare outline. */
 .da-staged-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;
-  width:40px;height:40px;overflow:hidden;border-radius:9px;
+  width:52px;height:42px;overflow:hidden;border-radius:9px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(0,0,0,.06));
   background:var(--dsw-alias-interactive-bg-hover,#f2f2f4);color:var(--dsw-alias-label-tertiary,inherit)}
-.da-staged-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.da-staged-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .da-staged-glyph{width:18px;height:18px}
 /* min-width 0 on the column and on the sentence is what makes the ellipsis possible:
    a flex item refuses to shrink below its content unless it is told it may. */

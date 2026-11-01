@@ -170,6 +170,13 @@ describe('scaling a picture down', () => {
     expect(log.closed).toBe(1)
   })
 
+  it('uses the taller edge for a portrait picture so the card can show all of it', async () => {
+    const log = stubCanvas()
+    stubDecoder({ width: 300, height: 600 })
+    await captureThumb(new Blob([new Uint8Array([1])], { type: 'image/png' }))
+    expect(log.sizes).toEqual([{ width: 60, height: 120 }])
+  })
+
   it('never enlarges a picture that is already small', async () => {
     const log = stubCanvas()
     stubDecoder({ width: 60, height: 40 })

@@ -2,7 +2,7 @@
 import { JSDOM } from 'jsdom'
 import { describe, expect, it, vi } from 'vitest'
 import { PICKER_SCRIPT } from '../src/host/picker-script'
-import { LIVE_MESSAGE } from '../src/shared/live'
+import { LIVE_MESSAGE, MAX_LIVE_CAPTURE_DATA_URL } from '../src/shared/live'
 
 /** One page with the picker running in it, and everything it has said. */
 interface Page {
@@ -21,6 +21,8 @@ interface Page {
     readonly surface?: string | null
     readonly bbox?: readonly [number, number, number, number]
   }): void
+  /** Ask the picker for a screenshot. */
+  capture(requestId: string): void
 }
 
 /** A page with the picker loaded, in its own window. */
@@ -73,6 +75,11 @@ function live(html = '<main><h2 id="title">Head</h2><p class="lead">Some <em>tex
           surface: null,
           ...request,
         },
+      }))
+    },
+    capture(requestId) {
+      window.dispatchEvent(new window.MessageEvent('message', {
+        data: { figmark: LIVE_MESSAGE, kind: 'capture', requestId },
       }))
     },
   }
@@ -420,10 +427,12 @@ describe('the page moving', () => {
       two.setAttribute('style', 'opacity: 1')
     })
     page.reveal({ requestId: 'legacy', selector: '#target' })
-    await new Promise(resolve => { setTimeout(resolve, 100) })
+    await vi.waitFor(() => {
+      expect(page.said.find(told =>
+        told['kind'] === 'reveal-result' && told['requestId'] === 'legacy'))
+        .toMatchObject({ status: 'revealed' })
+    })
     expect(scrolled).toBe(0)
-    expect(page.said.find(told => told['kind'] === 'reveal-result' && told['requestId'] === 'legacy'))
-      .toMatchObject({ status: 'revealed' })
   })
 
   it('follows the element instead of a stale surface recorded with the mark', async () => {
@@ -457,10 +466,11 @@ describe('the page moving', () => {
       selector: '#target',
       surface: 'section:nth-of-type(1)',
     })
-    await new Promise(resolve => { setTimeout(resolve, 100) })
-    expect(page.said.find(told =>
-      told['kind'] === 'reveal-result' && told['requestId'] === 'stale-surface'))
-      .toMatchObject({ status: 'revealed' })
+    await vi.waitFor(() => {
+      expect(page.said.find(told =>
+        told['kind'] === 'reveal-result' && told['requestId'] === 'stale-surface'))
+        .toMatchObject({ status: 'revealed' })
+    })
     expect(two.classList.contains('is-live')).toBe(true)
   })
 
@@ -640,6 +650,161 @@ describe('the page moving', () => {
         { selector: '#old', visible: false },
       ],
     })
+  })
+})
+
+describe('screenshotting the live page', () => {
+  it('answers with the whole document, the viewport, scroll and live boxes', async () => {
+    const page = live('<main><h2 id="title">Head</h2></main>')
+    Object.defineProperty(page.window, 'innerWidth', { configurable: true, value: 640 })
+    Object.defineProperty(page.window, 'innerHeight', { configurable: true, value: 360 })
+    const root = page.window.document.documentElement
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, value: 1280 })
+    Object.defineProperty(root, 'scrollHeight', { configurable: true, value: 1800 })
+    Object.defineProperty(at(page.window, '#title'), 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 10, y: 40, width: 100, height: 30, top: 40, right: 110, bottom: 70, left: 10,
+        toJSON: () => ({}),
+      }),
+    })
+    page.watch(['#title'])
+    page.scrollTo(12, 340)
+    const domToDataUrl = vi.fn(async (
+      _root: Element,
+      _options: Record<string, unknown>,
+    ) => 'data:image/png;base64,AAAA')
+    const shot = { domToDataUrl }
+    Object.defineProperty(page.window, 'modernScreenshot', {
+      configurable: true,
+      value: shot,
+    })
+    page.capture('c1')
+    await vi.waitFor(() => {
+      expect(page.said.some(message => message['kind'] === 'capture-result')).toBe(true)
+    })
+    expect(domToDataUrl).toHaveBeenCalledTimes(1)
+    const options = domToDataUrl.mock.calls[0]?.[1] ?? {}
+    const filter = options['filter'] as (node: Node) => boolean
+    expect(options).toMatchObject({ width: 1280, height: 1800, scale: 2400 / 1800 })
+    const pickerStyle = page.window.document.createElement('style')
+    pickerStyle.setAttribute('data-dsh-figmark-style', '')
+    const spotlight = page.window.document.createElement('style')
+    spotlight.setAttribute('data-da-spot', '')
+    expect(filter(pickerStyle)).toBe(false)
+    expect(filter(spotlight)).toBe(false)
+    expect(filter(page.window.document.createTextNode('text'))).toBe(true)
+    expect(page.said.find(message => message['kind'] === 'capture-result')).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'ok',
+      dataUrl: 'data:image/png;base64,AAAA',
+      document: [1280, 1800],
+      imageRect: [0, 0, 1280, 1800],
+      viewport: [640, 360],
+      scroll: [12, 340],
+      scale: 2400 / 1800,
+      surface: null,
+      bounds: [{ selector: '#title', bbox: [22, 380, 100, 30], visible: true }],
+    })
+  })
+
+  it('captures only the surface in front of a deck', async () => {
+    const page = live('<section class="slide" id="front"><h2 id="title">Head</h2></section>')
+    Object.defineProperty(page.window, 'innerWidth', { configurable: true, value: 800 })
+    Object.defineProperty(page.window, 'innerHeight', { configurable: true, value: 600 })
+    const root = page.window.document.documentElement
+    Object.defineProperty(root, 'scrollWidth', { configurable: true, value: 1200 })
+    Object.defineProperty(root, 'scrollHeight', { configurable: true, value: 900 })
+    const surface = at(page.window, '#front')
+    Object.defineProperty(surface, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 20, y: 30, width: 400, height: 300, top: 30, right: 420, bottom: 330, left: 20,
+        toJSON: () => ({}),
+      }),
+    })
+    page.scrollTo(5, 7)
+    const domToDataUrl = vi.fn(async (
+      _root: Element,
+      _options: Record<string, unknown>,
+    ) => 'data:image/png;base64,AAAA')
+    Object.defineProperty(page.window, 'modernScreenshot', {
+      configurable: true,
+      value: { domToDataUrl },
+    })
+    page.capture('surface')
+    await vi.waitFor(() => {
+      expect(page.said.some(message => message['kind'] === 'capture-result')).toBe(true)
+    })
+    expect(domToDataUrl.mock.calls[0]?.[0]).toBe(surface)
+    expect(domToDataUrl.mock.calls[0]?.[1]).toMatchObject({ width: 400, height: 300, scale: 2 })
+    expect(page.said.find(message => message['kind'] === 'capture-result')).toMatchObject({
+      document: [1200, 900],
+      imageRect: [25, 37, 400, 300],
+      surface: 'section:nth-of-type(1)',
+    })
+  })
+
+  it('fails locally instead of posting a screenshot the panel must discard', async () => {
+    const page = live()
+    Object.defineProperty(page.window, 'modernScreenshot', {
+      configurable: true,
+      value: {
+        domToDataUrl: vi.fn(async () => `data:image/png;base64,${'A'.repeat(MAX_LIVE_CAPTURE_DATA_URL)}`),
+      },
+    })
+    page.capture('too-large')
+    await vi.waitFor(() => {
+      expect(page.said.find(message => message['kind'] === 'capture-result')).toEqual({
+        figmark: LIVE_MESSAGE,
+        kind: 'capture-result',
+        requestId: 'too-large',
+        status: 'failed',
+        reason: 'the screenshot is too large',
+      })
+    })
+  })
+
+  it('reports a failed render without claiming a picture', async () => {
+    const page = live()
+    Object.defineProperty(page.window, 'modernScreenshot', {
+      configurable: true,
+      value: {
+        domToDataUrl: vi.fn(async () => { throw new Error('canvas refused') }),
+      },
+    })
+    page.capture('c2')
+    await vi.waitFor(() => {
+      expect(page.said.find(message => message['kind'] === 'capture-result')).toEqual({
+        figmark: LIVE_MESSAGE,
+        kind: 'capture-result',
+        requestId: 'c2',
+        status: 'failed',
+        reason: 'canvas refused',
+      })
+    })
+  })
+
+  it('reports a missing renderer, and ignores a request with no usable id', () => {
+    const page = live()
+    Object.defineProperty(page.window, 'modernScreenshot', {
+      configurable: true,
+      value: undefined,
+    })
+    page.capture('c3')
+    expect(page.said.find(message => message['kind'] === 'capture-result')).toEqual({
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c3',
+      status: 'failed',
+      reason: 'the screenshot renderer is unavailable',
+    })
+    page.window.dispatchEvent(new page.window.MessageEvent('message', {
+      data: { figmark: LIVE_MESSAGE, kind: 'capture', requestId: '' },
+    }))
+    expect(page.said.filter(message => message['kind'] === 'capture-result')).toHaveLength(1)
   })
 })
 

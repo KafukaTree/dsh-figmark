@@ -1,8 +1,8 @@
 /** The vocabulary a rendered page and the panel share, and the fence around it. */
 import { describe, expect, it } from 'vitest'
 import {
-  LIVE_MESSAGE, liveDepthMessage, liveModeMessage, liveReleaseMessage, liveRevealMessage, liveWatchMessage,
-  parseLiveEvent,
+  LIVE_MESSAGE, liveCaptureMessage, liveDepthMessage, liveModeMessage, liveReleaseMessage,
+  liveRevealMessage, liveWatchMessage, parseLiveEvent,
 } from '../src/shared/live'
 
 /** A pick exactly as the injected script reports one. */
@@ -50,6 +50,10 @@ describe('the mode message', () => {
 
   it('asks the page to restore a temporarily revealed hidden layer', () => {
     expect(liveReleaseMessage()).toEqual({ figmark: LIVE_MESSAGE, kind: 'release-reveal' })
+  })
+
+  it('asks for one screenshot by its opaque request id', () => {
+    expect(liveCaptureMessage('c1')).toEqual({ figmark: LIVE_MESSAGE, kind: 'capture', requestId: 'c1' })
   })
 })
 
@@ -203,6 +207,69 @@ describe('parsing what a page reports', () => {
     })
   })
 
+  it('reads a screenshot with the document, viewport, scroll and live boxes', () => {
+    const capture = {
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'ok',
+      dataUrl: 'data:image/png;base64,AAAA',
+      document: [1280, 720],
+      imageRect: [0, 0, 1280, 720],
+      viewport: [960, 540],
+      scroll: [10, 20],
+      scale: 1.5,
+      surface: '#slide-2',
+      bounds: [{ selector: '#lead', bbox: [10, 20, 300, 40], visible: true }],
+    }
+    expect(parseLiveEvent(capture)).toEqual({
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'ok',
+      dataUrl: capture.dataUrl,
+      document: [1280, 720],
+      imageRect: [0, 0, 1280, 720],
+      viewport: [960, 540],
+      scroll: [10, 20],
+      scale: 1.5,
+      surface: '#slide-2',
+      bounds: [{ selector: '#lead', bbox: [10, 20, 300, 40], visible: true }],
+    })
+    expect(parseLiveEvent({ ...capture, surface: null })).toMatchObject({ surface: null })
+    expect(parseLiveEvent({ ...capture, imageRect: undefined })).toMatchObject({
+      imageRect: [0, 0, 1280, 720],
+    })
+  })
+
+  it('reads a screenshot refusal without inventing a picture', () => {
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'failed',
+      reason: 'canvas unavailable',
+    })).toEqual({
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'failed',
+      reason: 'canvas unavailable',
+    })
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'failed',
+      reason: 'x'.repeat(301),
+    })).toEqual({ kind: 'capture-result', requestId: 'c1', status: 'failed' })
+    expect(parseLiveEvent({
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'failed',
+      reason: '',
+    })).toEqual({ kind: 'capture-result', requestId: 'c1', status: 'failed' })
+  })
+
   it('refuses anything that is not one of its own messages', () => {
     expect(parseLiveEvent(undefined)).toBeUndefined()
     expect(parseLiveEvent(null)).toBeUndefined()
@@ -256,5 +323,43 @@ describe('parsing what a page reports', () => {
     })).toBeUndefined()
     expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'surface', selector: '' })).toBeUndefined()
     expect(parseLiveEvent({ figmark: LIVE_MESSAGE, kind: 'surface', selector: 'x'.repeat(2049) })).toBeUndefined()
+  })
+
+  it('refuses an incomplete or oversized screenshot', () => {
+    const capture = {
+      figmark: LIVE_MESSAGE,
+      kind: 'capture-result',
+      requestId: 'c1',
+      status: 'ok',
+      dataUrl: 'data:image/png;base64,AAAA',
+      document: [1280, 720],
+      imageRect: [0, 0, 1280, 720],
+      viewport: [960, 540],
+      scroll: [0, 0],
+      scale: 1,
+      surface: null,
+      bounds: [],
+    }
+    expect(parseLiveEvent({ ...capture, requestId: '' })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, requestId: 'x'.repeat(129) })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, status: 'maybe' })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, dataUrl: 'data:image/jpeg;base64,AAAA' })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, dataUrl: `data:image/png;base64,${'A'.repeat(15_500_000)}` })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, document: [0, 720] })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, document: [1280, 100_001] })).toBeUndefined()
+    expect(parseLiveEvent({
+      ...capture,
+      document: undefined,
+      imageRect: undefined,
+    })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, imageRect: 'none' })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, imageRect: [0, 0, 0, 720] })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, viewport: [960] })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, scroll: [0, Number.NaN] })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, scale: 0 })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, scale: 5 })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, surface: '' })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, surface: 'x'.repeat(2049) })).toBeUndefined()
+    expect(parseLiveEvent({ ...capture, bounds: 'none' })).toBeUndefined()
   })
 })

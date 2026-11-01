@@ -13,13 +13,13 @@
  * @module dsh-figmark/client/live-page
  */
 import { GUARD_HEADER, ROUTE_PREFIX } from '../shared/http'
-import { LIVE_ROUTE, type LivePick } from '../shared/live'
+import { LIVE_ROUTE, type LiveBound, type LivePick } from '../shared/live'
 import {
   SERVICE_DISCOVER_ROUTE,
   type ServiceDiscoverAnswer,
   type ServiceSummary,
 } from '../shared/services'
-import type { MarkAnchor } from '../shared/annotation'
+import type { AnnotationMark, FigurePoint, MarkAnchor } from '../shared/annotation'
 import { AnnotatorHostError } from './host-api'
 
 /** One page the panel is showing through the proxy. */
@@ -223,6 +223,98 @@ export function pickName(picked: LivePick): string {
   if (picked.id !== undefined && picked.id !== '') return `${base}#${picked.id}`
   const first = picked.class?.trim().split(/\s+/u)[0]
   return first === undefined || first === '' ? base : `${base}.${first}`
+}
+
+/**
+ * The marks that belong in one screenshot of a live page.
+ *
+ * The page's bounds are read at capture time, because an element can move after the
+ * mark was made. The screenshot is of the current viewport, so marks wholly outside
+ * it are left out rather than stretching the picture into the rest of the document.
+ * @param marks - the marks being delivered.
+ * @param surface - the logical page in front when the screenshot was taken.
+ * @param bounds - every watched element's box at that moment.
+ * @param scroll - the frame's scroll offset.
+ * @param viewport - the frame's visible size.
+ * @returns marks ready for the screenshot composer.
+ */
+export function liveScreenshotMarks(
+  marks: readonly AnnotationMark[],
+  surface: string | null,
+  bounds: readonly LiveBound[],
+  scroll: readonly [number, number],
+  viewport: readonly [number, number],
+): readonly AnnotationMark[] {
+  const boxes = new Map(bounds.map(bound => [bound.selector, bound]))
+  const [left, top] = scroll
+  const right = left + viewport[0]
+  const bottom = top + viewport[1]
+  return marks.flatMap((mark): AnnotationMark[] => {
+    if (mark.surface !== undefined) {
+      if (mark.surface !== surface) return []
+    } else if (mark.anchor?.selector === undefined && surface !== null) {
+      // A pre-surface region cannot be attributed to one slide. It is kept in the
+      // draft, but must not be baked into the screenshot of whichever slide happens
+      // to be in front when the message is sent.
+      return []
+    }
+    const selector = mark.anchor?.selector
+    const bound = selector === undefined ? undefined : boxes.get(selector)
+    if (bound !== undefined && !bound.visible) return []
+    const points = mark.kind === 'element'
+      ? cornersOf(bound?.bbox ?? mark.anchor?.bbox)
+      : mark.points
+    if (!touchesViewport(points, left, top, right, bottom)) return []
+    return [points === mark.points ? mark : { ...mark, points }]
+  })
+}
+
+/**
+ * Turn one box into the two corners every mark carries.
+ * @param box - x, y, width, height.
+ * @returns the top-left and bottom-right corners, or no points.
+ */
+function cornersOf(
+  box: readonly [number, number, number, number] | undefined,
+): readonly FigurePoint[] {
+  if (box === undefined) return []
+  const [x, y, width, height] = box
+  return [[x, y], [x + width, y + height]]
+}
+
+/**
+ * Whether a mark reaches the viewport at all.
+ * @param points - the mark's document-space points.
+ * @param left - viewport's left edge.
+ * @param top - viewport's top edge.
+ * @param right - viewport's right edge.
+ * @param bottom - viewport's bottom edge.
+ * @returns true when any part of the mark's box is visible.
+ */
+function touchesViewport(
+  points: readonly FigurePoint[],
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): boolean {
+  const first = points[0]
+  if (first === undefined) return false
+  let minX = first[0]
+  let minY = first[1]
+  let maxX = first[0]
+  let maxY = first[1]
+  for (const [x, y] of points) {
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
+  }
+  // A pin sits above its point, and an arrow head reaches past its tip. The margin
+  // keeps those visible parts in the picture instead of treating the anchor as a dot.
+  const margin = 24
+  return maxX >= left - margin && maxY >= top - margin
+    && minX <= right + margin && minY <= bottom + margin
 }
 
 /** The last path segment of a file, which is how a file names itself. */

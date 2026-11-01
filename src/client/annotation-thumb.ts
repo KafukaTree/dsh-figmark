@@ -116,6 +116,40 @@ export function clearThumbs(): void {
 }
 
 /**
+ * Encode one already-rasterized picture as a thumbnail.
+ *
+ * Scaling by the longer edge keeps the whole page visible in the attachment card;
+ * scaling by width alone made tall pages produce an over-tall image that the square
+ * tile then cropped. Reusing a canvas already drawn by the review pipeline avoids a
+ * second decode and resize of the full screenshot.
+ * @param source - a canvas or other browser image source.
+ * @param width - source width in pixels.
+ * @param height - source height in pixels.
+ * @returns a `data:image/…` URL, or undefined when the canvas cannot encode one.
+ */
+export function thumbnailFromCanvas(
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+): string | undefined {
+  try {
+    const scale = Math.min(1, THUMB_WIDTH / Math.max(width, height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
+    const context = canvas.getContext('2d')
+    if (context === null) return undefined
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(source, 0, 0, canvas.width, canvas.height)
+    const url = canvas.toDataURL('image/webp', QUALITY)
+    return url.startsWith('data:image/') ? url : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Scale one picture down to thumbnail size.
  *
  * Every step is allowed to be missing: `createImageBitmap` needs a decoder the
@@ -130,19 +164,7 @@ export async function captureThumb(source: Blob | undefined): Promise<string | u
   try {
     const bitmap = await createImageBitmap(source)
     try {
-      const scale = Math.min(1, THUMB_WIDTH / bitmap.width)
-      const width = Math.max(1, Math.round(bitmap.width * scale))
-      const height = Math.max(1, Math.round(bitmap.height * scale))
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const context = canvas.getContext('2d')
-      if (context === null) return undefined
-      context.imageSmoothingEnabled = true
-      context.imageSmoothingQuality = 'high'
-      context.drawImage(bitmap, 0, 0, width, height)
-      const url = canvas.toDataURL('image/webp', QUALITY)
-      return url.startsWith('data:image/') ? url : undefined
+      return thumbnailFromCanvas(bitmap, bitmap.width, bitmap.height)
     } finally {
       // Decoded pixels are the expensive part of this; a bubble that never
       // closes its bitmap keeps a full-size frame alive for the page's lifetime.

@@ -93,5 +93,8 @@
   "author": {
     "name": "KafukaTree",
     "url": "https://github.com/KafukaTree"
+  },
+  "dependencies": {
+    "modern-screenshot": "4.7.0"
   }
 }

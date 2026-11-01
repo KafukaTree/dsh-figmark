@@ -15,7 +15,10 @@ import {
   pointMarkBox,
 } from '../src/client/render'
 import { figureUnit } from '../src/client/scale'
-import { bytesToDataUrl, composeReviewSvg, reviewSize, rasterizePng } from '../src/client/export'
+import {
+  bytesToDataUrl, composeLiveScreenshotSvg, composeReviewSvg, reviewSize, rasterizePng,
+  rasterizePngWithThumb,
+} from '../src/client/export'
 import {
   anchorAtPoint, elementChoicesAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox,
 } from '../src/client/figure-dom'
@@ -297,6 +300,58 @@ describe('review image', () => {
   })
   })
 
+  it('puts the live viewport under the marks and outlines the elements in it', () => {
+    const svg = composeLiveScreenshotSvg({
+      imageDataUrl: 'data:image/png;base64,AAAA',
+      documentWidth: 800,
+      documentHeight: 900,
+      imageRect: [0, 0, 800, 900],
+      viewportWidth: 400,
+      viewportHeight: 300,
+      scrollX: 100,
+      scrollY: 200,
+    }, [
+      {
+        id: 'element',
+        kind: 'element',
+        color: '#1971c2',
+        points: [[120, 240], [200, 280]],
+        anchor: { tag: 'h1', selector: '#title', bbox: [120, 240, 80, 40] },
+      },
+      {
+        id: 'region',
+        kind: 'rect',
+        color: '#e03131',
+        points: [[140, 260], [180, 290]],
+      },
+    ])
+    expect(svg).toContain('viewBox="0 0 400 300"')
+    expect(svg).toContain('<g transform="translate(-100 -200)">')
+    expect(svg).toContain('width="800" height="900"')
+    expect(svg).toContain('href="data:image/png;base64,AAAA"')
+    expect(svg).toContain('fill="#1971c2" fill-opacity="0.07"')
+    expect(svg).toContain('stroke="#1971c2"')
+    expect(svg).toContain('stroke="#e03131"')
+    // A screenshot is already a flat page: there is no markup to light, and the
+    // frame's own blue outline is the locator the reader actually saw.
+    expect(svg).not.toContain('da-spot')
+    expect(svg).not.toContain('filter:drop-shadow')
+  })
+
+  it('draws no element outline when the mark has no second corner', () => {
+    const svg = composeLiveScreenshotSvg({
+      imageDataUrl: 'data:image/png;base64,AAAA',
+      documentWidth: 10,
+      documentHeight: 10,
+      imageRect: [2, 3, 10, 10],
+      viewportWidth: 10,
+      viewportHeight: 10,
+      scrollX: 0,
+      scrollY: 0,
+    }, [{ id: 'half', kind: 'element', color: '#1971c2', points: [[1, 1]] }])
+    expect(svg).not.toContain('fill-opacity="0.07"')
+  })
+
   it('draws a point mark as a filled pin with its number inside', () => {
     const svg = composeReviewSvg(
       { kind: 'raster', dataUrl: 'data:image/png;base64,AA', width: 400, height: 300 },
@@ -474,6 +529,26 @@ describe('rasterizing the review image', () => {
     const blob = await rasterizePng('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"/>', 10, 5, 2)
     expect(blob.type).toBe('image/png')
     expect(log.canvasSizes).toEqual([{ width: 20, height: 10 }])
+    expect(log.revoked).toEqual(['blob:stub-review'])
+  })
+
+  it('draws the PNG and its card thumbnail from one raster pass', async () => {
+    const log = stubRasterizer()
+    const result = await rasterizePngWithThumb(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"/>',
+      10,
+      5,
+      2,
+      true,
+    )
+    expect(result.image.type).toBe('image/png')
+    expect(result.thumb).toMatch(/^data:image\/png;base64,/u)
+    // The first canvas is the review; the second is the thumbnail drawn directly
+    // from it, with no decode of the encoded PNG in between.
+    expect(log.canvasSizes).toEqual([
+      { width: 20, height: 10 },
+      { width: 20, height: 10 },
+    ])
     expect(log.revoked).toEqual(['blob:stub-review'])
   })
 

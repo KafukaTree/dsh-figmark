@@ -19,6 +19,15 @@ export const LIVE_ROUTE = '/live'
 /** Marker every message either side sends carries. */
 export const LIVE_MESSAGE = 'dsh-figmark:live'
 
+/**
+ * Largest PNG data URL a live page may send back.
+ *
+ * The message is held by both browsing contexts while it crosses the frame
+ * boundary. Failing below the parser's hard ceiling leaves room for the rest of
+ * the object instead of sending an answer the receiving side would discard.
+ */
+export const MAX_LIVE_CAPTURE_DATA_URL = 15_500_000
+
 /** What the panel asks the Host to open. */
 export interface LiveOpenRequest {
   /** The address the reader typed, as typed. */
@@ -157,6 +166,47 @@ export interface LiveRevealResult {
   readonly temporary?: boolean
 }
 
+/** One full-document screenshot, ready for the panel to crop and mark. */
+export interface LiveCaptureSucceeded {
+  /** What the page is reporting. */
+  readonly kind: 'capture-result'
+  /** The panel's opaque request token. */
+  readonly requestId: string
+  /** The page is present and the screenshot is usable. */
+  readonly status: 'ok'
+  /** PNG bytes as a data URL. */
+  readonly dataUrl: string
+  /** The document's laid-out size, in CSS pixels. */
+  readonly document: readonly [number, number]
+  /** The document rectangle covered by the PNG. */
+  readonly imageRect: readonly [number, number, number, number]
+  /** The frame's visible viewport, in CSS pixels. */
+  readonly viewport: readonly [number, number]
+  /** The frame's scroll offset when the picture was taken. */
+  readonly scroll: readonly [number, number]
+  /** The raster scale used for the PNG. */
+  readonly scale: number
+  /** The logical surface in front when the picture was taken. */
+  readonly surface: string | null
+  /** The live boxes of every watched element at capture time. */
+  readonly bounds: readonly LiveBound[]
+}
+
+/** The page saying that it could not make a screenshot. */
+export interface LiveCaptureFailed {
+  /** What the page is reporting. */
+  readonly kind: 'capture-result'
+  /** The panel's opaque request token. */
+  readonly requestId: string
+  /** The page is present, but there is no picture. */
+  readonly status: 'failed'
+  /** A short diagnostic, when the page supplied one. */
+  readonly reason?: string
+}
+
+/** How one request to screenshot a live page ended. */
+export type LiveCaptureResult = LiveCaptureSucceeded | LiveCaptureFailed
+
 /** What a rendered page can tell the panel. */
 export type LiveEvent =
   | LivePick
@@ -167,6 +217,7 @@ export type LiveEvent =
   | LiveBounds
   | LiveSurface
   | LiveRevealResult
+  | LiveCaptureResult
 
 /**
  * The message that arms or disarms the picker.
@@ -231,6 +282,15 @@ export function liveReleaseMessage(): Record<string, unknown> {
 }
 
 /**
+ * Ask the page for its current document as a PNG.
+ * @param requestId - token the page echoes in its answer.
+ * @returns the message for the frame.
+ */
+export function liveCaptureMessage(requestId: string): Record<string, unknown> {
+  return { figmark: LIVE_MESSAGE, kind: 'capture', requestId }
+}
+
+/**
  * Whether a value is a finite number.
  * @param value - value to test.
  * @returns true when it is a number that can be drawn from.
@@ -264,6 +324,36 @@ function offsetOf(value: unknown): readonly [number, number] | undefined {
 }
 
 /**
+ * Read a positive width and height pair.
+ * @param value - the message field.
+ * @returns the pair, or undefined when either side is unusable.
+ */
+function sizeOf(value: unknown): readonly [number, number] | undefined {
+  const pair = offsetOf(value)
+  if (pair === undefined) return undefined
+  const [width, height] = pair
+  return width > 0 && height > 0 && width <= 100_000 && height <= 100_000
+    ? pair
+    : undefined
+}
+
+/**
+ * Read a finite rectangle out of a message.
+ * @param value - the message field.
+ * @returns x, y, width and height, or undefined when any part is unusable.
+ */
+function rectOf(value: unknown): readonly [number, number, number, number] | undefined {
+  if (!Array.isArray(value) || value.length !== 4) return undefined
+  const [x, y, width, height] = value as readonly unknown[]
+  if (!isNumber(x) || !isNumber(y) || !isNumber(width) || !isNumber(height)
+    || Math.abs(x) > 100_000 || Math.abs(y) > 100_000
+    || width <= 0 || height <= 0 || width > 100_000 || height > 100_000) {
+    return undefined
+  }
+  return [x, y, width, height]
+}
+
+/**
  * Read one string field, ignoring anything that is not a string.
  * @param value - the value the message carried.
  * @returns the string, or undefined.
@@ -288,6 +378,52 @@ export function parseLiveEvent(data: unknown): LiveEvent | undefined {
   if (fields['figmark'] !== LIVE_MESSAGE) return undefined
   if (fields['kind'] === 'leave') return { kind: 'leave' }
   if (fields['kind'] === 'cancel') return { kind: 'cancel' }
+  if (fields['kind'] === 'capture-result') {
+    const requestId = textOf(fields['requestId'])
+    if (requestId === undefined || requestId.length > 128) return undefined
+    if (fields['status'] === 'failed') {
+      const reason = textOf(fields['reason'])
+      return {
+        kind: 'capture-result',
+        requestId,
+        status: 'failed',
+        ...(reason === undefined || reason.length > 300 ? {} : { reason }),
+      }
+    }
+    if (fields['status'] !== 'ok') return undefined
+    const dataUrl = fields['dataUrl']
+    const document = sizeOf(fields['document'])
+    const imageRect = fields['imageRect'] === undefined
+      ? (document === undefined ? undefined : [0, 0, document[0], document[1]] as const)
+      : rectOf(fields['imageRect'])
+    const viewport = sizeOf(fields['viewport'])
+    const scroll = offsetOf(fields['scroll'])
+    const scale = fields['scale']
+    const surface = fields['surface'] === null ? null : textOf(fields['surface'])
+    const bounds = boundsOf(fields['bounds'])
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')
+      || dataUrl.length > MAX_LIVE_CAPTURE_DATA_URL
+      || document === undefined || imageRect === undefined
+      || viewport === undefined || scroll === undefined
+      || typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0 || scale > 4
+      || surface === undefined || (surface !== null && surface.length > 2048)
+      || bounds === undefined) {
+      return undefined
+    }
+    return {
+      kind: 'capture-result',
+      requestId,
+      status: 'ok',
+      dataUrl,
+      document,
+      imageRect,
+      viewport,
+      scroll,
+      scale,
+      surface,
+      bounds,
+    }
+  }
   if (fields['kind'] === 'reveal-result') {
     const requestId = textOf(fields['requestId'])
     const status = fields['status']

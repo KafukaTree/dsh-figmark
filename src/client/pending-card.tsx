@@ -161,8 +161,11 @@ function ParkedChip(props: {
   }, [armed, entry.id, sessionId])
   // The block names a path; a reader scanning the composer needs the file's own name
   // more than the directory, which is the same for every figure this session saved.
-  const cut = Math.max(data.file.lastIndexOf('/'), data.file.lastIndexOf('\\'))
-  const name = data.file.slice(cut + 1)
+  // A live page's path is its URL. Query and hash identify page state, not the
+  // attachment the card stands for, so they do not belong in its filename.
+  const shownFile = data.file.replace(/[?#].*$/u, '')
+  const cut = Math.max(shownFile.lastIndexOf('/'), shownFile.lastIndexOf('\\'))
+  const name = shownFile.slice(cut + 1)
   const first = data.marks[0]
   const detail = first === undefined
     ? name

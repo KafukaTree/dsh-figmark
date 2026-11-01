@@ -121,6 +121,8 @@ export interface ParkInput {
   readonly file: File | undefined
   /** Marked pages that travel as image parts when there is no whole-file upload. */
   readonly pageImages?: number | undefined
+  /** Whether the current live-page picture travelled with this parked review. */
+  readonly pageCapture?: 'none' | 'attached' | 'failed' | undefined
   /** Message language. */
   readonly locale: SummaryLocale
   /** Hand the message to the session directly, for when nothing could be armed. */
@@ -473,7 +475,14 @@ export function disarmReview(armed: ArmedReview, conversation: ComposerLike | un
  */
 export function parkInComposer(input: ParkInput): void {
   const { document: document_, locale, paths, sessionId } = input
-  const message = buildAnnotationMessage(document_, paths, locale, input.file !== undefined, input.pageImages ?? 0)
+  const message = buildAnnotationMessage(
+    document_,
+    paths,
+    locale,
+    input.file !== undefined,
+    input.pageImages ?? 0,
+    input.pageCapture,
+  )
   // The bubble this message will land in cannot reach the message's attachments, so
   // the card there looks its picture up by the message text. Filing it now means the
   // picture is already there when the send puts the bubble on screen.

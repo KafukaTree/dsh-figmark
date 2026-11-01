@@ -33,6 +33,13 @@ describe('staging the review picture', () => {
     expect(reviewImageFile(new Blob(['x']), 'C:\\reports\\第 3 张.png')?.name).toBe('第 3 张.png.annotated.png')
   })
 
+  it('leaves a URL query and hash out of the name the composer shows', () => {
+    expect(reviewImageFile(
+      new Blob(['x']),
+      'http://127.0.0.1:8811/deck/index.html?chrome=1#slide-2',
+    )?.name).toBe('index.html.annotated.png')
+  })
+
   it('has nothing to stage when the surface exported no picture', () => {
     expect(reviewImageFile(undefined, '/w/fig.svg')).toBeUndefined()
   })

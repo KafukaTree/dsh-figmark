@@ -66,6 +66,13 @@ export interface DeliveryInput {
   /** Review images of the annotated pages, in page order. */
   readonly pageImages: readonly DeliveredPageImage[]
   /**
+   * Whether the current live-page picture travelled with the message.
+   *
+   * Omitted for file-backed figures; a live page sets `failed` when the capture was
+   * attempted and the text alone still has to carry the review.
+   */
+  readonly pageCapture?: 'none' | 'attached' | 'failed' | undefined
+  /**
    * A 120px picture of the review, for the bubble this message lands in.
    *
    * The bubble cannot reach this message's attachments, so it looks the block up
@@ -152,12 +159,20 @@ export async function deliverAnnotation(input: DeliveryInput): Promise<readonly 
       ? `另有 ${hidden} 页标注未附图；原 PDF 不上传，请按上方路径和位置说明处理这些页。`
       : `${hidden} more annotated pages are not attached as images; the PDF itself is not uploaded, so use the path above and the positions and notes for those pages.`)
   }
+  const pageCapture = input.pageCapture
+    ?? (input.document.figure.mediaType === 'text/html' && shown.length > 0 ? 'attached' : 'none')
+  if (pageCapture === 'failed') {
+    warnings.push(zh
+      ? '当前页面截图未生成；元素选择器和位置信息仍已随消息发送。'
+      : 'The current page could not be captured; its element selectors and positions still travelled with the message.')
+  }
   const message = buildAnnotationMessage(
     input.document,
     input.paths,
     input.locale,
     shown.length > 0,
     shown.length,
+    pageCapture,
   )
   rememberDelivered(message, input.thumb)
   content.push({ type: 'text', text: message })

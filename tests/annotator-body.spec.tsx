@@ -4910,6 +4910,36 @@ describe('a rendered document', () => {
       })
     }
 
+    /** Answer the panel's next screenshot request as the picker would. */
+    function answerCapture(overrides: Record<string, unknown> = {}): void {
+      const view = defined(frame().contentWindow)
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => {
+          if (message['kind'] !== 'capture') return
+          window.dispatchEvent(new MessageEvent('message', {
+            data: {
+              figmark: LIVE_MESSAGE,
+              kind: 'capture-result',
+              requestId: message['requestId'],
+              status: 'ok',
+              dataUrl: 'data:image/png;base64,AAAA',
+              document: [1024, 768],
+              imageRect: [0, 0, 1024, 768],
+              viewport: [WINDOW.width, WINDOW.height],
+              scroll: [0, 0],
+              scale: 1,
+              surface: null,
+              bounds: [{ selector: PICKED.selector, bbox: PICKED.bbox, visible: true }],
+              ...overrides,
+            },
+            origin: LIVE_ORIGIN,
+            source: view,
+          }))
+        },
+      })
+    }
+
     /** The box under the name of the element the pointer is on. */
     function hoverBox(): HTMLElement | null {
       return document.querySelector('.da-live-hit') as HTMLElement | null
@@ -5029,6 +5059,29 @@ describe('a rendered document', () => {
       expect(refreshed.getAttribute('src')).toBe(LIVE_URL)
       expect(result.calls.filter(call => call.url.includes('/dsh-figmark/live'))).toHaveLength(liveCalls)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+    })
+
+    it('cancels a screenshot wait when the reader refreshes the frame', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await htmlBody({ liveUrl: LIVE_URL }, { sessions })
+      await reportLayout(WINDOW.width, 1843)
+      await go('localhost:5173')
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
+        configurable: true,
+        value: () => {},
+      })
+      await click(button(document.body, zh.sendToAgent))
+      await revealAddress()
+      await click(defined(document.querySelector('.da-live-refresh')) as HTMLElement)
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      const parts = defined(prompts[0]) as { readonly type?: string; readonly text?: string }[]
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+      expect(parts[0]?.text).toContain(PICKED.selector)
     })
 
     it('omits the breadcrumb when the file has no parent directory', async () => {
@@ -5192,14 +5245,19 @@ describe('a rendered document', () => {
       await report({ kind: 'pick', ...PICKED })
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
+      answerCapture()
       await click(button(document.body, zh.sendToAgent))
       const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
+      expect(parts[0]?.type).toBe('image')
       // A page has no sidecar: its address may not be a file at all, so the marks
       // travel in the message and the message names the page it is about.
       expect(result.calls.filter(call =>
         call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
-      expect(parts[0]?.text).toContain('http://localhost:5173/')
-      expect(parts[0]?.text).toContain('逐条改 HTML 生成源')
+      expect(parts[1]?.text).toContain('http://localhost:5173/')
+      expect(parts[1]?.text).toContain('当前页面截图已随消息发送')
+      expect(parts[1]?.text).toContain('逐条改 HTML 生成源')
+      // The picture is the first part, so the text follows it.
+      expect(parts[1]?.type).toBe('text')
     })
 
     it('picks the mark already on the element the page named', async () => {
@@ -5246,6 +5304,7 @@ describe('a rendered document', () => {
       await go('localhost:5173')
       await click(button(document.body, zh.toolElement))
       await report({ kind: 'pick', ...PICKED })
+      answerCapture()
       await click(button(document.body, zh.sendToAgent))
       // Nothing was written: what the reader marked is a page, not a file beside it.
       expect(result.calls.filter(call =>
@@ -5255,7 +5314,7 @@ describe('a rendered document', () => {
         for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
       })
       const parts = defined(prompts[0]) as { readonly text?: string }[]
-      const text = defined(parts[0]?.text)
+      const text = defined(parts[1]?.text)
       // The locator a source reader can resolve is the selector, never the class: a
       // page that restyles itself renames classes, and a locator naming one stops
       // resolving.
@@ -5474,6 +5533,36 @@ describe('a rendered document', () => {
       })
     }
 
+    /** Answer the panel's screenshot request with the current page and boxes. */
+    function answerCapture(overrides: Record<string, unknown> = {}): void {
+      const view = defined(frame().contentWindow)
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>) => {
+          if (message['kind'] !== 'capture') return
+          window.dispatchEvent(new MessageEvent('message', {
+            data: {
+              figmark: LIVE_MESSAGE,
+              kind: 'capture-result',
+              requestId: message['requestId'],
+              status: 'ok',
+              dataUrl: 'data:image/png;base64,AAAA',
+              document: [1024, 768],
+              imageRect: [0, 0, 1024, 768],
+              viewport: [772, 530],
+              scroll: [0, 0],
+              scale: 1,
+              surface: null,
+              bounds: [{ selector: '#lead', bbox: PICKED.bbox, visible: true }],
+              ...overrides,
+            },
+            origin: SERVICE_ORIGIN,
+            source: view,
+          }))
+        },
+      })
+    }
+
     it('frames the running page without reading or writing a file sidecar', async () => {
       const result = await serviceBody()
       mounted = result
@@ -5499,11 +5588,220 @@ describe('a rendered document', () => {
       await openList(document.body)
       expect(document.querySelectorAll('.da-mark')).toHaveLength(1)
       expect(document.querySelector('.da-mark-title')?.textContent).toBe('<p#lead.lead.intro = "第一段">')
+      answerCapture()
       await click(button(document.body, zh.sendToAgent))
       expect(result.calls.filter(call =>
         call.init?.method === 'POST' && !call.url.includes('/dsh-figmark/live'))).toHaveLength(0)
+      const parts = defined(prompts[0]) as { readonly type?: string; readonly text?: string }[]
+      expect(parts[0]?.type).toBe('image')
+      expect(parts[1]?.text).toContain(SERVICE_ADDRESS)
+      expect(parts[1]?.text).toContain('当前页面截图已随消息发送')
+    })
+
+    it('stages a live screenshot as a real composer attachment', async () => {
+      const { sessions } = stubSessions()
+      const staged: File[][] = []
+      const shell = {
+        snapshot: { draft: '' },
+        setDraft: () => {},
+        addAttachments: () => true,
+        submit: () => {},
+      }
+      const conversation = {
+        input: { shell: () => shell },
+        createDrafts: (_id: string, files: readonly File[]) => {
+          staged.push([...files])
+          return [{ id: 'live-shot' }]
+        },
+      } as unknown as ComposerLike
+      stubRasterizer()
+      mounted = await serviceBody({ sessions, conversation })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      answerCapture()
+      await click(button(document.body, zh.sendToComposer))
+      await act(async () => {
+        for (let turn = 0; turn < 24; turn += 1) await Promise.resolve()
+      })
+      expect(staged).toHaveLength(1)
+      const file = defined(defined(staged[0])[0])
+      expect(file.type).toBe('image/png')
+      expect(file.name.endsWith('.annotated.png')).toBe(true)
+      expect(file.size).toBeGreaterThan(0)
+    })
+
+    it('settles the capture wait as soon as a malformed answer names its request', async () => {
+      vi.useFakeTimers()
+      try {
+        const { sessions, prompts } = stubSessions()
+        mounted = await serviceBody({ sessions })
+        await click(button(document.body, zh.toolElement))
+        await report({ kind: 'pick', ...PICKED })
+        const view = defined(frame().contentWindow)
+        const posted: Record<string, unknown>[] = []
+        Object.defineProperty(view, 'postMessage', {
+          configurable: true,
+          value: (message: Record<string, unknown>) => { posted.push(message) },
+        })
+        await click(button(document.body, zh.sendToAgent))
+        await act(async () => {
+          for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+        })
+        const request = defined(posted.find(message => message['kind'] === 'capture'))
+        await report({
+          kind: 'capture-result',
+          requestId: request['requestId'],
+          status: 'ok',
+        })
+        const parts = defined(prompts[0]) as { readonly text?: string }[]
+        expect(parts[0]?.text).toContain('<p id="lead">')
+        expect(parts[0]?.text).toContain('当前页面截图未能生成')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps the locator when the page reports that it cannot make a picture', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      answerCapture({ status: 'failed', reason: 'canvas refused' })
+      await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      const parts = defined(prompts[0]) as { readonly type: string; readonly text?: string }[]
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.type).toBe('text')
+      expect(parts[0]?.text).toContain('<p id="lead">')
+      expect(parts[0]?.text).toContain('(20,30)-(260,90)')
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+    })
+
+    it('keeps the locator when the frame will not accept the capture request', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      const view = defined(frame().contentWindow)
+      const post = view.postMessage.bind(view)
+      Object.defineProperty(view, 'postMessage', {
+        configurable: true,
+        value: (message: Record<string, unknown>, target: string) => {
+          if (message['kind'] === 'capture') throw new Error('frame is gone')
+          post(message, target)
+        },
+      })
+      await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
       const parts = defined(prompts[0]) as { readonly text?: string }[]
-      expect(parts[0]?.text).toContain(SERVICE_ADDRESS)
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.text).toContain('<p id="lead">')
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+    })
+
+    it('keeps the locator when the frame has already gone', async () => {
+      const { sessions, prompts } = stubSessions()
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      Object.defineProperty(frame(), 'contentWindow', { configurable: true, value: null })
+      await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      const parts = defined(prompts[0]) as { readonly text?: string }[]
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.text).toContain('<p id="lead">')
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+    })
+
+    it('keeps the locator when the captured page cannot be composed', async () => {
+      const { sessions, prompts } = stubSessions()
+      stubRasterizer({ noContext: true })
+      mounted = await serviceBody({ sessions })
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      answerCapture()
+      await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      const parts = defined(prompts[0]) as { readonly text?: string }[]
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.text).toContain('<p id="lead">')
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+    })
+
+    it('stops waiting for a screenshot that the page never answers', async () => {
+      vi.useFakeTimers()
+      try {
+        const { sessions, prompts } = stubSessions()
+        mounted = await serviceBody({ sessions })
+        await click(button(document.body, zh.toolElement))
+        await report({ kind: 'pick', ...PICKED })
+        Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
+          configurable: true,
+          value: () => {},
+        })
+        await click(button(document.body, zh.sendToAgent))
+        await act(async () => {
+          vi.advanceTimersByTime(12_000)
+          for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+        })
+        const parts = defined(prompts[0]) as { readonly text?: string }[]
+        expect(parts).toHaveLength(1)
+        expect(parts[0]?.text).toContain('<p id="lead">')
+        expect(parts[0]?.text).toContain('当前页面截图未能生成')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('settles a screenshot wait before the panel goes away', async () => {
+      const { sessions, prompts } = stubSessions()
+      const result = await serviceBody({ sessions })
+      mounted = result
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      Object.defineProperty(defined(frame().contentWindow), 'postMessage', {
+        configurable: true,
+        value: () => {},
+      })
+      await click(button(document.body, zh.sendToAgent))
+      await act(async () => {
+        result.root.unmount()
+        for (let turn = 0; turn < 16; turn += 1) await Promise.resolve()
+      })
+      mounted = undefined
+      const parts = defined(prompts[0]) as { readonly text?: string }[]
+      expect(parts).toHaveLength(1)
+      expect(parts[0]?.text).toContain('当前页面截图未能生成')
+      expect(parts[0]?.text).toContain('<p id="lead">')
+    })
+
+    it('ignores a screenshot answer nobody is waiting for', async () => {
+      mounted = await serviceBody()
+      await click(button(document.body, zh.toolElement))
+      await report({ kind: 'pick', ...PICKED })
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          data: 'not one of ours',
+          origin: SERVICE_ORIGIN,
+          source: frame().contentWindow,
+        }))
+        await Promise.resolve()
+      })
+      await report({
+        kind: 'capture-result',
+        requestId: 'already-settled',
+        status: 'failed',
+        reason: 'late',
+      })
+      expect(document.querySelector('.da-live-hit')).toBeNull()
     })
 
     it('does not pin a cover outside every slide to the slide that is open', async () => {
@@ -5992,6 +6290,25 @@ describe('a rendered document', () => {
       expect(document.querySelector('.da-float-detail')).toBeNull()
       await report({ kind: 'surface', selector: 'body > section:nth-of-type(5)' })
       expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
+    })
+
+    it('keeps an unstamped region off every reported live surface', async () => {
+      mounted = await serviceBody({
+        draft: {
+          marks: [
+            {
+              id: 'legacy-region', kind: 'rect', color: '#e03131',
+              points: [[20, 30], [220, 130]],
+            },
+          ],
+        },
+      })
+      await report({ kind: 'surface', selector: '#s2' })
+      expect(document.querySelector('[data-da-mark="legacy-region"]')).toBeNull()
+      await report({ kind: 'surface', selector: '#s1' })
+      expect(document.querySelector('[data-da-mark="legacy-region"]')).toBeNull()
+      await report({ kind: 'surface', selector: null })
+      expect(document.querySelector('[data-da-mark="legacy-region"]')).not.toBeNull()
     })
 
     it('follows live element bounds and closes the proxy when the body unmounts', async () => {

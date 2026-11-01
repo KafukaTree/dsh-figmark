@@ -15,6 +15,7 @@ import {
 import { figureUnit } from './scale'
 import { lightMarkup, type NamedSpot } from './spotlight'
 import { plotBounds } from './plot'
+import { thumbnailFromCanvas } from './annotation-thumb'
 
 /** The figure layer placed under the marks. */
 export type FigureLayer =
@@ -239,21 +240,109 @@ export function reviewScale(width: number, height: number): number {
   return Math.min(2, Math.max(1, 2400 / Math.max(width, height)))
 }
 
+/** The live-page pieces a screenshot review is composed from. */
+export interface LiveScreenshotSource {
+  /** The page's PNG, covering the whole document. */
+  readonly imageDataUrl: string
+  /** The document's laid-out size. */
+  readonly documentWidth: number
+  readonly documentHeight: number
+  /** The document rectangle covered by the PNG. */
+  readonly imageRect: readonly [number, number, number, number]
+  /** The visible frame, which becomes the review image. */
+  readonly viewportWidth: number
+  readonly viewportHeight: number
+  /** The scroll offset the frame was at when the picture was taken. */
+  readonly scrollX: number
+  readonly scrollY: number
+}
+
 /**
- * Rasterize one review SVG to PNG bytes.
+ * Draw one element mark as the basic outline the live page showed.
+ *
+ * A file-backed element mark is drawn as a glow on the element. That glow belongs
+ * to the page's own markup; once the page has become a PNG, the only honest line
+ * is the same box the live overlay drew. The faint fill keeps the words beneath it
+ * legible while making the selected area obvious at a glance.
+ * @param mark - the element mark to outline.
+ * @param unit - the screenshot's size multiple.
+ * @returns the outline and its white separator.
+ */
+function elementMarkSvg(mark: AnnotationMark, unit: number): string {
+  const [first, second] = mark.points
+  if (first === undefined || second === undefined) return ''
+  const x = Math.min(first[0], second[0])
+  const y = Math.min(first[1], second[1])
+  const width = Math.abs(second[0] - first[0])
+  const height = Math.abs(second[1] - first[1])
+  const radius = 2 * unit
+  return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${radius}"`
+    + ` fill="${mark.color}" fill-opacity="0.07" stroke="#ffffff" stroke-width="${3.5 * unit}"/>`
+    + `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${radius}"`
+    + ` fill="none" stroke="${mark.color}" stroke-width="${1.5 * unit}"/>`
+}
+
+/**
+ * Compose the current live viewport as a review image.
+ *
+ * The page supplies one screenshot of its whole document. This function places it
+ * under one clipping window, translates it to the current scroll, and draws the
+ * page's own marks over it. The result is exactly what the reader saw and what the
+ * agent needs: the current state of the page, its boxes, and no DSH chrome.
+ * @param source - the screenshot and the window it was taken through.
+ * @param marks - marks already limited to the page's current surface.
+ * @returns standalone SVG markup.
+ */
+export function composeLiveScreenshotSvg(
+  source: LiveScreenshotSource,
+  marks: readonly AnnotationMark[],
+): string {
+  const width = Math.max(1, source.viewportWidth)
+  const height = Math.max(1, source.viewportHeight)
+  const unit = figureUnit(width, height)
+  const numbers = markOrdinals(marks)
+  const shifted = `translate(${-source.scrollX} ${-source.scrollY})`
+  return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
+    + ` width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
+    + '<defs><clipPath id="dsh-live-viewport"><rect x="0" y="0"'
+    + ` width="${width}" height="${height}"/></clipPath></defs>`
+    + '<rect x="0" y="0" width="100%" height="100%" fill="#ffffff"/>'
+    + '<g clip-path="url(#dsh-live-viewport)">'
+    + `<g transform="${shifted}">`
+    + `<image x="${source.imageRect[0]}" y="${source.imageRect[1]}"`
+    + ` width="${source.imageRect[2]}" height="${source.imageRect[3]}"`
+    + ` preserveAspectRatio="none" href="${source.imageDataUrl}"/>`
+    + marks.map(mark => mark.kind === 'element'
+      ? elementMarkSvg(mark, unit)
+      : markSvg(mark, numbers.get(mark.id), unit)).join('')
+    + '</g></g></svg>'
+}
+
+/** The two pictures one live review needs from a single raster pass. */
+export interface RasterizedReview {
+  /** Full-size PNG sent to the session. */
+  readonly image: Blob
+  /** Card-sized WebP, when the browser can encode it. */
+  readonly thumb?: string | undefined
+}
+
+/**
+ * Rasterize one review SVG and optionally its attachment thumbnail.
  * @param svg - standalone SVG markup.
  * @param width - output width in pixels.
  * @param height - output height in pixels.
  * @param scale - device scale applied to the output size.
- * @returns the PNG blob.
+ * @param withThumb - whether the same canvas should also yield a card picture.
+ * @returns the PNG blob and, when requested, its thumbnail.
  * @throws {Error} when the SVG cannot be decoded into an image.
  */
-export async function rasterizePng(
+export async function rasterizePngWithThumb(
   svg: string,
   width: number,
   height: number,
   scale: number,
-): Promise<Blob> {
+  withThumb = false,
+): Promise<RasterizedReview> {
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
   try {
     const image = new Image()
@@ -273,8 +362,31 @@ export async function rasterizePng(
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
     const blob = await new Promise<Blob | null>(resolve => { canvas.toBlob(resolve, 'image/png') })
     if (blob === null) throw new Error('the review image could not be encoded as PNG')
-    return blob
+    return {
+      image: blob,
+      ...(withThumb
+        ? { thumb: thumbnailFromCanvas(canvas, canvas.width, canvas.height) }
+        : {}),
+    }
   } finally {
     URL.revokeObjectURL(url)
   }
+}
+
+/**
+ * Rasterize one review SVG to PNG bytes.
+ * @param svg - standalone SVG markup.
+ * @param width - output width in pixels.
+ * @param height - output height in pixels.
+ * @param scale - device scale applied to the output size.
+ * @returns the PNG blob.
+ * @throws {Error} when the SVG cannot be decoded into an image.
+ */
+export async function rasterizePng(
+  svg: string,
+  width: number,
+  height: number,
+  scale: number,
+): Promise<Blob> {
+  return (await rasterizePngWithThumb(svg, width, height, scale)).image
 }
