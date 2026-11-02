@@ -1807,6 +1807,31 @@ describe('the figure menu', () => {
     expect(menuLabels(host)).toEqual([zh.menuSendToAgent, zh.menuSendToComposer, zh.menuCopyImage, zh.menuCopyAbsolute])
   })
 
+  it('sends a Visio-shaped SVG after composing a namespace-valid review image', async () => {
+    const captures: Blob[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(blob => { captures.push(blob as Blob); return 'blob:stub-review' })
+    const { sessions, prompts } = stubSessions()
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:v="urn:visio-test" width="200" height="100" class="page">'
+      + '<v:documentProperties v:langID="2052"/><g v:groupContext="shape"><rect width="100" height="50"/></g></svg>'
+    mounted = await svgBody({ annotation: saved }, { sessions, content: { kind: 'bytes', data: new TextEncoder().encode(source) } })
+    await settle()
+    await click(button(document.body, zh.sendToAgent))
+    await settle()
+    expect(prompts).toHaveLength(1)
+    expect(captures.length).toBeGreaterThan(0)
+    for (const blob of captures) {
+      const output = await new Promise<string>(resolve => {
+        const reader = new FileReader()
+        reader.onload = () => { resolve(reader.result as string) }
+        reader.readAsText(blob)
+      })
+      const parsed = new DOMParser().parseFromString(output, 'image/svg+xml')
+      expect(parsed.querySelector('parsererror')?.textContent).toBeUndefined()
+      expect(parsed.querySelector('svg svg')?.getAttribute('xmlns:v')).toBe('urn:visio-test')
+    }
+    expect(handoff()).toBe(zh.toastSentAgent)
+  })
+
   it('sends the figure to the agent from the menu', async () => {
     const { sessions, prompts } = stubSessions()
     const { host } = await svgBody({ annotation: saved }, { sessions })

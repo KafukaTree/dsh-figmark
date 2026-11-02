@@ -104,7 +104,7 @@ function Pin(props: {
       <path d={pin} fill="#ffffff" stroke="#ffffff" strokeWidth={4.5 * unit} strokeLinejoin="round" />
       <path d={pin} fill={mark.color} stroke="#ffffff" strokeWidth={1.5 * unit} strokeLinejoin="round" />
       <text x={centre[0]} y={centre[1]} fontFamily={PIN_FONT_FAMILY} fontSize={pinFontSizeOf(unit)}
-        fontWeight={700} fill={PIN_NUMBER_COLOR} textAnchor="middle" dominantBaseline="central">
+        fontWeight={700} fill={PIN_NUMBER_COLOR} stroke="none" textAnchor="middle" dominantBaseline="central">
         {number}
       </text>
     </>
@@ -339,7 +339,7 @@ function CodeChip(props: {
       <text
         data-da-element-code={mark.id}
         x={x + pad} y={y + height / 2} fontFamily={CODE_FONT_FAMILY} fontSize={fontSize}
-        fontWeight={600} fill={CODE_TEXT_COLOR} dominantBaseline="central"
+        fontWeight={600} fill={CODE_TEXT_COLOR} stroke="none" dominantBaseline="central"
       >
         {code}
       </text>

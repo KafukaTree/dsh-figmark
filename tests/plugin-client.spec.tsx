@@ -187,6 +187,7 @@ describe('browser entry', () => {
       'sidebar.right.tab.document',
       'conversation.user.text.node',
       'conversation.input.dock',
+      'conversation.input.overlay',
     ])
     expect(stub.slots[0]?.options).toMatchObject({
       name: 'sidebar.right.tab.document',
@@ -547,9 +548,9 @@ describe('browser entry', () => {
     // simply stays text, which is what a message with no rule renders as.
     expect(stub.rules).toEqual([])
     // The parked card is not the transcript's: it sits in the composer's dock, so
-    // The three file renderers, the local-pages tab and the input dock are all
-    // this plugin asks for.
-    expect(stub.slots).toHaveLength(5)
+    // the attachment overlay is registered independently of the optional
+    // transcript rule.
+    expect(stub.slots).toHaveLength(6)
   })
 
   it.each(['locale', 'documentPreviews', 'slots', 'sidebarRightTabs'])('fails loudly without the %s service', (service) => {

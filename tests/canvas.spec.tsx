@@ -329,6 +329,7 @@ describe('drawing surface', () => {
     const number = defined(mounted.svg.querySelector('text'))
     expect(number.textContent).toBe('1')
     expect(number.getAttribute('fill')).toBe('#ffffff')
+    expect(number.getAttribute('stroke')).toBe('none')
     // It is selected, but has no extent to resize: a dashed box, not handles.
     expect(mounted.svg.querySelectorAll('rect[data-da-handle]')).toHaveLength(0)
     expect(mounted.svg.querySelector('rect[stroke="#4c8dff"]')).not.toBeNull()

@@ -191,6 +191,36 @@ export function BoxIcon(): ReactNode {
   )
 }
 
+/** Put one more copy beside the existing sheet. */
+export function CopyIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="8" y="8" width="11.5" height="11.5" rx="2.2" />
+      <path d="M16 8V6.5a2.2 2.2 0 0 0-2.2-2.2H6.7a2.2 2.2 0 0 0-2.2 2.2v7.1A2.2 2.2 0 0 0 6.7 15.8H8" />
+      <path d="M13.75 11.3v5M11.25 13.8h5" />
+    </svg>
+  )
+}
+
+/** Save a file out of the editor. */
+export function DownloadIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 3.5v11M7.8 10.5 12 14.7l4.2-4.2" />
+      <path d="M4.5 16.5v2a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-2" />
+    </svg>
+  )
+}
+
+/** Dismiss the editor without suggesting that the draft should be saved. */
+export function CloseIcon(): ReactNode {
+  return (
+    <svg className="da-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
+    </svg>
+  )
+}
+
 /** A step back, as the usual curved arrow. */
 export function UndoIcon(): ReactNode {
   return (

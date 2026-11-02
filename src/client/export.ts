@@ -112,11 +112,20 @@ function figureSvg(layer: FigureLayer, lit: readonly NamedSpot[] = []): string {
   if (layer.kind === 'raster') {
     return `<image x="0" y="0" width="${layer.width}" height="${layer.height}" href="${layer.dataUrl}"/>`
   }
-  const viewBox = layer.viewBox === undefined ? '' : ` viewBox="${layer.viewBox}"`
+  // Keep the sanitized root itself. Visio declares xmlns:v here and uses v:*
+  // throughout its descendants. Stripping this tag produced an unbound prefix,
+  // so the standalone review failed to decode before it could be sent. The root
+  // also owns inherited presentation (class/style/xml:space), which the preview
+  // kept and the old export silently discarded.
   const litMarkup = lightMarkup(layer.markup, lit)
-  const inner = litMarkup.replace(/^<\?xml[^>]*\?>\s*/u, '').replace(/^<svg[^>]*>/iu, '').replace(/<\/svg>\s*$/iu, '')
-  return `<svg x="0" y="0" width="${layer.width}" height="${layer.height}"${viewBox}`
-    + ` preserveAspectRatio="xMidYMid meet">${inner}</svg>`
+  const root = new DOMParser().parseFromString(litMarkup, 'image/svg+xml').documentElement
+  root.setAttribute('x', '0')
+  root.setAttribute('y', '0')
+  root.setAttribute('width', String(layer.width))
+  root.setAttribute('height', String(layer.height))
+  if (layer.viewBox !== undefined) root.setAttribute('viewBox', layer.viewBox)
+  root.setAttribute('preserveAspectRatio', 'xMidYMid meet')
+  return new XMLSerializer().serializeToString(root)
 }
 
 /**

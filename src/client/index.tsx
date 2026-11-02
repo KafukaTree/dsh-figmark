@@ -36,6 +36,7 @@ import { PendingCard } from './pending-card'
 import { ServiceBrowser, type ServiceBrowserInjected } from './ServiceBrowser'
 import { ServiceGuideIcon } from './service-guide-icon'
 import type { SessionsLike } from './session'
+import { registerAttachmentAnnotator } from './attachment-annotator/register'
 
 /** Plugin name reported to the client module loader. */
 export const name = 'dsh-figmark-client'
@@ -391,4 +392,5 @@ export function apply(ctx: Context): void {
       localeId: locale.getLocale().locale ?? 'zh',
     }),
   }, PendingCard)), 'dsh-figmark: parked annotation')
+  registerAttachmentAnnotator(ctx, slots)
 }

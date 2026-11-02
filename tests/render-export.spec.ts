@@ -23,6 +23,7 @@ import {
   anchorAtPoint, elementChoicesAtPoint, figureSvgMarkup, parseFigureSvg, svgIntrinsicSize, svgViewBox,
 } from '../src/client/figure-dom'
 import { PICK_REACH } from '../src/client/pick'
+import { decodeFigure, figureLayer } from '../src/client/annotator/figure-source'
 import { defined, installDom, stubRasterizer, stubRect } from './dom'
 
 const arrow: AnnotationMark = { id: 'a', kind: 'arrow', color: '#e03131', points: [[0, 0], [10, 0]] }
@@ -223,6 +224,58 @@ describe('mark geometry', () => {
 })
 
 describe('review image', () => {
+  let reviewDom: ReturnType<typeof installDom>
+  beforeEach(() => { reviewDom = installDom() })
+  afterEach(() => { reviewDom.window.close() })
+
+  it('exports a sanitized Visio figure without losing root namespace or inherited presentation', () => {
+    const source = `<?xml version="1.0" encoding="UTF-8"?>
+      <svg xmlns="http://www.w3.org/2000/svg" xmlns:v="http://schemas.microsoft.com/visio/2003/SVGExtensions/"
+        xmlns:ev="http://www.w3.org/2001/xml-events" xmlns:xlink="http://www.w3.org/1999/xlink"
+        width="8.26772in" height="11.6929in" viewBox="0 0 595.276 841.89"
+        xml:space="preserve" class="page" style="font-size:12px;fill:none" color-interpolation-filters="sRGB">
+        <v:documentProperties v:langID="2052"/>
+        <defs><path id="marker" d="M0 0L5 5"/></defs>
+        <use xlink:href="#marker"/>
+        <g id="shape" v:groupContext="shape"><rect width="20" height="10"/><text>Example</text></g>
+        <foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">removed</div></foreignObject>
+        <svg x="2" y="3" width="10" height="20"><path d="M0 0L1 1"/></svg>
+      </svg>`
+    const decoded = decodeFigure(new TextEncoder().encode(source), 'image/svg+xml')
+    const layer = figureLayer(defined(decoded.figure), null)
+    const output = composeReviewSvg(defined(layer), [{ id: 'p', kind: 'point', color: '#e03131', points: [[30, 40]] }])
+    const parsed = new DOMParser().parseFromString(output, 'image/svg+xml')
+    expect(parsed.querySelector('parsererror')?.textContent).toBeUndefined()
+    const root = defined(parsed.querySelector('svg svg'))
+    expect(root.getAttribute('xmlns:v')).toBe('http://schemas.microsoft.com/visio/2003/SVGExtensions/')
+    expect(root.getAttribute('xmlns:ev')).toBe('http://www.w3.org/2001/xml-events')
+    expect(root.getAttribute('xml:space')).toBe('preserve')
+    expect(root.getAttribute('class')).toBe('page da-figure')
+    expect(root.getAttribute('style')).toBe('font-size:12px;fill:none')
+    expect(root.getAttribute('color-interpolation-filters')).toBe('sRGB')
+    expect(root.getAttribute('viewBox')).toBe('0 0 595.276 841.89')
+    expect(Number(root.getAttribute('width'))).toBeCloseTo(793.70112)
+    expect(Number(root.getAttribute('height'))).toBeCloseTo(1122.5184)
+    expect(root.getAttribute('x')).toBe('0')
+    expect(root.getAttribute('y')).toBe('0')
+    expect(root.getAttribute('preserveAspectRatio')).toBe('xMidYMid meet')
+    expect(parsed.querySelector('foreignObject')).toBeNull()
+    expect(parsed.querySelector('use')?.getAttributeNS('http://www.w3.org/1999/xlink', 'href')).toBe('#marker')
+    expect(parsed.getElementsByTagNameNS('http://schemas.microsoft.com/visio/2003/SVGExtensions/', 'documentProperties')).toHaveLength(1)
+    expect(root.querySelector('svg')?.getAttribute('width')).toBe('10')
+    expect(parsed.querySelector('text[font-weight="700"]')?.textContent).toBe('1')
+  })
+
+  it('retains an existing root viewBox when a caller has not overridden it', () => {
+    const output = composeReviewSvg({ kind: 'svg', width: 200, height: 100,
+      markup: '<svg xmlns="http://www.w3.org/2000/svg" width="4in" height="2in" viewBox="10 20 400 200" class="page"><rect width="400" height="200"/></svg>' }, [])
+    const parsed = new DOMParser().parseFromString(output, 'image/svg+xml')
+    const root = defined(parsed.querySelector('svg svg'))
+    expect(root.getAttribute('viewBox')).toBe('10 20 400 200')
+    expect(root.getAttribute('width')).toBe('200')
+    expect(root.getAttribute('height')).toBe('100')
+  })
+
   it('embeds the figure under the marks and draws no sentence of its own', () => {
     const svg = composeReviewSvg(
       { kind: 'svg', markup: '<svg width="10" height="10"><rect width="10" height="10"/></svg>', viewBox: '0 0 10 10', width: 10, height: 10 },
