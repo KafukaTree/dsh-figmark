@@ -17,3 +17,9 @@ coverage/
 
 # 覆盖率报告目录（v8 与 json 两种）
 coverage-json/
+
+# 本地开发产生的备份、编辑器状态与并行覆盖率输出
+.claude/
+.lib-backup-*/
+*.bak-*
+/coverage-*/
