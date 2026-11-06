@@ -4,8 +4,8 @@
  * The message still says everything it said — the model reads the same text,
  * copying it copies the same text — but in the transcript the same block is easier
  * to scan as a small sheet: which figure, how large, how many marks, and what each
- * of them asked for. Clicking it opens the figure in the Sidebar, where the full
- * annotator (and every mark, at full size) already is.
+ * of them asked for. Clicking its header expands the delivered review; a separate action opens the
+ * current source in the Sidebar, which may have changed since this message was sent.
  *
  * Two rules keep this a view and nothing more. It reads the block it was dispatched
  * for and never edits it; and it draws from the parsed data alone, so a block whose
@@ -13,11 +13,11 @@
  * broken card.
  * @module dsh-figmark/client/annotation-card
  */
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useId, useState, type ReactElement } from 'react'
 import type { FigmarkAnnotation, FigmarkMarkLine, FigmarkPageCapture } from './annotation-rule'
 import { thumbFor } from './annotation-thumb'
 import { resolveTranslate } from './annotator-contract'
-import { loopbackAddressOf } from './live-page'
+import { annotationSubject } from './annotation-subject'
 import { ensureStyles } from './styles'
 import type { Translate } from './translate'
 
@@ -92,9 +92,16 @@ export interface AnnotationCardProps {
   /** Locale tag the seat fell back from. */
   readonly localeId?: string | undefined
   /** Open one figure in the Sidebar; absent when this composition has no Sidebar. */
-  readonly open?: ((path: string, html: boolean) => void) | undefined
+  readonly open?: ((path: string, html: boolean) => boolean | void) | undefined
   /** Whether this composition has the matching Sidebar entry point. */
   readonly canOpen?: ((path: string, html: boolean) => boolean) | undefined
+  /**
+   * Render the full, static review inside a card owned by another surface.
+   *
+   * The composer's staged card already owns preview and collapse. Its expanded
+   * panel uses this form so the same review has one clear control surface.
+   */
+  readonly embedded?: boolean | undefined
 }
 
 /**
@@ -183,18 +190,20 @@ function CardRow(props: {
   readonly mark: FigmarkMarkLine
   readonly ordinal: number
   readonly page?: string | undefined
+  readonly expanded: boolean
 }): ReactElement {
-  const { mark, ordinal, page } = props
+  const { mark, ordinal, page, expanded } = props
   const said = mark.comment === '' ? undefined : mark.comment
   const parts = readCardMarkLabel(mark.label)
   // The badge carries the order, so the words beside it need not repeat "arrow 1" or
   // "element 2". An element uses its own living text; a drawing uses the tool's noun.
+  const number = /\d+$/u.exec(parts.name)?.[0] ?? String(ordinal)
   const kind = parts.name.replace(/\s*\d+$/u, '')
   const label = parts.element === '' ? kind : parts.element
   return (
     <span className="da-card-row" title={mark.label}>
       <span className="da-card-row-head">
-        <span className="da-card-kind" aria-hidden="true">{ordinal}</span>
+        <span className="da-card-kind" aria-hidden="true">{number}</span>
         <span className="da-card-mark">
           {page === undefined ? null : <span className="da-card-page">{page}</span>}
           {parts.tag === '' ? null : <span className="da-card-tag">{parts.tag}</span>}
@@ -208,6 +217,7 @@ function CardRow(props: {
         )}
       </span>
       {said === undefined ? null : <span className="da-card-said">{said}</span>}
+      {expanded ? <span className="da-card-locator">{mark.label}</span> : null}
       {parts.aside === '' ? null : <span className="da-card-warning">{parts.aside}</span>}
     </span>
   )
@@ -219,21 +229,29 @@ function CardRow(props: {
  * @returns the card, or the block's own text when its data is not one it can draw.
  */
 export function AnnotationCard(props: AnnotationCardProps): ReactElement {
-  const [shot, setShot] = useState(true)
-  // The stylesheet is injected by whichever body is on screen, and a transcript can
-  // be drawn long before any figure is opened. Injecting it is idempotent, so the
-  // card asks for it itself rather than depending on an order it cannot see.
   useEffect(() => { ensureStyles(document) }, [])
   const data = readAnnotation(props.node?.data)
   const raw = props.raw ?? ''
   if (data === undefined) return <span className="da-card-fallback">{raw}</span>
+  // Reused transcript seats must not carry expansion or a failed image into another block.
+  return <ReviewCard key={raw || JSON.stringify(data)} {...props} data={data} raw={raw} />
+}
+
+/** The review snapshot; navigation to the current source is a separate action. */
+function ReviewCard(props: AnnotationCardProps & { readonly data: FigmarkAnnotation; readonly raw: string }): ReactElement {
+  const { data, raw, embedded = false } = props
+  const [failedThumb, setFailedThumb] = useState<string>()
+  const [expanded, setExpanded] = useState(embedded)
+  const [trouble, setTrouble] = useState(false)
+  const bodyId = useId()
   const interactive = props.interactive !== false
   const open = props.open
-  const thumb = shot ? thumbFor(raw) : undefined
-  const shown = data.marks.slice(0, MAX_ROWS)
+  const candidate = thumbFor(raw)
+  const thumb = candidate === failedThumb ? undefined : candidate
+  const shown = embedded || expanded ? data.marks : data.marks.slice(0, MAX_ROWS)
   const rest = data.marks.length - shown.length
-  const liveFile = data.html && loopbackAddressOf(data.file) !== undefined
-  const displayFile = liveFile ? data.file.replace(/[?#].*$/u, '') : data.file
+  const subject = annotationSubject(data)
+  const liveFile = subject.live
   const captureNotice = liveFile && thumb === undefined
     ? data.pageCapture === 'omitted'
       ? resolveTranslate(props, 'cardCaptureOmitted')
@@ -241,42 +259,33 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
         ? resolveTranslate(props, 'cardCaptureFailed')
         : ''
     : ''
-  const canOpen = interactive
-    && open !== undefined
-    && (props.canOpen?.(data.file, data.html) ?? true)
-  // The block names a path; a reader scanning the transcript needs the file's own
-  // name more than the directory it lives in, which is the same for every figure
-  // this session saved. The scope the header wrote (size, pages, count) stays after
-  // it, because that is what a mark's coordinates are read against.
-  const cut = Math.max(displayFile.lastIndexOf('/'), displayFile.lastIndexOf('\\'))
-  const name = displayFile.slice(cut + 1)
-  // The message's scope has to remain in the model-facing text. On the card, its
-  // dimensions and count are enough for a glance; the complete phrase stays in the
-  // row's tooltip instead of wrapping across two Chinese sentences.
+  const sourceOpener = interactive && (props.canOpen?.(data.file, data.html) ?? true) ? open : undefined
   const dimensions = /(\d+)\s*[×x]\s*(\d+)/u.exec(data.scope)
   const size = dimensions === null ? '' : `${dimensions[1]}×${dimensions[2]}`
-  const head = (
-    <span className="da-card-head">
+  const pages = /^(?:共 (\d+) 页|(\d+) pages)(?:，|,|$)/u.exec(data.scope)
+  const scope = pages === null ? size : resolveTranslate(props, 'cardPages', { n: Number(pages[1] ?? pages[2]) })
+  const headContent = (
+    <>
       <span className="da-card-shot">
         <SheetIcon />
         {thumb === undefined ? null : (
           <img
             alt=""
             src={thumb}
-            onError={() => { setShot(false) }}
+            onError={() => { setFailedThumb(thumb) }}
           />
         )}
       </span>
       <span className="da-card-text">
         <span className="da-card-title-row">
-          <span className="da-card-title">{name}</span>
-          <span className="da-card-type">{data.html ? 'HTML' : 'FIG'}</span>
+          <span className="da-card-title" title={data.file}>{subject.name}</span>
+          <span className="da-card-type">{subject.badge}</span>
           {captureNotice === '' ? null : (
             <span className="da-card-capture">{captureNotice}</span>
           )}
         </span>
         <span className="da-card-scope">
-          {size === '' ? null : <span className="da-card-meta" title={data.scope}>{size}</span>}
+          {scope === '' ? null : <span className="da-card-meta" title={data.scope}>{scope}</span>}
           <span
             className="da-card-tally"
             aria-label={resolveTranslate(props, 'cardCount', { n: data.marks.length })}
@@ -286,30 +295,46 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
           </span>
         </span>
       </span>
-      {canOpen ? (
-        <span className="da-card-go" aria-hidden="true">
-          <svg viewBox="0 0 16 16" focusable="false">
-            <path d="m6 3.5 4.5 4.5L6 12.5" />
-          </svg>
-        </span>
-      ) : null}
-    </span>
+      <span className="da-card-go" aria-hidden="true">
+        <svg viewBox="0 0 16 16" focusable="false">
+          <path d="m6 3.5 4.5 4.5L6 12.5" />
+        </svg>
+      </span>
+    </>
+  )
+  const head = embedded ? (
+    <span className="da-card-head da-card-head-static">{headContent}</span>
+  ) : (
+    <button
+      type="button"
+      className="da-card-head"
+      aria-expanded={expanded}
+      aria-controls={bodyId}
+      title={resolveTranslate(props, expanded ? 'cardCollapse' : 'cardExpand')}
+      onClick={() => { setExpanded(value => !value) }}
+    >
+      {headContent}
+    </button>
   )
   /* The same sheet wherever it stands: the dock's card is the last look the reader
      gets at the message before it is sent, and a head-only version would hide the
-     very lines that are about to go. What changes without an opener is the button
-     around it, not the contents. */
+     very lines that are about to go. The source-navigation action depends on the host; reading the snapshot does not. */
   const body = (
-    <span className="da-card-body">
+    <span className="da-card-body" id={bodyId}>
       {shown.map((mark, index) => (
         <CardRow
           key={`${String(mark.page ?? '')}-${String(index)}`}
           mark={mark}
           ordinal={index + 1}
+          expanded={expanded}
           page={mark.page === undefined ? undefined : resolveTranslate(props, 'cardPage', { n: mark.page })}
         />
       ))}
-      {rest > 0 ? <span className="da-card-row da-card-rest">{resolveTranslate(props, 'cardMore', { n: rest })}</span> : null}
+      {rest > 0 ? (
+        <span className="da-card-rest">
+          {resolveTranslate(props, 'cardMore', { n: rest })}
+        </span>
+      ) : null}
       {data.target === '' ? null : (
         <span className="da-card-row da-card-target">
           <span className="da-card-goal">{resolveTranslate(props, 'cardGoal')}</span>
@@ -318,21 +343,25 @@ export function AnnotationCard(props: AnnotationCardProps): ReactElement {
       )}
     </span>
   )
-  const onClick = canOpen && open !== undefined
-    ? () => { open(data.file, data.html) }
-    : undefined
-  if (onClick === undefined) {
-    return <span className="da-card" data-static="">{head}{body}</span>
-  }
   return (
-    <button
-      type="button"
-      className="da-card"
-      title={`${resolveTranslate(props, liveFile ? 'cardOpenLive' : 'cardOpen')} — ${displayFile}`}
-      onClick={onClick}
-    >
+    <span className="da-card" data-expanded={expanded}>
       {head}
       {body}
-    </button>
+      {embedded ? null : (
+        <span className="da-card-actions">
+          <button type="button" className="da-card-toggle" aria-expanded={expanded} aria-controls={bodyId}
+            onClick={() => { setExpanded(value => !value) }}>
+            {resolveTranslate(props, expanded ? 'cardCollapse' : 'cardExpand')}
+          </button>
+          {sourceOpener === undefined ? null : (
+            <button type="button" className="da-card-source" title={data.file}
+              onClick={() => { setTrouble(sourceOpener(data.file, data.html) === false) }}>
+              {resolveTranslate(props, liveFile ? 'cardOpenLive' : 'cardOpen')}
+            </button>
+          )}
+        </span>
+      )}
+      {trouble ? <span className="da-card-error" role="status">{resolveTranslate(props, 'cardOpenFailed')}</span> : null}
+    </span>
   )
 }

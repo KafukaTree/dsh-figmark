@@ -56,7 +56,18 @@ afterAll(async () => {
 })
 
 describe('discovering local pages', () => {
-  it('reads a title, keeps a 4xx as a page, and rejects a 5xx', async () => {
+  it('merges homepage index aliases but preserves paths, queries and fragments', async () => {
+    const url = await serve(response => {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end('<title>Deck</title>')
+    })
+    const recent = [`${url}index.html`, url, `${url}other`, `${url}?view=2`, `${url}index.htm#slide2`]
+    const found = await discoverServices({ sessionId: 's', recent }, async () => undefined)
+    expect(found.filter(item => item.url.startsWith(url)).map(item => item.url))
+      .toEqual([recent[0], ...recent.slice(2)])
+  })
+
+  it('reads a successful page title and rejects 4xx and 5xx responses', async () => {
     const titled = await serve(response => {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end('<!doctype html><title> Deck &amp; notes &lt;beta&gt; </title>')
@@ -74,7 +85,7 @@ describe('discovering local pages', () => {
       recent: [titled, missing, broken],
     }, async () => directory)
     expect(services).toContainEqual({ url: titled, title: 'Deck & notes <beta>', source: 'recent' })
-    expect(services).toContainEqual({ url: missing, title: 'Not found', source: 'recent' })
+    expect(services.some(service => service.url === missing)).toBe(false)
     expect(services.some(service => service.url === broken)).toBe(false)
   })
 

@@ -710,7 +710,7 @@ describe('screenshotting the live page', () => {
     })
   })
 
-  it('captures only the surface in front of a deck', async () => {
+  it.each([false, true])('captures the front surface at layout size (scaled: %s)', async scaled => {
     const page = live('<section class="slide" id="front"><h2 id="title">Head</h2></section>')
     Object.defineProperty(page.window, 'innerWidth', { configurable: true, value: 800 })
     Object.defineProperty(page.window, 'innerHeight', { configurable: true, value: 600 })
@@ -725,6 +725,8 @@ describe('screenshotting the live page', () => {
         toJSON: () => ({}),
       }),
     })
+    Object.defineProperty(surface, 'offsetWidth', { value: scaled ? 1920 : 0 })
+    Object.defineProperty(surface, 'offsetHeight', { value: scaled ? 1080 : 0 })
     page.scrollTo(5, 7)
     const domToDataUrl = vi.fn(async (
       _root: Element,
@@ -739,7 +741,7 @@ describe('screenshotting the live page', () => {
       expect(page.said.some(message => message['kind'] === 'capture-result')).toBe(true)
     })
     expect(domToDataUrl.mock.calls[0]?.[0]).toBe(surface)
-    expect(domToDataUrl.mock.calls[0]?.[1]).toMatchObject({ width: 400, height: 300, scale: 1.5 })
+    expect(domToDataUrl.mock.calls[0]?.[1]).toMatchObject({ width: scaled ? 1920 : 400, height: scaled ? 1080 : 300, scale: scaled ? 1800 / 1920 : 1.5, style: { transform: 'none', zoom: '1' } })
     expect(page.said.find(message => message['kind'] === 'capture-result')).toMatchObject({
       document: [1200, 900],
       imageRect: [25, 37, 400, 300],

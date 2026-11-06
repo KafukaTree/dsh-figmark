@@ -875,19 +875,20 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
   border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));border-radius:12px;
   background:var(--dsw-alias-bg-base,rgba(255,255,255,.72));
   box-shadow:0 1px 2px rgba(20,40,80,.04);white-space:normal}
-button.da-card{appearance:none;font-family:inherit;cursor:pointer;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
-button.da-card:hover{border-color:var(--dsw-alias-border-l3,rgba(128,128,128,.46));background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));
-  box-shadow:0 3px 10px rgba(20,40,80,.07)}
-button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
-.da-card-head{display:flex;align-items:center;gap:8px;min-width:0;padding:7px 9px;
+/* Review, source navigation and delivery are separate native buttons. */
+.da-card button,.da-staged-send{appearance:none;font:inherit;color:inherit;cursor:pointer}
+.da-card button:focus-visible,.da-staged-send:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:-2px}
+.da-card button:hover,.da-staged-send:hover{background:var(--dsw-alias-bg-layer-2,rgba(128,128,128,.08));color:var(--da-accent,#176df2)}
+.da-card-head{width:100%;box-sizing:border-box;border:0;text-align:left;display:flex;align-items:center;gap:8px;min-width:0;padding:7px 9px;
   border-bottom:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));
   background:var(--dsw-alias-bg-layer-1,rgba(128,128,128,.025))}
+.da-card-head-static{cursor:default}
 .da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:34px;height:34px;overflow:hidden;border-radius:7px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));color:var(--da-accent,#176df2)}
 /* The picture covers the glyph; a picture that fails hides itself, and the glyph
    underneath it all along is what is left. A miss is never an empty box. */
-.da-card-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.da-card-shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .da-card-shot img[hidden]{display:none}
 .da-card-glyph{width:18px;height:18px}
 .da-card-text{display:flex;flex:1 1 auto;flex-direction:column;gap:2px;min-width:0}
@@ -910,10 +911,11 @@ button.da-card:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-
   border-radius:50%;background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));
   color:var(--dsw-alias-label-tertiary,inherit)}
 .da-card-go svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
-button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242,.14));color:var(--da-accent,#176df2)}
+.da-card-head:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242,.14));color:var(--da-accent,#176df2)}
 /* Each mark is a compact record, not a line of debug output. The row head answers
    "which mark and where"; the element name and selector follow only when the message
    carried them; the reader's sentence is the strongest text. */
+.da-card[data-expanded="true"] .da-card-go{transform:rotate(90deg)}
 .da-card-body{display:flex;flex-direction:column;min-width:0;padding:0 9px 2px}
 .da-card-row{display:flex;flex-direction:column;gap:2px;min-width:0;padding:6px 0}
 .da-card-row+.da-card-row{border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.14))}
@@ -1015,21 +1017,23 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
   background:none;font:inherit;font-size:13px;line-height:1;cursor:pointer;opacity:.65}
 .da-staged-result-x:hover{opacity:1;background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.72))}
 .da-staged-result-x:focus-visible{outline:2px solid var(--da-accent,#176df2);outline-offset:1px}
-/* One figure, one picture. The message that carries an annotation also attaches the
-   review picture, and the shell draws that attachment full width above the bubble —
-   so the same figure appeared twice, once huge and once as the card's 38px copy. The
-   card can open that figure itself, so the large copy is the one to drop: it is the
-   duplicate, and it was the reason the card sat under a picture the reader had
-   already seen. Selected from the attachment row forward rather than from the card
-   back, because CSS has no parent selector to reach; :has does have a following
-   sibling test, which is exactly this relationship.
-
-   Two guards keep it narrow. :not([data-static]) means a card that cannot open
-   anything (the queue dock's, drawn before sending) hides nothing — that copy is the
-   only picture in the dock. And if a shell ever stops marking its attachment row
-   with data-message-attachments, this rule stops matching rather than breaking
-   anything: the large picture simply returns and the card keeps working. */
-[data-message-attachments]:has(~ * .da-card:not([data-static])){display:none}
+/* Attachments belong to the message. A review may carry several PDF pages,
+   and a message may also carry unrelated files; its source is not that snapshot. */
+.da-card-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:4px;padding:3px 5px;
+  border-top:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2))}
+.da-card-toggle,.da-card-source{border:0;border-radius:6px;background:none;padding:6px 4px;min-height:30px;font-size:11px!important}
+.da-card-source{color:var(--da-accent,#176df2)!important}
+.da-card-error{padding:6px 9px;color:var(--dsw-alias-label-error,#c0392b);font-size:11px}
+.da-card-locator{margin-left:22px;overflow-wrap:anywhere;white-space:pre-wrap;color:var(--dsw-alias-label-tertiary,inherit);
+  font:10px/1.5 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace)}
+.da-card[data-expanded="true"] .da-card-said{display:block;white-space:pre-wrap;-webkit-line-clamp:unset}
+.da-card[data-expanded="true"] .da-card-name{white-space:normal;overflow-wrap:anywhere}
+.da-card-target{overflow-wrap:anywhere}
+.da-staged-type{font-size:9px;font-weight:650;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary,inherit)}
+.da-staged-details{display:block;width:min(440px,100%);margin-top:4px}
+.da-staged-details[hidden]{display:none}
+.da-staged-send{border:0;border-radius:6px;background:none;min-height:28px;padding:4px 8px;font-size:11px;color:var(--da-accent,#176df2)}
+.da-staged-send[disabled]{opacity:.6;cursor:default}
 
 /* --- local service browser ------------------------------------------------ */
 .da-service-shell{display:flex;flex-direction:column;height:100%;min-height:0}
@@ -1081,7 +1085,7 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 .da-services{--da-service-ink:var(--dsw-alias-label-primary,#1b1d20);
   --da-service-muted:var(--dsw-alias-label-tertiary,#787d85);
   --da-service-line:color-mix(in srgb,var(--dsw-alias-border-l2,#c9cbd0) 66%,transparent);
-  box-sizing:border-box;height:100%;overflow:auto;padding:clamp(26px,7vh,64px) 22px 40px;
+  box-sizing:border-box;height:100%;overflow:auto;padding:24px 20px 32px;width:100%;
   color:var(--da-service-ink);
   background:
     radial-gradient(circle at 18% 0%,color-mix(in srgb,#4c8a63 8%,transparent),transparent 36%),
@@ -1089,10 +1093,7 @@ button.da-card:hover .da-card-go{background:var(--da-accent-soft,rgba(23,109,242
 .da-services-head,.da-service-search,.da-services-toolbar,.da-service-list,.da-services-error{
   width:min(480px,100%);margin-left:auto;margin-right:auto}
 .da-services-head{padding:0 4px 18px}
-.da-services-kicker{display:block;margin-bottom:8px;color:var(--da-service-muted);
-  font:9px/1.2 var(--dsw-font-family-mono,ui-monospace,SFMono-Regular,Menlo,monospace);
-  letter-spacing:.16em}
-.da-services-head h1{margin:0;font-size:clamp(25px,4.5vw,34px);font-weight:680;line-height:1.08;letter-spacing:-.035em}
+.da-services-head h1{margin:0;font-size:20px;font-weight:680;line-height:1.08;letter-spacing:-.035em}
 .da-services-head p{max-width:410px;margin:9px 0 0;color:var(--da-service-muted);font-size:12px;line-height:1.65}
 .da-service-search{display:flex;align-items:center;gap:9px;box-sizing:border-box;height:48px;padding:0 7px 0 14px;
   border:1px solid var(--da-service-line);border-radius:15px;

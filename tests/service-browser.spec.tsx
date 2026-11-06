@@ -424,6 +424,13 @@ describe('the local-pages picker', () => {
       .toHaveLength(0)
   })
 
+  it('does not open a result when an empty form is submitted programmatically', async () => {
+    stubNetwork({ services: { ok: true, services: [{ url: 'http://127.0.0.1:5173/', title: 'Page', source: 'common' }] } })
+    await mount()
+    await act(async () => { defined(host.querySelector<HTMLFormElement>('form')).requestSubmit() })
+    expect(calls.some(call => call.url.includes('/live'))).toBe(false)
+  })
+
   it('filters by title or address and says when nothing matches', async () => {
     stubNetwork({
       services: {
@@ -441,7 +448,7 @@ describe('the local-pages picker', () => {
     expect(host.textContent).toContain('Beta docs')
     await type(input, 'missing')
     expect(host.querySelectorAll('.da-service-row')).toHaveLength(0)
-    expect(host.textContent).toContain('没有发现本机服务')
+    expect(host.textContent).toContain('没有匹配的页面')
   })
 
   it('treats malformed remembered storage as no history', async () => {
@@ -998,7 +1005,7 @@ describe('the local-pages picker', () => {
     expect(host.querySelector('.da-service-live')).not.toBeNull()
   })
 
-  it('opens the title match instead of an earlier row that only matches by URL', async () => {
+  it('asks the reader to choose when more than one page matches', async () => {
     stubNetwork({
       services: {
         ok: true,
@@ -1016,8 +1023,8 @@ describe('the local-pages picker', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    const opened = calls.find(call => call.url.includes('/live') && call.init?.method === 'POST')
-    expect(jsonBody(opened)).toEqual({ url: 'http://127.0.0.1:8000/' })
+    expect(calls.some(call => call.url.includes('/live'))).toBe(false)
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(zh.serviceChooseMatch)
   })
 
   it.each(['Node.js', 'README.md', 'Chapter:2'])(
@@ -1075,7 +1082,7 @@ describe('the local-pages picker', () => {
     await act(async () => {
       defined(host.querySelector<HTMLFormElement>('.da-service-search')).requestSubmit()
     })
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe('请输入本机 HTTP 地址')
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(zh.serviceNoMatch)
     expect(calls.some(call => call.url.includes('/live'))).toBe(false)
   })
 

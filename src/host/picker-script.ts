@@ -611,9 +611,14 @@ ${MODERN_SCREENSHOT}
       ? [rect.left + scroll[0], rect.top + scroll[1], width, height]
       : [0, 0, width, height]
     var target = surface || root
+    // The deck's ancestor may scale a 1920px slide into a 548px viewport. Layout
+    // at the original size, then map the bitmap into imageRect. Feeding rect.width
+    // back as CSS width reflows/clips the slide while its children stay full-size.
+    var layoutWidth = surface ? surface.offsetWidth || width : width
+    var layoutHeight = surface ? surface.offsetHeight || height : height
     // The parent composes at no more than 1.5x, so a larger source only costs a DOM
     // clone and PNG encode without adding pixels the delivered picture keeps.
-    var scale = Math.min(1.5, 1800 / Math.max(width, height))
+    var scale = Math.min(1.5, 1800 / Math.max(layoutWidth, layoutHeight))
     var screenshot = window.modernScreenshot
     if (!screenshot || typeof screenshot.domToDataUrl !== 'function') {
       send({
@@ -626,8 +631,9 @@ ${MODERN_SCREENSHOT}
       return
     }
     screenshot.domToDataUrl(target, {
-      width: width,
-      height: height,
+      width: layoutWidth,
+      height: layoutHeight,
+      style: surface ? { transform: 'none', zoom: '1' } : null,
       scale: scale,
       backgroundColor: '#ffffff',
       maximumCanvasSize: 4096,

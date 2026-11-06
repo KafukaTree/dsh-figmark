@@ -89,6 +89,7 @@ interface SidebarRightTabsLike {
   register(definition: {
     id: string
     kind: string
+    keepMounted?: boolean
     priority?: 'builtin' | 'extension' | 'fallback'
     title: (address: string) => string
     guide?: readonly {
@@ -174,6 +175,8 @@ function isLivePage(path: string, html: boolean): boolean {
  */
 function canOpenFigure(ctx: Context, sessionId: string, path: string, html: boolean): boolean {
   if (sessionId === '' || path === '') return false
+  // Only supported loopback reviews have URL navigation. Other URLs are not files.
+  if (/^[a-z][a-z\d+.-]*:\/\//iu.test(path) && !isLivePage(path, html)) return false
   const sidebar = ctx.get('sidebarRight') as SidebarRightLike | undefined
   if (sidebar === undefined) return false
   return !isLivePage(path, html) || sidebar.openTab !== undefined
@@ -261,6 +264,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => sidebarTabs.register({
     id: SERVICE_BODY_ID,
     kind: SERVICE_KIND,
+    keepMounted: true,
     priority: 'extension',
     title: () => locale.bind(NAMESPACE)('serviceTitle'),
     guide: [{

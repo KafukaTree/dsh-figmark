@@ -113,7 +113,7 @@ function probe(candidate: Candidate): Promise<ServiceSummary | undefined> {
       const finishResponse = (): void => {
         /* v8 ignore next -- Node populates statusCode before emitting `response`. */
         const status = res.statusCode ?? 0
-        if (status < 200 || status >= 500) {
+        if (status < 200 || status >= 400) {
           finish(undefined)
           return
         }
@@ -186,7 +186,18 @@ export async function discoverServices(
   for (const port of COMMON_PORTS) add(candidateOf(`http://127.0.0.1:${String(port)}/`, 'common'))
   const services = await probeAll(candidates)
   const rank: Record<ServiceSummary['source'], number> = { recent: 0, workspace: 1, common: 2 }
-  return services.sort((left, right) =>
+  const sorted = services.sort((left, right) =>
     rank[left.source] - rank[right.source]
     || new URL(left.url).port.localeCompare(new URL(right.url).port, undefined, { numeric: true }))
+  // Collapse only a proven index alias (same endpoint, title, search and hash).
+  // Different paths or query-driven pages remain distinct even with the same title.
+  const pages = new Set<string>()
+  return sorted.filter(service => {
+    const url = new URL(service.url)
+    const path = service.title === undefined ? url.pathname : url.pathname.replace(/\/index\.html?$/iu, '/')
+    const key = `${url.origin}${path}${url.search}${url.hash}\n${service.title ?? ''}`
+    if (pages.has(key)) return false
+    pages.add(key)
+    return true
+  })
 }

@@ -494,16 +494,16 @@ function ServiceBrowserBody(props: ServiceBrowserInjected & {
       return
     }
     const needle = query.trim().toLowerCase()
-    const titleMatch = visible.find(service => service.title?.toLowerCase().includes(needle) === true)
-    if (titleMatch !== undefined) {
-      void openWorkspace(titleMatch.url, titleMatch.title)
-      return
+    if (needle === '') return
+    const titleMatch = visible.some(service => service.title?.toLowerCase().includes(needle) === true)
+    if (looksLikeAddress(query) && !titleMatch) {
+      void openWorkspace(query)
+    } else if (visible.length === 1) {
+      const only = visible[0] as ServiceSummary
+      void openWorkspace(only.url, only.title)
+    } else {
+      setError(t(visible.length === 0 ? 'serviceNoMatch' : 'serviceChooseMatch'))
     }
-    const first = visible[0]
-    void openWorkspace(
-      looksLikeAddress(query) || first === undefined ? query : first.url,
-      looksLikeAddress(query) || first === undefined ? undefined : first.title,
-    )
   }
 
   const visible = useMemo(() => {
@@ -583,7 +583,6 @@ function ServiceBrowserBody(props: ServiceBrowserInjected & {
       <div className="da-service-work">
         <main className="da-services" hidden={!listVisible}>
           <header className="da-services-head">
-            <span className="da-services-kicker">{t('serviceKicker')}</span>
             <h1>{t('serviceTitle')}</h1>
             <p>{t('serviceHint')}</p>
           </header>
@@ -623,8 +622,8 @@ function ServiceBrowserBody(props: ServiceBrowserInjected & {
               <div className="da-services-empty">{t('serviceScanning')}</div>
             ) : visible.length === 0 ? (
               <div className="da-services-empty">
-                <strong>{t('serviceEmpty')}</strong>
-                <span>{t('serviceEmptyHint')}</span>
+                <strong>{t(query.trim() === '' ? 'serviceEmpty' : 'serviceNoMatch')}</strong>
+                <span>{t(query.trim() === '' ? 'serviceEmptyHint' : 'serviceSearchHint')}</span>
               </div>
             ) : visible.map(service => (
               <button type="button" className="da-service-row" key={service.url}

@@ -77,7 +77,7 @@ describe('the attachment card above the composer', () => {
 
   /** The card's one action. */
   function open(): HTMLButtonElement {
-    return defined(host.querySelector('.da-staged-open')) as HTMLButtonElement
+    return defined(host.querySelector('.da-staged-send')) as HTMLButtonElement
   }
 
   /** The remove control. */
@@ -171,9 +171,9 @@ describe('the attachment card above the composer', () => {
   })
 
   it('shows the page filename without its query state', () => {
-    park({ data: { ...DATA, file: 'http://localhost:5173/deck/index.html?clean=1' } })
+    park({ data: { ...DATA, file: 'http://localhost:5173/deck/index.html?clean=1', html: true } })
     mount()
-    expect(host.querySelector('.da-staged-title')?.textContent).toBe('index.html')
+    expect(host.querySelector('.da-staged-title')?.textContent).toBe('localhost:5173/deck/index.html')
   })
 
   it('marks an intentionally screenshot-free live attachment', () => {
@@ -227,7 +227,7 @@ describe('the attachment card above the composer', () => {
       .toBe('箭头1 (10,20) → (30,40) · 往右上拉一点')
   })
 
-  it('names the send on the card itself, not with a button row', () => {
+  it('labels sending separately from the preview', () => {
     park()
     mount()
     expect(open().getAttribute('title')).toBe(zh['pendingSendNow'])
@@ -274,6 +274,16 @@ describe('the attachment card above the composer', () => {
     expect(host.querySelector('.da-staged-card')?.getAttribute('title')).toBe('/w/fig.svg')
   })
 
+  it('targets only its own native draft thumbnails', () => {
+    const box = stubBox({ draft: '' })
+    park({ armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'], previewUrls: ['blob:own-image'] } })
+    mount()
+    const style = host.querySelector('style')?.textContent
+    expect(style).toContain('img[src="blob:own-image"]')
+    expect(style).toContain('[data-composer-card]')
+    expect(host.querySelector('.da-staged-send')).toBeNull()
+  })
+
   it('shows the figure itself when it has its picture', () => {
     rememberThumb(RAW, 'data:image/png;base64,AAAA')
     park()
@@ -289,6 +299,47 @@ describe('the attachment card above the composer', () => {
     act(() => { img.dispatchEvent(new Event('error')) })
     expect(host.querySelector('.da-staged-shot img')).toBeNull()
     expect(host.querySelector('.da-staged-glyph')).not.toBeNull()
+  })
+
+  it('previews an armed review without sending or changing the draft', async () => {
+    const send = vi.fn(async () => [])
+    const box = stubBox({ draft: 'My unsent words' })
+    park({ send, armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
+    mount()
+    const preview = defined(host.querySelector('.da-staged-open')) as HTMLButtonElement
+    expect(preview.title).toBe(zh.cardExpand)
+    await press(preview)
+    expect(preview.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector('.da-staged-details .da-card')).not.toBeNull()
+    expect(host.querySelector('.da-staged-details .da-card-actions')).toBeNull()
+    expect(host.querySelector('.da-staged-details .da-card-head')?.tagName).toBe('SPAN')
+    expect(send).not.toHaveBeenCalled()
+    expect(box.pressed()).toEqual([])
+    expect(box.draftText()).toBe('My unsent words')
+    expect(box.added()).toEqual([])
+    await press(preview)
+    expect(host.querySelector('.da-staged-details')?.hasAttribute('hidden')).toBe(true)
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+  })
+
+  it('shows the first marked PDF page in the chip', () => {
+    park({ data: { ...DATA, file: '/w/paper.pdf', marks: [{ label: 'box 1', comment: 'fix', missing: false, page: 7 }] } })
+    mount()
+    expect(host.querySelector('.da-staged-type')?.textContent).toBe('PDF')
+    expect(host.querySelector('.da-card-page')?.textContent).toBe('第 7 页')
+  })
+
+  it('blocks removal during delivery even when disabled is bypassed', async () => {
+    let release: (() => void) | undefined
+    park({ send: () => new Promise(resolve => { release = () => { resolve([]) } }) })
+    mount()
+    await act(async () => {
+      // The second gesture lands before React paints disabled; the handler must guard it.
+      open().click()
+      remove().click()
+    })
+    expect(parkedAnnotations('s1')).toHaveLength(1)
+    await act(async () => { defined(release)() })
   })
 
   it('sends the parked delivery once, and the card is spent', async () => {
@@ -366,12 +417,12 @@ describe('the attachment card above the composer', () => {
     park({ send, armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
     mount()
     // The card names the box's send, because that is the press it rides on.
-    expect(open().getAttribute('title')).toBe(zh['pendingSendHint'])
+    expect(host.querySelector('.da-staged-send')).toBeNull()
     // And the box is the reader's alone until that press: the annotation is not text
     // in the draft, it is what the send will carry.
     expect(box.draftText()).toBe('先看这张图')
     expect(box.added()).toEqual([])
-    await press(open())
+    await act(async () => { box.shell.submit?.() })
     // One press, one send: the box's, carrying the sentence and then the block.
     expect(box.pressed()).toEqual([`先看这张图\n\n${RAW}`])
     expect(box.added()).toEqual([['a1']])
@@ -379,18 +430,6 @@ describe('the attachment card above the composer', () => {
     // The send took it, so the card it stood for is spent.
     expect(parkedAnnotations('s1')).toEqual([])
     expect(host.querySelector('.da-staged')).toBeNull()
-  })
-
-  it('does not send an armed review twice when its card is clicked twice in one tick', async () => {
-    const box = stubBox({ draft: '先看这张图' })
-    park({ armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
-    mount()
-    await act(async () => {
-      open().click()
-      open().click()
-    })
-    expect(box.pressed()).toEqual([`先看这张图\n\n${RAW}`])
-    expect(parkedAnnotations('s1')).toEqual([])
   })
 
   it('rides the box\'s own Send, the one the reader presses in the input', () => {
@@ -408,7 +447,7 @@ describe('the attachment card above the composer', () => {
     const box = stubBox({ draft: '先看这张图', press: 'refuse' })
     park({ armed: { shell: box.shell, text: RAW, attachmentIds: ['a1'] } })
     mount()
-    await press(open())
+    await act(async () => { box.shell.submit?.() })
     // The send never left the box: the reader gets their sentence back without six
     // lines of coordinates, and the card stays for another press.
     expect(box.draftText()).toBe('先看这张图')
@@ -420,7 +459,7 @@ describe('the attachment card above the composer', () => {
     const box = stubBox({ draft: '先看这张图', press: 'none' })
     park({ armed: { shell: box.shell, text: RAW, attachmentIds: [] } })
     mount()
-    await press(open())
+    await act(async () => { box.shell.submit?.() })
     // Nothing was sent, and the card did not pretend otherwise.
     expect(box.pressed()).toEqual([])
     expect(parkedAnnotations('s1')).toHaveLength(1)
@@ -477,7 +516,7 @@ describe('the attachment card above the composer', () => {
     park({ send: second, data: { ...DATA, file: '/w/second.svg' }, raw: RAW.replace('fig.svg', 'second.svg') })
     mount()
     // Pressing the second chip sends the second review, not the first one behind it.
-    await press([...host.querySelectorAll('.da-staged-open')][1] as HTMLButtonElement)
+    await press([...host.querySelectorAll('.da-staged-send')][1] as HTMLButtonElement)
     expect(second).toHaveBeenCalledTimes(1)
     expect(first).not.toHaveBeenCalled()
     // The neighbour the reader has not sent is still there, with its own delivery.
@@ -573,7 +612,7 @@ describe('the attachment card inside the composer', () => {
     const send = vi.fn(async () => [])
     park(send)
     draw()
-    const button = defined(document.querySelector('.da-staged-open')) as HTMLButtonElement
+    const button = defined(document.querySelector('.da-staged-send')) as HTMLButtonElement
     await act(async () => { button.click() })
     expect(send).toHaveBeenCalledTimes(1)
     expect(card.querySelector('.da-staged')).toBeNull()

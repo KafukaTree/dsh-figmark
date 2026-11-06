@@ -1,35 +1,15 @@
 /**
- * The parked annotation, drawn inside the composer as an attachment card.
- *
- * The composer is a lexical editor owned by the conversation package: nothing can be
- * written into it that stays a card, and the whole annotation block sitting in the
- * input box is exactly what a reader cannot scan. So the block is armed beside the box
- * — its message held, its picture uploaded — and the chip stands beside the reader's
- * own attachments as the face of what that send will carry: the figure's thumbnail, how
- * many marks it carries, the file's name, and the first mark's note.
- * It is portalled into the composer card's own flow (see `composer-seat`), so it
- * sits where an attached picture sits; the dock entry that owns it holds only the
- * anchor, and falls back to drawing in the dock itself when there is no card.
- *
- * What the card shows and what it hides is the point. A dimension or a pair of
- * coordinates is not something to read at a glance, so it stays in the block the model
- * reads and in the hover title, and never on the face: the face says the figure and the
- * count first, the note second, and truncates both rather than wrapping into a wall of
- * text.
- *
- * One press is the point, and the box keeps the reader's own words while it is not
- * pressed: nothing is written into the draft, so the sentence being typed stays the only
- * text in it. The box's own send carries the armed message — typing above the card and
- * pressing Send sends the sentence and the review as one message, with the annotation
- * behind the sentence — and the card's own action runs that same send for a reader who
- * wants to fire it from the card. The card goes when that send takes it, or when the
- * reader drops it, because that is when it stops standing for anything.
+ * Reviews staged beside the composer. The chip previews its immutable payload;
+ * the native composer Send carries armed reviews, with or without typed text.
+ * Older hosts without draft admission retain a direct-delivery fallback.
  * @module dsh-figmark/client/pending-card
  */
-import { useLayoutEffect, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useLayoutEffect, useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { resolveTranslate } from './annotator-contract'
 import { thumbFor } from './annotation-thumb'
+import { AnnotationCard } from './annotation-card'
+import { annotationSubject } from './annotation-subject'
 import { mountSeat } from './composer-seat'
 import { disarmReview, holdSubmit } from './composer'
 import { parkedAnnotations, unparkAnnotation, watchParked, type ParkedAnnotation } from './pending'
@@ -69,18 +49,6 @@ function FigureIcon(): ReactElement {
 }
 
 /**
- * The small outline that stands for a mark's shape on the card's one line.
- * @returns the glyph.
- */
-function MarkIcon(): ReactElement {
-  return (
-    <svg className="da-staged-mark-icon" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-      <rect x="1" y="2" width="10" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.1" />
-    </svg>
-  )
-}
-
-/**
  * A mark's name without its coordinates: the kind and its number, which is what a
  * reader recognises, with a space between the two the way the product writes it.
  * @param label - the mark's own name, coordinates and all.
@@ -109,6 +77,8 @@ function ParkedChip(props: {
   const [busy, setBusy] = useState(false)
   const [trouble, setTrouble] = useState('')
   const [shot, setShot] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+  const detailId = useId()
   // The disabled button is a face, not a promise: two presses can land in one tick,
   // before the first render has had a chance to disable anything.
   const sending = useRef(false)
@@ -117,26 +87,7 @@ function ParkedChip(props: {
   const thumb = shot ? thumbFor(entry.raw) : undefined
   const send = async (): Promise<void> => {
     if (sending.current) return
-    // With the message armed in the box, the box's send is the send: it merges the
-    // annotation behind whatever is typed and delivers both. Running the card's own
-    // delivery instead would put the same annotation in twice.
-    if (armed !== undefined) {
-      // A double click reaches this handler twice before React has painted the
-      // disabled state. The ref is the guard the first click can set synchronously.
-      sending.current = true
-      setBusy(true)
-      try {
-        armed.shell.submit?.()
-      } finally {
-        // A delivered card unmounts; a refused or unavailable send leaves it in
-        // place and has to become pressable again on the next turn.
-        queueMicrotask(() => {
-          sending.current = false
-          setBusy(false)
-        })
-      }
-      return
-    }
+    setTrouble('')
     sending.current = true
     setBusy(true)
     try {
@@ -159,15 +110,10 @@ function ParkedChip(props: {
     if (armed === undefined) return undefined
     return holdSubmit(armed, () => { unparkAnnotation(sessionId, entry.id) })
   }, [armed, entry.id, sessionId])
-  // The block names a path; a reader scanning the composer needs the file's own name
-  // more than the directory, which is the same for every figure this session saved.
-  // A live page's path is its URL. Query and hash identify page state, not the
-  // attachment the card stands for, so they do not belong in its filename.
-  const shownFile = data.file.replace(/[?#].*$/u, '')
-  const cut = Math.max(shownFile.lastIndexOf('/'), shownFile.lastIndexOf('\\'))
-  const name = shownFile.slice(cut + 1)
+  const subject = annotationSubject(data)
+  const name = subject.name
   const first = data.marks[0]
-  const captureNotice = data.html && thumb === undefined
+  const captureNotice = subject.live && thumb === undefined
     ? data.pageCapture === 'omitted'
       ? resolveTranslate(props, 'cardCaptureOmitted')
       : data.pageCapture === 'failed'
@@ -179,16 +125,17 @@ function ParkedChip(props: {
     : first.comment === '' ? first.label : `${first.label} · ${first.comment}`
   const hover = data.scope === '' ? data.file : `${data.file} · ${data.scope}`
   const removeLabel = resolveTranslate(props, 'pendingRemove')
-  const hint = resolveTranslate(props, armed === undefined ? 'pendingSendNow' : 'pendingSendHint')
+  const hint = resolveTranslate(props, 'pendingSendNow')
   return (
     <span className="da-staged">
       <span className="da-staged-card" title={hover}>
         <button
           type="button"
           className="da-staged-open"
-          disabled={busy}
-          title={hint}
-          onClick={() => { void send() }}
+          aria-expanded={expanded}
+          aria-controls={detailId}
+          title={resolveTranslate(props, expanded ? 'cardCollapse' : 'cardExpand')}
+          onClick={() => { setExpanded(value => !value) }}
         >
           <span className="da-staged-shot">
             <FigureIcon />
@@ -213,9 +160,10 @@ function ParkedChip(props: {
                 {resolveTranslate(props, 'pendingCount', { n: data.marks.length })}
               </span>
             </span>
+            <span className="da-staged-type">{subject.badge}</span>
             {first === undefined ? null : (
               <span className="da-staged-line" title={detail}>
-                <MarkIcon />
+                {first.page === undefined ? null : <span className="da-card-page">{resolveTranslate(props, 'cardPage', { n: first.page })}</span>}
                 <span className="da-staged-shape">{shortLabel(first.label)}</span>
                 {first.comment === '' ? null : <span className="da-staged-said">{first.comment}</span>}
               </span>
@@ -229,6 +177,7 @@ function ParkedChip(props: {
           title={removeLabel}
           disabled={busy}
           onClick={() => {
+            if (sending.current) return
             // Taking the card off takes what it armed with it: a picture left in the
             // draft after the card was dropped would ride the next press of Send.
             if (armed !== undefined) disarmReview(armed, entry.conversation)
@@ -238,7 +187,23 @@ function ParkedChip(props: {
           ×
         </button>
       </span>
-      {trouble === '' ? null : <span className="da-staged-trouble">{trouble}</span>}
+      <span id={detailId} className="da-staged-details" hidden={!expanded}>
+        {expanded ? (
+          <AnnotationCard
+            node={{ data }}
+            raw={entry.raw}
+            interactive={false}
+            embedded
+            t={props.t}
+            localeId={props.localeId}
+          />
+        ) : null}
+      </span>
+      {armed === undefined ? <button type="button" className="da-staged-send" disabled={busy} title={hint}
+        onClick={() => { void send() }}>
+        {resolveTranslate(props, busy ? 'pendingSending' : 'pendingSendNow')}
+      </button> : null}
+      {trouble === '' ? null : <span className="da-staged-trouble" role="alert">{trouble}</span>}
     </span>
   )
 }
@@ -277,6 +242,14 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
     return mountSeat(node, setSeat)
   }, [sessionId, showing])
   if (!showing) return null
+  // Hide only the native thumbnails represented by these review cards. Other
+  // attachments remain visible, and sent-message attachments are never targeted.
+  const previews = entries.flatMap(entry => entry.armed?.previewUrls ?? [])
+  const owned = previews.map(url => `img[src=${JSON.stringify(url)}]`).join(',')
+  const thumbnailStyle = owned === '' ? null : <style>{`
+    [data-composer-card] [role="group"] > div:has(${owned}){display:none}
+    [data-composer-card] > div:has(> div > [role="group"]):not(:has([role="group"] > div:not(:has(${owned})))){display:none}
+  `}</style>
   const cards = (
     <>
       {entries.map(entry => (
@@ -313,6 +286,7 @@ export function PendingCard(props: PendingCardProps): ReactElement | null {
   return (
     <>
       <span className="da-staged-anchor" ref={anchor} hidden />
+      {thumbnailStyle}
       {seat === null
         ? <>{cards}{report}</>
         : createPortal(<>{cards}{report}</>, seat)}

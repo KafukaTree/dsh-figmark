@@ -222,6 +222,7 @@ describe('browser entry', () => {
     expect(stub.sidebarTabs[0]).toMatchObject({
       id: SERVICE_BODY_ID,
       kind: SERVICE_KIND,
+      keepMounted: true,
       priority: 'extension',
     })
     expect(stub.sidebarTabs[0]?.title()).toBe(`${NAMESPACE}.serviceTitle`)
@@ -528,7 +529,7 @@ describe('browser entry', () => {
     expect(factory('s1').canOpen('', false)).toBe(false)
   })
 
-  it('uses the HTML annotation type, not merely an HTTP-looking path, to find a live page', () => {
+  it('does not disguise unsupported URLs as Session files', () => {
     const opened: string[] = []
     const stub = stubContext({
       sidebarRight: { openResource: (address: string) => { opened.push(address) } },
@@ -537,8 +538,12 @@ describe('browser entry', () => {
     const factory = stub.slots[4]?.options['inject'] as (id: unknown) => {
       open: (path: string, html: boolean) => boolean
     }
-    factory('s1').open('http://127.0.0.1:8811/export.svg', false)
-    expect(opened).toEqual(['dsh-resource://file/session/s1/http://127.0.0.1:8811/export.svg'])
+    for (const [path, html] of [
+      ['http://127.0.0.1:8811/export.svg', false],
+      ['https://example.com/page', true],
+      ['http://example.com/page', true],
+    ] as const) expect(factory('s1').open(path, html)).toBe(false)
+    expect(opened).toEqual([])
   })
 
   it('draws nothing into the transcript when the conversation package is absent', () => {

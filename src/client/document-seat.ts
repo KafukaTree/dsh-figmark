@@ -11,13 +11,14 @@
  * reaches the chunk's runtime.
  * @module dsh-figmark/client/document-seat
  */
-import { ANNOTATION_VERSION, markOrdinals, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
+import { ANNOTATION_VERSION, markOrdinals, pageFileSuffix, type AnnotationDocument, type AnnotationMark, type SummaryLocale } from '../shared/annotation'
 import type { FigureFacts, SidecarWriteResult } from '../shared/http'
 import { composeReviewSvg, rasterizePng, reviewScale, reviewSize } from './export'
 import { captureThumb } from './annotation-thumb'
 import { parkInComposer, type ComposerLike } from './composer'
 import { deleteAnnotation, loadAnnotation, saveAnnotation, type LoadedAnnotation } from './host-api'
-import { deliverAnnotation, type DeliveredPageImage, type SessionsLike } from './session'
+import { baseNameOf } from '../shared/path-name'
+import { deliverAnnotation, MAX_PAGE_IMAGES, type DeliveredPageImage, type SessionsLike } from './session'
 
 /**
  * Facts one whole-document annotation is persisted against.
@@ -214,7 +215,10 @@ export function createDocumentSeat(options: DocumentSeatOptions): DocumentSeat {
         // A PDF now travels as its path and marked page images. No whole-file upload
         // means the box arms text and pictures without a multi-megabyte attachment.
         file: undefined,
-        pageImages: images.length,
+        files: images.slice(0, MAX_PAGE_IMAGES).map(({ page, image }) => new File(
+          [image], `${baseNameOf(document.figure.path)}${pageFileSuffix(page)}.annotated.png`, { type: 'image/png' },
+        )),
+        pageImages: Math.min(images.length, MAX_PAGE_IMAGES),
         locale: options.locale,
         send: async () => {
           if (sessions === undefined) throw new Error('the sessions service is unavailable')

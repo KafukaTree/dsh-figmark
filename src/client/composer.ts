@@ -31,6 +31,8 @@ import { parkAnnotation } from './pending'
 export interface DraftAttachmentLike {
   /** Id the rail and the draft both key the attachment by. */
   readonly id: string
+  /** Native thumbnail identity; only these draft duplicates may be hidden. */
+  readonly previewUrl?: string
 }
 
 /** The shell's send, whatever arguments the host hands it. */
@@ -103,6 +105,9 @@ export interface ArmedReview {
   readonly text: string
   /** The review picture, uploaded and waiting to ride with the message. */
   readonly attachmentIds: readonly string[]
+  /** Files already admitted to the native draft, enabling its Send button. */
+  readonly previewUrls?: readonly string[]
+  readonly staged?: boolean
 }
 
 /** Everything one parked annotation needs. */
@@ -119,6 +124,8 @@ export interface ParkInput {
   readonly thumb: string | undefined
   /** The review picture itself, sent beside the message when the host takes it. */
   readonly file: File | undefined
+  /** Additional page images, staged with the same review. */
+  readonly files?: readonly File[] | undefined
   /** Marked pages that travel as image parts when there is no whole-file upload. */
   readonly pageImages?: number | undefined
   /** Whether the current live-page picture travelled with this parked review. */
@@ -133,20 +140,20 @@ export interface ParkInput {
  * Upload one file as a draft attachment without putting it in the rail yet.
  * @param conversation - the conversation service.
  * @param sessionId - session the draft belongs to.
- * @param file - the file to hold, when there is one.
+ * @param files - the rendered review images to hold.
  * @returns the ids the send will add, empty when the file could not be made into one.
  */
-function holdFile(
+function holdFiles(
   conversation: ComposerLike,
   sessionId: string,
-  file: File | undefined,
-): readonly string[] {
+  files: readonly File[],
+): readonly DraftAttachmentLike[] {
   // Bound to its owner: this is a service method, and a call through a bare reference
   // would lose the `this` the host's own implementation relies on.
   const create = conversation.createDrafts?.bind(conversation)
-  if (file === undefined || create === undefined) return []
+  if (files.length === 0 || create === undefined) return []
   try {
-    return create(sessionId, [file]).map(draft => draft.id)
+    return create(sessionId, files)
   } catch {
     return []
   }
@@ -158,6 +165,7 @@ function holdFile(
  * @param sessionId - session the draft belongs to.
  * @param message - the message, verbatim.
  * @param file - the review picture, when the surface has one to attach.
+ * @param additionalFiles - marked page images of a multi-page review.
  * @returns what was armed, or undefined when this session cannot be armed.
  */
 export function armReview(
@@ -165,6 +173,7 @@ export function armReview(
   sessionId: string,
   message: string,
   file: File | undefined,
+  additionalFiles: readonly File[] = [],
 ): ArmedReview | undefined {
   let shell: ComposerShellLike
   try {
@@ -178,7 +187,11 @@ export function armReview(
   // The merge happens inside the box's send. A shell without one has no send to hang
   // it on, so the card keeps its own send and the reader presses that instead.
   if (typeof shell.submit !== 'function') return undefined
-  return { shell, text: message, attachmentIds: holdFile(conversation, sessionId, file) }
+  const drafts = holdFiles(conversation, sessionId, file === undefined ? additionalFiles : [file, ...additionalFiles])
+  return {
+    shell, text: message, attachmentIds: drafts.map(draft => draft.id),
+    previewUrls: drafts.flatMap(draft => draft.previewUrl === undefined ? [] : [draft.previewUrl]),
+  }
 }
 
 /** What one merge put in the box, so a refused send can put the box back. */
@@ -278,14 +291,15 @@ function mergeInto(shell: ComposerShellLike, claims: readonly Claim[]): Merge | 
     // Already merged — the card's own press lands on the same send this patch hooked.
     // Writing it again is the one way to send the annotation twice.
     if (draft.includes(text)) continue
-    if (attachmentIds.length > 0) {
-      if (!attach(shell, attachmentIds)) {
+    const missing = attachmentIds.filter(id => !live.attachmentIds?.includes(id))
+    if (missing.length > 0) {
+      if (!attach(shell, missing)) {
         // A refused rail leaves a message promising a picture it does not carry. Half
         // a review is worse than none: the box goes back and the card waits.
         unwind(shell, typed, added)
         return undefined
       }
-      added.push(...attachmentIds)
+      added.push(...missing)
     }
     draft = draft.trim() === '' ? text : `${draft}\n\n${text}`
   }
@@ -354,7 +368,9 @@ function settleClaims(shell: ComposerShellLike, claims: readonly Claim[], merge:
     shell.setDraft(merge.typed)
   } catch { /* the reader will see and fix what is left in the box */ }
   for (const claim of claims) {
-    for (const id of claim.armed.attachmentIds) shell.removeAttachment?.(id)
+    if (claim.armed.staged !== true) {
+      for (const id of claim.armed.attachmentIds) shell.removeAttachment?.(id)
+    }
   }
 }
 
@@ -422,9 +438,9 @@ export function holdSubmit(armed: ArmedReview, done: () => void): () => void {
     const send = (): void => {
       try {
         original.apply(shell, args)
-        settleClaims(shell, claims, merge)
       } finally {
         waiting = false
+        settleClaims(shell, claims, merge)
       }
     }
     if (wroteThrough(shell, merge)) {
@@ -475,22 +491,38 @@ export function disarmReview(armed: ArmedReview, conversation: ComposerLike | un
  */
 export function parkInComposer(input: ParkInput): void {
   const { document: document_, locale, paths, sessionId } = input
+  let armed = input.conversation === undefined
+    ? undefined
+    : armReview(input.conversation, sessionId, '', input.file, input.files)
+  const planned = (input.file === undefined ? 0 : 1) + (input.files?.length ?? 0)
+  const attached = armed?.attachmentIds.length ?? planned
+  // The staged message describes files the host actually accepted, including each
+  // marked PDF page. A thumbnail alone is never evidence of an attachment.
+  const pageCapture = input.pageCapture === 'attached' && attached === 0 ? 'failed' : input.pageCapture
   const message = buildAnnotationMessage(
     document_,
     paths,
     locale,
-    input.file !== undefined,
-    input.pageImages ?? 0,
-    input.pageCapture,
+    attached > 0,
+    Math.min(input.pageImages ?? 0, attached),
+    pageCapture,
   )
-  // The bubble this message will land in cannot reach the message's attachments, so
-  // the card there looks its picture up by the message text. Filing it now means the
-  // picture is already there when the send puts the bubble on screen.
+  if (armed !== undefined && input.conversation !== undefined) {
+    // A real native attachment enables the host's Send, even with an empty draft.
+    // Text-only reviews carry their readable notes instead of a dummy image/token.
+    const ids = armed.attachmentIds.length > 0 ? armed.attachmentIds : holdFiles(
+      input.conversation, sessionId,
+      [new File([message], 'annotation.txt', { type: 'text/plain' })],
+    ).map(draft => draft.id)
+    if (ids.length > 0 && attach(armed.shell, ids)) {
+      armed = { ...armed, attachmentIds: ids, staged: true }
+    } else {
+      for (const id of ids) input.conversation.releaseDraftAttachment?.(id)
+      armed = undefined
+    }
+  }
   rememberDelivered(message, input.thumb)
   const block = matchAnnotation(message, 0)
-  const armed = input.conversation === undefined
-    ? undefined
-    : armReview(input.conversation, sessionId, message, input.file)
   parkAnnotation({
     sessionId,
     data: block?.data ?? {
@@ -504,7 +536,7 @@ export function parkInComposer(input: ParkInput): void {
     },
     raw: message,
     conversation: input.conversation,
-    armed,
+    armed: armed === undefined ? undefined : { ...armed, text: message },
     send: input.send,
   })
 }

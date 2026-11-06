@@ -164,8 +164,8 @@ describe('the card in a sent bubble', () => {
     // tooltip, rather than spending a second Chinese sentence on the card's face.
     expect(host.querySelector('.da-card-meta')?.textContent).toBe('1440×800')
     expect(host.querySelector('.da-card-tally')?.textContent).toBe('2')
-    expect(host.querySelector('.da-card-type')?.textContent).toBe('FIG')
-    expect(texts('.da-card-kind')).toEqual(['1', '2'])
+    expect(host.querySelector('.da-card-type')?.textContent).toBe('SVG')
+    expect(texts('.da-card-kind')).toEqual(['1', '1'])
     expect(texts('.da-card-name')).toEqual(['箭头', '矩形'])
     expect(texts('.da-card-geometry')).toEqual(['(10,20) → (30,40)', '(1,2)-(3,4)'])
     expect(texts('.da-card-said')).toEqual(['往右上拉一点'])
@@ -243,7 +243,7 @@ describe('the card in a sent bubble', () => {
     }))
     mount(<AnnotationCard node={node({ ...DATA, marks })} raw={RAW} />)
     expect(host.querySelectorAll('.da-card-mark')).toHaveLength(5)
-    expect(host.querySelector('.da-card-rest')?.textContent).toBe('还有 3 处')
+    expect(host.querySelector('.da-card-rest')?.textContent).toBe('查看其余 3 处')
   })
 
   it('shows the picture of this block when this page drew one', () => {
@@ -268,7 +268,7 @@ describe('the card in a sent bubble', () => {
   it('opens the figure it names when it is clicked', () => {
     const open = vi.fn()
     mount(<AnnotationCard node={node(DATA)} raw={RAW} open={open} />)
-    const button = defined(host.querySelector('button.da-card')) as HTMLButtonElement
+    const button = defined(host.querySelector('.da-card-source')) as HTMLButtonElement
     expect(button.getAttribute('title')).toContain('/w/fig.svg')
     act(() => { button.click() })
     expect(open).toHaveBeenCalledWith('/w/fig.svg', false)
@@ -278,23 +278,21 @@ describe('the card in a sent bubble', () => {
     const open = vi.fn()
     const file = 'http://127.0.0.1:8811/deck/index.html?clean=1#slide-2'
     mount(<AnnotationCard node={node({ ...DATA, file, html: true })} raw={RAW} open={open} />)
-    const button = defined(host.querySelector('button.da-card')) as HTMLButtonElement
-    expect(host.querySelector('.da-card-title')?.textContent).toBe('index.html')
-    expect(button.getAttribute('title')).toContain(zh['cardOpenLive'])
-    expect(button.getAttribute('title')).not.toContain('?clean=1')
+    const button = defined(host.querySelector('.da-card-source')) as HTMLButtonElement
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('127.0.0.1:8811/deck/index.html')
+    expect(button.textContent).toBe(zh['cardOpenLive'])
+    expect(button.getAttribute('title')).toBe(file)
     act(() => { button.click() })
     expect(open).toHaveBeenCalledWith(file, true)
   })
 
-  it('opens the figure from its picture too, which is the copy the bubble keeps', () => {
-    // The shell's full-width preview of the same figure is hidden under a sent card,
-    // so the picture inside the card is the only one left to click: it has to be the
-    // way in, not decoration.
+  it('expands the review from its thumbnail without navigating to a changed source', () => {
     const open = vi.fn()
     rememberThumb(RAW, 'data:image/webp;base64,AAAA')
     mount(<AnnotationCard node={node(DATA)} raw={RAW} open={open} />)
     act(() => { (defined(host.querySelector('.da-card-shot img')) as HTMLElement).click() })
-    expect(open).toHaveBeenCalledWith('/w/fig.svg', false)
+    expect(open).not.toHaveBeenCalled()
+    expect(card().getAttribute('data-expanded')).toBe('true')
   })
 
   it('says when a live review is intentionally location-only, and when capture failed', () => {
@@ -326,8 +324,8 @@ describe('the card in a sent bubble', () => {
       open={open}
       canOpen={() => false}
     />)
-    expect(host.querySelector('button')).toBeNull()
-    expect(card().hasAttribute('data-static')).toBe(true)
+    expect(host.querySelector('.da-card-source')).toBeNull()
+    expect(host.querySelector('.da-card-toggle')).not.toBeNull()
   })
 
   it('is inert where the message is not a sent bubble yet', () => {
@@ -336,17 +334,76 @@ describe('the card in a sent bubble', () => {
     // The dock's card has no Sidebar tab to open and no bubble to click, so nothing
     // around it is a button — but it still lists what is about to be sent, because
     // that is the whole point of holding it there instead of sending it.
-    expect(host.querySelector('button')).toBeNull()
-    expect(card().hasAttribute('data-static')).toBe(true)
-    expect(host.querySelector('.da-card-go')).toBeNull()
+    expect(host.querySelector('.da-card-source')).toBeNull()
+    expect(host.querySelector('.da-card-toggle')).not.toBeNull()
+    expect(host.querySelector('.da-card-go')).not.toBeNull()
     // Two marks and the goal line.
     expect(host.querySelectorAll('.da-card-row')).toHaveLength(3)
   })
 
   it('is inert when nothing can open a figure', () => {
     mount(<AnnotationCard node={node(DATA)} raw={RAW} />)
-    expect(host.querySelector('button')).toBeNull()
-    expect(card().hasAttribute('data-static')).toBe(true)
+    expect(host.querySelector('.da-card-source')).toBeNull()
+    expect(host.querySelector('.da-card-toggle')).not.toBeNull()
+  })
+
+  it('reveals every delivered mark and its full locator even without a source opener', () => {
+    const marks = Array.from({ length: 8 }, (_unused, index) => ({
+      label: `element ${index + 1} (1,2)-(3,4) (selector #item-${index + 1})`,
+      comment: `Comment ${index + 1}\nsecond line`, missing: false, page: index + 1,
+    }))
+    mount(<AnnotationCard node={node({ ...DATA, marks })} raw={RAW} />)
+    act(() => { (defined(host.querySelector('.da-card-toggle')) as HTMLButtonElement).click() })
+    expect(texts('.da-card-said')).toHaveLength(8)
+    expect(texts('.da-card-said')[7]).toBe('Comment 8\nsecond line')
+    expect(texts('.da-card-locator')[7]).toContain('#item-8')
+    expect(host.querySelector('.da-card-head')?.getAttribute('aria-expanded')).toBe('true')
+    act(() => { (defined(host.querySelector('.da-card-toggle')) as HTMLButtonElement).click() })
+    expect(texts('.da-card-said')).toHaveLength(5)
+    expect(host.querySelector('.da-card-locator')).toBeNull()
+    act(() => { (defined(host.querySelector('.da-card-toggle')) as HTMLButtonElement).click() })
+    expect(texts('.da-card-said')).toHaveLength(8)
+  })
+
+  it('reports refused navigation while keeping the delivered review readable', () => {
+    mount(<AnnotationCard node={node(DATA)} raw={RAW} open={() => false} />)
+    act(() => { (defined(host.querySelector('.da-card-source')) as HTMLButtonElement).click() })
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(zh.cardOpenFailed)
+    expect(texts('.da-card-said')).toEqual(['往右上拉一点'])
+  })
+
+  it('resets a failed thumbnail and expanded state when a transcript seat changes blocks', () => {
+    rememberThumb(RAW, 'data:image/webp;base64,AAAA')
+    mount(<AnnotationCard node={node(DATA)} raw={RAW} />)
+    act(() => {
+      defined(host.querySelector('img')).dispatchEvent(new Event('error'))
+      ;(defined(host.querySelector('.da-card-head')) as HTMLButtonElement).click()
+    })
+    const next = RAW.replace('fig.svg', 'next.png')
+    rememberThumb(next, 'data:image/png;base64,BBBB')
+    mount(<AnnotationCard node={node({ ...DATA, file: '/w/next.png' })} raw={next} />)
+    expect(host.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,BBBB')
+    expect(card().getAttribute('data-expanded')).toBe('false')
+  })
+
+  it.each([
+    ['共 12 页，其中 2 页有标注，标注 3 处', 'zh', '共 12 页'],
+    ['12 pages, 2 pages marked, 3 marks', 'en', '12 pages'],
+  ])('shows PDF page scope from %s', (scope, localeId, expected) => {
+    mount(<AnnotationCard node={node({ ...DATA, file: '/w/paper.pdf', scope })} localeId={localeId} />)
+    expect(host.querySelector('.da-card-type')?.textContent).toBe('PDF')
+    expect(host.querySelector('.da-card-meta')?.textContent).toBe(expected)
+  })
+
+  it('keeps an unfamiliar mark label readable without inventing its type', () => {
+    mount(<AnnotationCard node={node({ ...DATA, marks: [{ label: 'future shape', comment: 'Keep this', missing: false }] })} />)
+    expect(host.querySelector('.da-card-kind')?.textContent).toBe('1')
+    expect(host.querySelector('.da-card-name')?.textContent).toBe('future shape')
+  })
+
+  it('can draw a parsed block without its raw text', () => {
+    mount(<AnnotationCard node={node(DATA)} />)
+    expect(host.querySelector('.da-card-title')?.textContent).toBe('fig.svg')
   })
 
   it('shows the block as text when its data is not one it can draw', () => {

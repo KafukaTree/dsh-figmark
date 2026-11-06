@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /** The seat the entry half hands the PDF chunk: the document, its save, and its delivery. */
+import { File as NodeFile } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildPagedDocument, createDocumentSeat, type PagedAnnotationInput } from '../src/client/document-seat'
-import type { ComposerLike, ComposerShellLike } from '../src/client/composer'
+import { holdSubmit, type ComposerLike, type ComposerShellLike } from '../src/client/composer'
 import { clearParked, parkedAnnotations } from '../src/client/pending'
 import type { SessionsLike } from '../src/client/session'
 import { defined, stubRasterizer } from './dom'
@@ -183,6 +184,41 @@ describe('parking the document above the composer', () => {
     // press of the box's own send carries the text and page images together.
     expect(composer.written).toEqual([])
     expect(document_.figure.pageCount).toBe(4)
+  })
+
+  it('stages actual PNG files and carries them through the composer send', async () => {
+    stubRasterizer()
+    vi.stubGlobal('File', NodeFile)
+    const files: File[] = []
+    let draft = 'Review this PDF'
+    let ids: readonly string[] = []
+    const sent: { text: string; files: readonly File[] }[] = []
+    const shell: ComposerShellLike = {
+      get snapshot() { return { draft, attachmentIds: ids } },
+      setDraft: text => { draft = text },
+      addAttachments: next => { ids = next; return true },
+      submit: () => { sent.push({ text: draft, files: ids.map(id => defined(files[Number(id)])) }); draft = ''; ids = [] },
+    }
+    const conversation: ComposerLike = {
+      input: { shell: () => shell },
+      createDrafts: (_sessionId, incoming) => incoming.map(file => { files.push(file); return { id: String(files.length - 1) } }),
+    }
+    const seat = createDocumentSeat({ sessions: undefined, conversation, sessionId: 's1', locale: 'zh' })
+    await seat.compose(input(), { annotationPath: '/w/report.pdf.annot.json', reviewPath: '/w/report.pdf.annotated.pdf' }, [
+      { page: 1, dataUrl: 'data:image/png;base64,cGFnZTE=', width: 595, height: 842 },
+      { page: 3, dataUrl: 'data:image/png;base64,cGFnZTM=', width: 595, height: 842 },
+    ])
+    const stop = holdSubmit(defined(defined(parkedAnnotations('s1')[0]).armed), () => {})
+    shell.submit?.()
+    stop()
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.files.map(file => [file.name, file.type, file.size])).toEqual([
+      ['report.pdf.p1.annotated.png', 'image/png', 1],
+      ['report.pdf.p3.annotated.png', 'image/png', 1],
+    ])
+    for (const file of defined(sent[0]).files) expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([9]))
+    expect(sent[0]?.text).toContain('Review this PDF')
+    expect(sent[0]?.text).toContain('第 3 页 箭头1')
   })
 
   it('sends the pictures without uploading the whole PDF when the card is pressed', async () => {

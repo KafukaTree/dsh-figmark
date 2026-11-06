@@ -197,7 +197,7 @@ function stubComposer(options: StubOptions = {}): ComposerLog {
           createDrafts: (sessionId: string, files: readonly File[]) => {
             if (create === 'throw') throw new Error('the upload failed')
             created.push(files)
-            return create === 'empty' ? [] : [{ id: 'a1' }]
+            return create === 'empty' ? [] : files.map((file, index) => ({ id: `a${index + 1}`, ...(file.type === 'image/png' ? { previewUrl: `blob:image-${index}` } : {}) }))
           },
         }),
     releaseDraftAttachment: (id: string) => { released.push(id) },
@@ -250,6 +250,11 @@ function park(log: ComposerLog, file?: File): ArmedReview {
   return defined(defined(parkedAnnotations('s1')[0]).armed)
 }
 
+/** Exercise the submit seam independently of native draft admission. */
+function arm(log: ComposerLog, file?: File): ArmedReview {
+  return defined(armReview(log.conversation, 's1', '【附图标注】/w/fig.svg\n\n逐条改生成源。', file))
+}
+
 beforeEach(() => {
   clearParked()
   clearThumbs()
@@ -299,44 +304,84 @@ describe('parking an annotation above the composer', () => {
     expect(armed.text).toBe(parked.raw)
   })
 
-  it('holds the review picture without staging it in the rail', () => {
+  it('stages the review picture so the native Send accepts an empty draft', () => {
     const log = stubComposer()
     const picture = new File(['png'], 'fig.annotated.png', { type: 'image/png' })
     const armed = park(log, picture)
-    // Uploaded now, so the press has nothing to wait for — but a picture in the rail
-    // is a picture the reader can see and did not add, so the rail stays empty.
+    // Native attachments make an otherwise empty composer sendable.
     expect(log.created).toEqual([[picture]])
-    expect(log.added).toEqual([])
-    expect(log.rail.current).toEqual([])
+    expect(log.added).toEqual([['a1']])
+    expect(log.rail.current).toEqual(['a1'])
     expect(armed.attachmentIds).toEqual(['a1'])
   })
 
-  it('arms the text alone when the host cannot attach, but keeps the upload', () => {
-    const log = stubComposer({ add: 'none' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
-    // The picture was already uploaded, so the press has nothing to wait for; whether
-    // the rail can take it is the press's business, not the park's.
-    expect(log.created).toHaveLength(1)
-    expect(armed.attachmentIds).toEqual(['a1'])
+  it('holds and sends every page image with one PDF review', () => {
+    const log = stubComposer({ draft: 'Check both pages' })
+    const files = [1, 3].map(page => new File([`page ${page}`], `paper.p${page}.png`, { type: 'image/png' }))
+    parkInComposer({
+      conversation: log.conversation, sessionId: 's1',
+      document: { ...document_, figure: { ...document_.figure, path: '/w/paper.pdf', mediaType: 'application/pdf', pageCount: 3 } },
+      paths, thumb: undefined, file: undefined, files, pageImages: 2, locale: 'zh', send: async () => [],
+    })
+    const entry = defined(parkedAnnotations('s1')[0])
+    const armed = defined(entry.armed)
+    expect(log.created).toEqual([files])
+    expect(armed.attachmentIds).toEqual(['a1', 'a2'])
+    expect(entry.raw).toContain('对应标注页已作为图片随消息发送')
+    const stop = holdSubmit(armed, () => {})
+    log.press()
+    expect(log.submitted).toEqual([['a1', 'a2']])
+    expect(log.submits).toEqual([`Check both pages\n\n${entry.raw}`])
+    stop()
+  })
+
+  it.each(['empty', 'throw', 'none'] as const)('does not promise a screenshot when draft creation is %s', create => {
+    const log = stubComposer({ create })
+    parkInComposer({
+      conversation: log.conversation, sessionId: 's1',
+      document: { ...document_, figure: { ...document_.figure, path: 'http://localhost:5173/', mediaType: 'text/html' } },
+      paths, thumb: undefined, file: new File(['png'], 'page.png'), pageCapture: 'attached', locale: 'zh', send: async () => [],
+    })
+    const entry = defined(parkedAnnotations('s1')[0])
+    expect(entry.raw).not.toContain('当前页面截图已随消息发送')
+    expect(entry.raw).toContain('当前页面截图未能生成')
+    expect(entry.data.pageCapture).toBe('failed')
+    expect(entry.armed).toBeUndefined()
+  })
+
+  it('keeps an accepted screenshot claim when it was staged', () => {
+    const log = stubComposer()
+    parkInComposer({
+      conversation: log.conversation, sessionId: 's1',
+      document: { ...document_, figure: { ...document_.figure, path: 'http://localhost:5173/', mediaType: 'text/html' } },
+      paths, thumb: undefined, file: new File(['png'], 'page.png'), pageCapture: 'attached', locale: 'zh', send: async () => [],
+    })
+    expect(parkedAnnotations('s1')[0]?.data.pageCapture).toBe('attached')
+  })
+
+  it.each(['none', 'throw', 'refuse'] as const)('falls back without leaking drafts when admission is %s', add => {
+    const log = stubComposer({ add })
+    parkInComposer({
+      conversation: log.conversation, sessionId: 's1', document: document_, paths,
+      thumb: undefined, file: new File(['png'], 'a.png'), locale: 'zh', send: async () => [],
+    })
+    expect(parkedAnnotations('s1')[0]?.armed).toBeUndefined()
+    expect(log.released).toEqual(['a1'])
     expect(log.draft.current).toBe('')
   })
 
-  it('arms the text alone when the host cannot create drafts at all', () => {
-    const log = stubComposer({ create: 'none' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
-    expect(armed.attachmentIds).toEqual([])
-  })
-
-  it('arms the text alone when the upload itself fails', () => {
-    const log = stubComposer({ create: 'throw' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
-    expect(armed.attachmentIds).toEqual([])
-  })
-
-  it('arms the text alone when the upload yields no draft', () => {
-    const log = stubComposer({ create: 'empty' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
-    expect(armed.attachmentIds).toEqual([])
+  it('sends a text-only review from an empty native composer and retains it on refusal', () => {
+    const log = stubComposer({ submit: 'refuse' })
+    const armed = park(log)
+    expect(log.created[0]?.[0]?.name).toBe('annotation.txt')
+    expect(log.rail.current).toEqual(['a1'])
+    expect(log.draft.current).toBe('')
+    const stop = holdSubmit(armed, () => {})
+    log.press()
+    expect(log.submits).toEqual([armed.text])
+    expect(log.rail.current).toEqual(['a1'])
+    expect(log.draft.current).toBe('')
+    stop()
   })
 
   it('parks unarmed when the session has no composer', () => {
@@ -465,7 +510,7 @@ describe('parking an annotation above the composer', () => {
 describe('the box send carrying an armed annotation', () => {
   it('writes the block behind the sentence, at the press, not before', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     expect(log.draft.current).toBe('先看这张图')
@@ -480,7 +525,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('sends the sentence and the block together when Enter queues the write', async () => {
     const log = stubComposer({ draft: '这行字错了', press: 'queued' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.press()
@@ -497,7 +542,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('sends one message when a press that is still waiting is pressed again', async () => {
     const log = stubComposer({ draft: '这行字错了', press: 'queued' })
-    const armed = park(log)
+    const armed = arm(log)
     const unhook = holdSubmit(armed, vi.fn())
     log.press()
     log.press()
@@ -510,7 +555,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('carries the picture beside the text in the same press', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     expect(log.submitted).toEqual([['a1']])
@@ -519,7 +564,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('sends the block alone when the reader typed nothing', () => {
     const log = stubComposer({ draft: '   ' })
-    const armed = park(log)
+    const armed = arm(log)
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     // An empty box takes the block as its whole content, with no blank line in front.
@@ -534,7 +579,7 @@ describe('the box send carrying an armed annotation', () => {
     // its indentation is no longer a code block to whoever reads the message.
     const typed = '  indented line\n\nkeep trailing  \n\n'
     const log = stubComposer({ draft: typed })
-    const armed = park(log)
+    const armed = arm(log)
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     expect(defined(log.submits[0]).startsWith(typed)).toBe(true)
@@ -543,7 +588,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('sends the annotation once even if the press runs the merge twice', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').setDraft(`先看这张图\n\n${armed.text}`)
@@ -557,7 +602,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('gives the box back when the send never left it', () => {
     const log = stubComposer({ draft: '先看这张图', submit: 'refuse' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -571,7 +616,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('does not merge into a box that is already sending', () => {
     const log = stubComposer({ draft: '先看这张图', phase: 'submitting' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -582,7 +627,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves the block out when the rail refuses the picture', () => {
     const log = stubComposer({ draft: '先看这张图', add: 'refuse' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -598,7 +643,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves the block out when the rail throws rather than refuses', () => {
     const log = stubComposer({ draft: '先看这张图', add: 'throw' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     expect(log.submits).toEqual(['先看这张图'])
@@ -607,7 +652,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves the block out when the box will not take the write', () => {
     const log = stubComposer({ write: 'throw' })
-    const armed = park(log)
+    const armed = arm(log)
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     expect(log.submits).toEqual([''])
@@ -616,7 +661,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('carries every card in the queue on one press, oldest first', () => {
     const log = stubComposer({ draft: '看一下' })
-    const first = park(log)
+    const first = arm(log)
     const second = defined(armReview(log.conversation, 's1', '【附图标注】/w/second.svg', undefined))
     const doneFirst = vi.fn()
     const doneSecond = vi.fn()
@@ -635,7 +680,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('lets the card go when the press queued the message instead of sending it', () => {
     const log = stubComposer({ draft: '看一下', submit: 'refuse', phaseAfter: 'queued' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -649,7 +694,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('lets the card go when the box disappears with the send', () => {
     const log = stubComposer({ draft: '看一下', reads: 1 })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -662,7 +707,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('arms a picture but sends nothing when the box cannot hold it', () => {
     const log = stubComposer({ draft: '看一下', add: 'none' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     log.conversation.input.shell('s1').submit?.()
@@ -676,7 +721,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('puts the box back without a rail to take the picture out of', () => {
     const log = stubComposer({ draft: '看一下', write: 'throw', remove: 'none' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     expect(() => { log.conversation.input.shell('s1').submit?.() }).not.toThrow()
@@ -690,7 +735,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('takes back the picture it added when the write fails after it', () => {
     const log = stubComposer({ draft: '看一下', write: 'throw' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const unhook = holdSubmit(armed, vi.fn())
     log.conversation.input.shell('s1').submit?.()
     // The rail took the picture before the write failed, so the picture goes back with
@@ -701,7 +746,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves the reader their words even when the box will not take them back', () => {
     const log = stubComposer({ draft: '看一下', submit: 'refuse', write: 'throw-restore' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     expect(() => {
@@ -714,8 +759,8 @@ describe('the box send carrying an armed annotation', () => {
 
   it('writes one card that says the same thing only once', () => {
     const log = stubComposer({ draft: '看一下' })
-    const first = park(log)
-    const second = park(log)
+    const first = arm(log)
+    const second = arm(log)
     expect(second.text).toBe(first.text)
     const unhookFirst = holdSubmit(first, vi.fn())
     const unhookSecond = holdSubmit(second, vi.fn())
@@ -730,7 +775,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('unhooks back to the box\'s own send', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const unhook = holdSubmit(armed, done)
     unhook()
@@ -742,8 +787,8 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves a card armed after it alone hooked', () => {
     const log = stubComposer({ draft: '看一下' })
-    const first = park(log)
-    const second = park(log)
+    const first = arm(log)
+    const second = arm(log)
     const doneSecond = vi.fn()
     const unhookFirst = holdSubmit(first, vi.fn())
     const unhookSecond = holdSubmit(second, doneSecond)
@@ -767,7 +812,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('says nothing when the box will not be patched', () => {
     const log = stubComposer()
-    const armed = park(log)
+    const armed = arm(log)
     const frozen = Object.freeze(log.conversation.input.shell('s1'))
     const unhook = holdSubmit({ ...armed, shell: frozen }, vi.fn())
     // A shell it cannot patch is a shell whose send stays its own: no throw, no merge.
@@ -776,7 +821,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('says nothing when the patch cannot be undone', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log)
+    const armed = arm(log)
     const shell = log.conversation.input.shell('s1')
     const unhook = holdSubmit(armed, vi.fn())
     // A host that locks the member after the fact leaves the patch in place; the card
@@ -787,7 +832,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('drops a card twice without putting the send back twice', () => {
     const log = stubComposer()
-    const armed = park(log)
+    const armed = arm(log)
     const original = log.conversation.input.shell('s1').submit
     const unhook = holdSubmit(armed, vi.fn())
     unhook()
@@ -799,7 +844,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('leaves a send that was already replaced alone', () => {
     const log = stubComposer()
-    const armed = park(log)
+    const armed = arm(log)
     const shell = log.conversation.input.shell('s1')
     const unhook = holdSubmit(armed, vi.fn())
     const replaced = vi.fn()
@@ -812,7 +857,7 @@ describe('the box send carrying an armed annotation', () => {
 
   it('keeps its hands off a box it cannot read', () => {
     const log = stubComposer()
-    const armed = park(log)
+    const armed = arm(log)
     const done = vi.fn()
     const shell = log.conversation.input.shell('s1')
     const original = shell.submit
@@ -834,7 +879,7 @@ describe('the box send carrying an armed annotation', () => {
 describe('taking an armed annotation back out of the composer', () => {
   it('gives the held picture back, and touches no text', () => {
     const log = stubComposer({ draft: '先看这张图' })
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     expect(armed.attachmentIds).toEqual(['a1'])
     disarmReview(armed, log.conversation)
     // The card is dropped, so the upload it was holding goes with it — but the draft
@@ -846,7 +891,7 @@ describe('taking an armed annotation back out of the composer', () => {
 
   it('drops a picture the rail did take back', () => {
     const log = stubComposer()
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     // The reader added the same picture by hand; the drop takes only the card's copy.
     log.conversation.input.shell('s1').addAttachments?.(['a1'])
     disarmReview(armed, log.conversation)
@@ -856,21 +901,21 @@ describe('taking an armed annotation back out of the composer', () => {
 
   it('gives the attachment back even without the service to tell', () => {
     const log = stubComposer()
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     expect(() => { disarmReview(armed, undefined) }).not.toThrow()
     expect(log.released).toEqual([])
   })
 
   it('gives it back even when the service cannot forget it', () => {
     const log = stubComposer()
-    const armed = park(log, new File(['png'], 'a.png', { type: 'image/png' }))
+    const armed = arm(log, new File(['png'], 'a.png', { type: 'image/png' }))
     const mute: ComposerLike = { input: log.conversation.input }
     expect(() => { disarmReview(armed, mute) }).not.toThrow()
   })
 
   it('does nothing when there was nothing to hold', () => {
     const log = stubComposer()
-    const armed = park(log)
+    const armed = arm(log)
     disarmReview(armed, log.conversation)
     expect(log.released).toEqual([])
     expect(log.removed).toEqual([])
