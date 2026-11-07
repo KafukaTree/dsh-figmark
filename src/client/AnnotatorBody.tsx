@@ -3972,6 +3972,7 @@ export function AnnotatorBody(props: AnnotatorBodyProps): ReactNode {
           at={{ left: detailAt.left, top: detailAt.top }}
           mark={selected}
           onWrite={(value) => { setMarkDetail(selected.id, value) }}
+          onRemove={() => { removeMark(selected.id) }}
           onSendToAgent={() => { void sendOne(selected, 'agent') }}
           onSendToComposer={() => { void sendOne(selected, 'composer') }}
           busy={busy !== null}

@@ -3007,7 +3007,17 @@ describe('the hand-off inside the comment', () => {
     // A freshly drawn mark has no sentence, so the pill is only a place to type.
     expect(document.querySelector('.da-comment-send')).toBeNull()
     await type(detailBox(), '这条曲线缺图例')
-    expect(document.querySelectorAll('.da-comment-send-btn')).toHaveLength(2)
+    expect(document.querySelectorAll('.da-comment-send-btn')).toHaveLength(3)
+  })
+
+  it('deletes the selected mark directly from its comment and can undo the deletion', async () => {
+    mounted = await svgBody()
+    await drawArrow(document.body)
+    await click(defined(document.querySelector('.da-comment-remove')))
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(0)
+    expect(document.querySelector('.da-float-detail')).toBeNull()
+    await click(button(document.body, zh.undo))
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
   })
 
   it('parks the comment above the composer from the pill as well', async () => {
@@ -3272,7 +3282,7 @@ describe('the weight of the pen', () => {
     await selectFirstMark(document.body)
     await type(detailBox(), '这是一条足够长的评论，用来把两个发送按钮挤出来')
     const pill = defined(document.querySelector('.da-float-detail'))
-    expect(pill.querySelectorAll('.da-comment-send-btn')).toHaveLength(2)
+    expect(pill.querySelectorAll('.da-comment-send-btn')).toHaveLength(3)
     expect(getComputedStyle(pill).maxWidth).toBe('calc(100% - 16px)')
   })
 
@@ -3490,6 +3500,8 @@ describe('saving', () => {
     await selectFirstMark(document.body)
     await click(defined(document.querySelector('.da-comment-send-primary')))
     expect(gated.prompts).toHaveLength(1)
+    await click(defined(document.querySelector('.da-comment-remove')))
+    expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(1)
     await drawArrowAt(document.body, [20, 20], [120, 80])
     expect(document.querySelectorAll('[data-da-mark]')).toHaveLength(2)
     await act(async () => {

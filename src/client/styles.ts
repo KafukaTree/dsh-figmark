@@ -646,12 +646,13 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 /* The hand-off appears only once the field says something: an empty pill is a
    place to type, not a decision to make. */
 .da-comment-send{display:flex;align-items:center;gap:4px;flex:0 0 auto;padding-bottom:3px;padding-right:3px}
+.da-comment-remove{flex:0 0 30px;margin-bottom:3px}
 .da-comment-send-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
   border:0;border-radius:50%;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));
   color:var(--dsw-alias-label-secondary,currentColor);cursor:pointer;padding:0}
 .da-comment-send-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.2));
   color:var(--dsw-alias-label-primary,currentColor)}
-.da-comment-send-btn:disabled{opacity:.45;cursor:default}
+.da-comment-send-btn[aria-disabled="true"],.da-comment-send-btn:disabled{opacity:.45;cursor:default}
 .da-comment-send-btn svg{width:15px;height:15px}
 /* Both ways out of the pill are the same neutral chip. Which hand-off is "primary"
    is the reader's judgement at the moment of sending, not something the panel gets to
@@ -882,7 +883,6 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-card-head{width:100%;box-sizing:border-box;border:0;text-align:left;display:flex;align-items:center;gap:8px;min-width:0;padding:7px 9px;
   border-bottom:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.2));
   background:var(--dsw-alias-bg-layer-1,rgba(128,128,128,.025))}
-.da-card-head-static{cursor:default}
 .da-card-shot{position:relative;display:flex;flex:0 0 auto;align-items:center;justify-content:center;width:34px;height:34px;overflow:hidden;border-radius:7px;
   border:0.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));
   background:var(--dsw-alias-bg-layer-3,rgba(128,128,128,.1));color:var(--da-accent,#176df2)}
@@ -1030,7 +1030,17 @@ body[data-ds-dark-theme] .da-root{--da-quiet:#9aa0a8}
 .da-card[data-expanded="true"] .da-card-name{white-space:normal;overflow-wrap:anywhere}
 .da-card-target{overflow-wrap:anywhere}
 .da-staged-type{font-size:9px;font-weight:650;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary,inherit)}
-.da-staged-details{display:block;width:min(440px,100%);margin-top:4px}
+.da-staged-card[data-expanded="true"]{width:min(440px,100%)}
+.da-staged-card[data-expanded="true"] .da-staged-line{display:none}
+.da-staged-chevron{display:flex;flex:0 0 18px;margin-left:auto;color:var(--dsw-alias-label-tertiary,#858991)}
+.da-staged-chevron svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5}
+.da-staged-open[aria-expanded="true"] .da-staged-chevron{transform:rotate(90deg)}
+.da-staged-text{flex:1 1 auto;padding-right:0}
+.da-staged-open{padding-right:18px}
+.da-staged-details{display:block;width:100%;margin-top:8px;border-top:1px solid var(--dsw-alias-border-main,rgba(128,128,128,.18))}
+.da-staged-details .da-card{width:100%;max-width:none;margin:0;border:0;border-radius:0;box-shadow:none;background:transparent}
+.da-staged-details .da-card-body{padding:8px 0 0}
+.da-overlay[data-tool="select"] [data-da-element-box]{pointer-events:all;cursor:pointer}
 .da-staged-details[hidden]{display:none}
 .da-staged-send{border:0;border-radius:6px;background:none;min-height:28px;padding:4px 8px;font-size:11px;color:var(--da-accent,#176df2)}
 .da-staged-send[disabled]{opacity:.6;cursor:default}

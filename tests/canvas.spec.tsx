@@ -1344,6 +1344,16 @@ describe('picking an element', () => {
     expect(defined(mounted.svg.querySelector('[data-da-element-code]')).textContent).toBe('<line id="line2d_10">')
   })
 
+  it('reselects a boxed page element directly without moving its anchor', () => {
+    const onSelect = vi.fn()
+    const placed: AnnotationMark = { id: 'e1', kind: 'element', color: '#1971c2', points: [[40, 30], [160, 90]], anchor }
+    mounted = mount({ tool: 'select', marks: [placed], elementExtent: 'box', onSelect })
+    const box = defined(mounted.svg.querySelector('[data-da-element-box]'))
+    pointer(box, 'pointerdown', 60, 50)
+    pointer(box, 'pointerup', 60, 50)
+    expect(onSelect).toHaveBeenCalledWith('e1')
+  })
+
   it('names an element without a title or text by its opening tag', () => {
     // A selector is precise for the source reader, but a long CSS path floating over
     // the page is not a name the person pointing at it recognizes.
@@ -1365,8 +1375,12 @@ describe('picking an element', () => {
       anchor: { tag: 'p', text, bbox: [40, 30, 120, 60], selector: 'body > section > p' },
     }
     mounted = mount({ tool: 'select', marks: [placed], selectedId: 'e1' })
-    const code = defined(mounted.svg.querySelector('[data-da-element-code]')).textContent ?? ''
+    const elementCode = defined(mounted.svg.querySelector('[data-da-element-code]'))
+    const code = elementCode.textContent ?? ''
     expect(code).toBe(`${text.slice(0, 25)}…`)
+    expect(elementCode.tagName.toLowerCase()).toBe('span')
+    expect(elementCode.getAttribute('style')).toContain('overflow: hidden')
+    expect(elementCode.getAttribute('style')).toContain('text-overflow: ellipsis')
   })
 
   it('elides the middle of an opening tag that is itself too long for the plate', () => {

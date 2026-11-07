@@ -282,6 +282,7 @@ function ElementCode(props: {
   readonly boxed: boolean
   /** Whether this is the mark the reader is working on, the only one that gets a name. */
   readonly named: boolean
+  readonly onPress: (event: SurfaceEvent) => void
 }): ReactNode {
   const { mark, box, unit, paper, boxed, named } = props
   return (
@@ -289,6 +290,7 @@ function ElementCode(props: {
       {boxed ? (
         <rect
           data-da-element-box={mark.id}
+          onPointerDown={props.onPress}
           x={box.x} y={box.y} width={box.width} height={box.height} rx={2 * unit}
           fill={mark.color} fillOpacity={0.07} stroke={mark.color} strokeWidth={1.5 * unit}
         />
@@ -317,7 +319,9 @@ function CodeChip(props: {
   const code = elideCode(anchorCodeName(mark.anchor))
   const pad = 4 * unit
   const fontSize = CODE_FONT_SIZE * unit
-  const width = code.length * fontSize * 0.62 + pad * 2
+  // CJK glyphs occupy a full em; CSS clips against the actual plate width.
+  const advance = Array.from(code).reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 1 : 0.62), 0)
+  const width = Math.min(advance * fontSize + pad * 2, Math.max(pad * 2, paper.right - paper.left))
   const height = fontSize + pad * 1.6
   const gap = 4 * unit
   // Kept on the paper, start-first: the beginning of a name is the part that says
@@ -336,13 +340,14 @@ function CodeChip(props: {
         x={x} y={y} width={width} height={height} rx={3 * unit}
         fill="#ffffff" fillOpacity={0.94} stroke={mark.color} strokeWidth={1.2 * unit}
       />
-      <text
-        data-da-element-code={mark.id}
-        x={x + pad} y={y + height / 2} fontFamily={CODE_FONT_FAMILY} fontSize={fontSize}
-        fontWeight={600} fill={CODE_TEXT_COLOR} stroke="none" dominantBaseline="central"
-      >
-        {code}
-      </text>
+      <foreignObject x={x + pad} y={y} width={Math.max(0, width - pad * 2)} height={height}>
+        <span data-da-element-code={mark.id} title={anchorCodeName(mark.anchor)}
+          style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            fontFamily: CODE_FONT_FAMILY, fontSize, fontWeight: 600, color: CODE_TEXT_COLOR,
+            lineHeight: `${height}px` }}>
+          {code}
+        </span>
+      </foreignObject>
     </>
   )
 }
@@ -404,6 +409,7 @@ function MarkShape(props: MarkLayerProps & { readonly mark: AnnotationMark; read
           }}
           boxed={props.elementExtent === 'box'}
           named={selected}
+          onPress={(event) => { onPressMark(mark, event) }}
         />
       )}
       {selected && !isDraft && isPoint ? <FixedFrame box={pointMarkBox(shown, unit)} hairline={sizes.hairline} /> : null}

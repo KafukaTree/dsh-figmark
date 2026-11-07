@@ -12,7 +12,7 @@
 import type { RefObject, ReactNode } from 'react'
 import { MAX_DETAIL_CHARS, type AnnotationMark } from '../../shared/annotation'
 import type { Translate } from '../translate'
-import { ChatIcon, SendIcon } from './icons'
+import { ChatIcon, SendIcon, TrashIcon } from './icons'
 
 /** What the detail pill reads and reports. */
 export interface DetailPillProps {
@@ -26,6 +26,8 @@ export interface DetailPillProps {
   readonly mark: AnnotationMark
   /** Write the sentence. */
   readonly onWrite: (value: string) => void
+  /** Delete this mark from the document. */
+  readonly onRemove: () => void
   /** Hand this one mark to the agent. */
   readonly onSendToAgent: () => void
   /** Hand this one mark to the chat box. */
@@ -85,6 +87,11 @@ export function DetailPill(props: DetailPillProps): ReactNode {
           </button>
         </div>
       ) : null}
+      <button type="button" className="da-comment-send-btn da-comment-remove"
+        aria-label={t('delete')} title={t('delete')} aria-disabled={props.busy}
+        onClick={() => { if (!props.busy) props.onRemove() }}>
+        <TrashIcon />
+      </button>
     </div>
   )
 }

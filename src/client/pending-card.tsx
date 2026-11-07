@@ -128,7 +128,7 @@ function ParkedChip(props: {
   const hint = resolveTranslate(props, 'pendingSendNow')
   return (
     <span className="da-staged">
-      <span className="da-staged-card" title={hover}>
+      <span className="da-staged-card" data-expanded={expanded} title={hover}>
         <button
           type="button"
           className="da-staged-open"
@@ -169,6 +169,9 @@ function ParkedChip(props: {
               </span>
             )}
           </span>
+          <span className="da-staged-chevron" aria-hidden="true">
+            <svg viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5" /></svg>
+          </span>
         </button>
         <button
           type="button"
@@ -186,7 +189,6 @@ function ParkedChip(props: {
         >
           ×
         </button>
-      </span>
       <span id={detailId} className="da-staged-details" hidden={!expanded}>
         {expanded ? (
           <AnnotationCard
@@ -198,6 +200,7 @@ function ParkedChip(props: {
             localeId={props.localeId}
           />
         ) : null}
+      </span>
       </span>
       {armed === undefined ? <button type="button" className="da-staged-send" disabled={busy} title={hint}
         onClick={() => { void send() }}>

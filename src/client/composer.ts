@@ -108,6 +108,8 @@ export interface ArmedReview {
   /** Files already admitted to the native draft, enabling its Send button. */
   readonly previewUrls?: readonly string[]
   readonly staged?: boolean
+  /** Temporary native admission image; removed before the host reads the send. */
+  readonly admission?: { readonly ids: readonly string[]; readonly release: () => void }
 }
 
 /** Everything one parked annotation needs. */
@@ -348,17 +350,17 @@ function settleClaims(shell: ComposerShellLike, claims: readonly Claim[], merge:
     live = shell.snapshot
   } catch {
     // Nothing left to put back and nothing to take out: the cards have done their part.
-    for (const claim of claims) claim.done()
+    for (const claim of claims) { claim.armed.admission?.release(); claim.done() }
     return
   }
   // Out of the send — delivered, or queued behind a running turn — the cards are spent.
   if (live.phase !== undefined && live.phase !== 'plain') {
-    for (const claim of claims) claim.done()
+    for (const claim of claims) { claim.armed.admission?.release(); claim.done() }
     return
   }
   const draft = live.draft
   if (claims.every(claim => !draft.includes(claim.armed.text))) {
-    for (const claim of claims) claim.done()
+    for (const claim of claims) { claim.armed.admission?.release(); claim.done() }
     return
   }
   // A send that never left the box leaves the draft holding the blocks. The reader's
@@ -368,6 +370,7 @@ function settleClaims(shell: ComposerShellLike, claims: readonly Claim[], merge:
     shell.setDraft(merge.typed)
   } catch { /* the reader will see and fix what is left in the box */ }
   for (const claim of claims) {
+    if (claim.armed.admission !== undefined) attach(shell, claim.armed.admission.ids.filter(id => !live.attachmentIds?.includes(id)))
     if (claim.armed.staged !== true) {
       for (const id of claim.armed.attachmentIds) shell.removeAttachment?.(id)
     }
@@ -437,6 +440,13 @@ export function holdSubmit(armed: ArmedReview, done: () => void): () => void {
     }
     const send = (): void => {
       try {
+        // The native button was admitted by these temporary images. Text is now
+        // merged, so remove them before the host snapshots attachments for sending.
+        for (const claim of claims) {
+          for (const id of claim.armed.admission?.ids ?? []) {
+            if (shell.removeAttachment?.(id) !== true) return
+          }
+        }
         original.apply(shell, args)
       } finally {
         waiting = false
@@ -508,16 +518,26 @@ export function parkInComposer(input: ParkInput): void {
     pageCapture,
   )
   if (armed !== undefined && input.conversation !== undefined) {
-    // A real native attachment enables the host's Send, even with an empty draft.
-    // Text-only reviews carry their readable notes instead of a dummy image/token.
-    const ids = armed.attachmentIds.length > 0 ? armed.attachmentIds : holdFiles(
+    // The host enables an empty composer's Send only for a native attachment.
+    // Use a private admission image instead of uploading duplicate annotation.txt.
+    // It is hidden by its exact preview URL and stripped before submission.
+    const admission = armed.attachmentIds.length === 0
+    const drafts = admission && armed.shell.removeAttachment !== undefined ? holdFiles(
       input.conversation, sessionId,
-      [new File([message], 'annotation.txt', { type: 'text/plain' })],
-    ).map(draft => draft.id)
+      [new File([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='), char => char.charCodeAt(0))],
+        'figmark-draft.png', { type: 'image/png' })],
+    ) : []
+    const ids = admission ? drafts.map(draft => draft.id) : armed.attachmentIds
+    const conversation = input.conversation
     if (ids.length > 0 && attach(armed.shell, ids)) {
-      armed = { ...armed, attachmentIds: ids, staged: true }
+      armed = { ...armed, attachmentIds: ids, staged: true,
+        ...(admission ? {
+          previewUrls: drafts.flatMap(draft => draft.previewUrl === undefined ? [] : [draft.previewUrl]),
+          admission: { ids, release: () => { for (const id of ids) conversation.releaseDraftAttachment?.(id) } },
+        } : {}),
+      }
     } else {
-      for (const id of ids) input.conversation.releaseDraftAttachment?.(id)
+      for (const id of ids) conversation.releaseDraftAttachment?.(id)
       armed = undefined
     }
   }

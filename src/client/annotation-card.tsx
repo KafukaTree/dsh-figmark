@@ -302,9 +302,7 @@ function ReviewCard(props: AnnotationCardProps & { readonly data: FigmarkAnnotat
       </span>
     </>
   )
-  const head = embedded ? (
-    <span className="da-card-head da-card-head-static">{headContent}</span>
-  ) : (
+  const head = (
     <button
       type="button"
       className="da-card-head"
@@ -345,7 +343,7 @@ function ReviewCard(props: AnnotationCardProps & { readonly data: FigmarkAnnotat
   )
   return (
     <span className="da-card" data-expanded={expanded}>
-      {head}
+      {embedded ? null : head}
       {body}
       {embedded ? null : (
         <span className="da-card-actions">

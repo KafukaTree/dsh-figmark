@@ -373,12 +373,71 @@ describe('parking an annotation above the composer', () => {
   it('sends a text-only review from an empty native composer and retains it on refusal', () => {
     const log = stubComposer({ submit: 'refuse' })
     const armed = park(log)
-    expect(log.created[0]?.[0]?.name).toBe('annotation.txt')
+    expect(log.created[0]?.[0]?.name).toBe('figmark-draft.png')
     expect(log.rail.current).toEqual(['a1'])
     expect(log.draft.current).toBe('')
     const stop = holdSubmit(armed, () => {})
     log.press()
     expect(log.submits).toEqual([armed.text])
+    expect(log.submitted).toEqual([[]])
+    expect(log.rail.current).toEqual(['a1'])
+    expect(log.draft.current).toBe('')
+    stop()
+  })
+
+  it('strips the private admission image and releases it after a text-only send', () => {
+    const log = stubComposer()
+    const armed = park(log)
+    const done = vi.fn()
+    const stop = holdSubmit(armed, done)
+    log.press()
+    expect(log.submitted).toEqual([[]])
+    expect(log.submits).toEqual([armed.text])
+    expect(log.released).toEqual(['a1'])
+    expect(done).toHaveBeenCalledOnce()
+    stop()
+  })
+
+  it.each(['busy', 'gone'] as const)('releases admission when the host becomes %s during send', state => {
+    const log = stubComposer({ phaseAfter: 'submitting' })
+    const armed = park(log)
+    if (state === 'gone') {
+      armed.shell.submit = () => {
+        Object.defineProperty(armed.shell, 'snapshot', { get: () => { throw new Error('closed') } })
+      }
+    }
+    const done = vi.fn()
+    const stop = holdSubmit(armed, done)
+    log.press()
+    expect(log.released).toEqual(['a1'])
+    expect(done).toHaveBeenCalledOnce()
+    stop()
+  })
+
+  it('accepts an admission image on a host that does not report preview URLs', () => {
+    const log = stubComposer()
+    log.conversation.createDrafts = () => [{ id: 'a1' }]
+    const armed = park(log)
+    expect(armed.previewUrls).toEqual([])
+    disarmReview(armed, log.conversation)
+    expect(log.rail.current).toEqual([])
+  })
+
+  it('does not arm a temporary attachment on hosts unable to remove it', () => {
+    const log = stubComposer({ remove: 'none' })
+    parkInComposer({ conversation: log.conversation, sessionId: 's1', document: document_,
+      paths, thumb: undefined, file: undefined, locale: 'zh', send: async () => [] })
+    expect(parkedAnnotations('s1')[0]?.armed).toBeUndefined()
+    expect(log.created).toEqual([])
+  })
+
+  it('refuses to send if the host cannot take back its temporary admission image', () => {
+    const log = stubComposer()
+    const armed = park(log)
+    armed.shell.removeAttachment = () => false
+    const stop = holdSubmit(armed, () => {})
+    log.press()
+    expect(log.submits).toEqual([])
     expect(log.rail.current).toEqual(['a1'])
     expect(log.draft.current).toBe('')
     stop()
